@@ -1,0 +1,22 @@
+{
+  "database_dialect": "postgresql",
+  "temporary_schema": "pit_evidence_4dcc31a65890",
+  "t1_cutoff": "2026-08-20T13:00:00+00:00",
+  "first": {
+    "score": 70.97,
+    "input_snapshot_hash": "dc8528624fa0359e1d8541579288aaebc5b754a57db5965d4eb9b0859ae15727",
+    "formula_hash": "d2e96a338ed34348372a0657f7454df9b943b2885a78696e1c4f08c39710f45c"
+  },
+  "reconstructed_at_t1": {
+    "score": 70.97,
+    "input_snapshot_hash": "dc8528624fa0359e1d8541579288aaebc5b754a57db5965d4eb9b0859ae15727"
+  },
+  "later_cutoff": {
+    "score": 64.77,
+    "input_snapshot_hash": "71af45f1f1904cebc3839ec743f4d872f90d8c8396ee7a48fb2c22a16e19c389"
+  },
+  "historical_identical": true,
+  "later_cutoff_distinct": true,
+  "provenance_rows": 90,
+  "secrets_included": false
+}
