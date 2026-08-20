@@ -12,8 +12,12 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-import pyarrow as pa
-import pyarrow.parquet as pq
+try:
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+except ImportError:  # pragma: no cover - production image installs pyarrow
+    pa = None
+    pq = None
 
 from .config import Settings, get_settings
 from .scoring import parse_holding_level
@@ -63,6 +67,8 @@ class RawEvidenceStore:
         self.root = root
 
     def write(self, dataset: str, records: list[dict[str, Any]], parameters: dict[str, Any], source_date: str | None) -> dict[str, Any]:
+        if pa is None or pq is None:
+            raise FinMindError("RAW_STORAGE_UNAVAILABLE", "Parquet runtime is not installed")
         fetched_at = datetime.now(timezone.utc)
         date_part = source_date or "unknown"
         target_dir = self.root / dataset / f"date={date_part}"
@@ -225,4 +231,3 @@ def capability_evidence(client: FinMindClient) -> dict[str, Any]:
         "TaiwanStockTradingDailyReportSecIdAgg",
     ]
     return {"generated_at": datetime.now(timezone.utc).isoformat(), "results": [asdict(client.probe(dataset)) for dataset in datasets]}
-
