@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -9,10 +10,16 @@ from pathlib import Path
 from sqlalchemy import text, update
 from sqlalchemy.orm import Session
 
-from backend.app.calendar import expected_trading_sessions
-from backend.app.db import engine
-from backend.app.ingestion import calculate_stock_features_and_score, ingest_records
-from backend.app.models import Base, BrokerDaily, ForeignShareholdingDaily, HoldingDistribution, InstitutionalDaily, PriceDaily, SourceRevision, Stock
+try:
+    from backend.app.calendar import expected_trading_sessions
+    from backend.app.db import engine
+    from backend.app.ingestion import calculate_stock_features_and_score, ingest_records
+    from backend.app.models import Base, BrokerDaily, ForeignShareholdingDaily, HoldingDistribution, InstitutionalDaily, PriceDaily, SourceRevision, Stock
+except ModuleNotFoundError:  # running from the backend image
+    from app.calendar import expected_trading_sessions
+    from app.db import engine
+    from app.ingestion import calculate_stock_features_and_score, ingest_records
+    from app.models import Base, BrokerDaily, ForeignShareholdingDaily, HoldingDistribution, InstitutionalDaily, PriceDaily, SourceRevision, Stock
 
 
 def run() -> dict[str, object]:
@@ -56,6 +63,9 @@ def run() -> dict[str, object]:
 
 if __name__ == "__main__":
     result = run()
+    if os.getenv("PIT_EVIDENCE_STDOUT") == "1":
+        print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+        raise SystemExit(0)
     output = Path("deployment_evidence/PIT_POSTGRES_EVIDENCE.json")
     output.write_text(json.dumps(result, ensure_ascii=False, indent=2, default=str) + "\n", encoding="utf-8")
     print(json.dumps({"path": str(output), "historical_identical": result["historical_identical"], "later_cutoff_distinct": result["later_cutoff_distinct"], "secrets_included": False}, ensure_ascii=False))
