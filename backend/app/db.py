@@ -26,7 +26,11 @@ def init_db() -> None:
 
 def _apply_versioned_migrations() -> None:
     """Apply checked-in PostgreSQL migrations; any failure aborts startup."""
-    migration_dir = Path(__file__).resolve().parents[2] / "migrations"
+    source_root = Path(__file__).resolve()
+    candidates = (source_root.parents[2] / "migrations", source_root.parents[1] / "migrations")
+    migration_dir = next((path for path in candidates if path.exists()), None)
+    if migration_dir is None:
+        raise RuntimeError("checked-in migrations directory is missing")
     with engine.begin() as connection:
         connection.execute(text("CREATE TABLE IF NOT EXISTS schema_migrations (version VARCHAR(64) PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW())"))
         applied = {row[0] for row in connection.execute(text("SELECT version FROM schema_migrations"))}

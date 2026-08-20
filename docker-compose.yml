@@ -22,8 +22,8 @@ services:
 
   api:
     build:
-      context: ./backend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: backend/Dockerfile
     environment:
       DATABASE_PASSWORD_FILE: /run/secrets/postgres_password
       FINMIND_API_TOKEN_FILE: /run/secrets/finmind_api_token
@@ -53,8 +53,8 @@ services:
 
   worker:
     build:
-      context: ./backend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: backend/Dockerfile
     command: ["python", "-m", "app.worker"]
     environment:
       DATABASE_PASSWORD_FILE: /run/secrets/postgres_password
