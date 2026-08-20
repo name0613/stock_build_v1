@@ -1,0 +1,50 @@
+{
+  "generated_at": "2026-08-20T15:53:36.226882+00:00",
+  "host": "192.168.31.138",
+  "project": "/volume1/docker/tw-accumulation-evidence",
+  "compose_config_valid": true,
+  "compose_services": [
+    "postgres",
+    "api",
+    "frontend",
+    "nginx",
+    "worker"
+  ],
+  "compose_ps": "{\"Command\":\"\\\"uvicorn app.main:ap…\\\"\",\"CreatedAt\":\"2026-08-20 23:51:04 +0800 CST\",\"ExitCode\":0,\"Health\":\"healthy\",\"ID\":\"e71db11d87d7\",\"Image\":\"tw-accumulation-evidence-api\",\"Labels\":\"com.docker.compose.config-hash=3ab3c29c31118d3af7f05b7faa54411e8f46e9c8e5a9976e84318c2f8888ef12,com.docker.compose.container-number=1,com.docker.compose.depends_on=postgres:service_healthy:false,com.docker.compose.oneoff=False,com.docker.compose.project.config_files=/volume1/docker/tw-accumulation-evidence/docker-compose.yml,com.docker.compose.project.working_dir=/volume1/docker/tw-accumulation-evidence,com.docker.compose.replace=api-1,com.docker.compose.service=api,com.docker.compose.image=sha256:319f6fc22c1dd9462609bb841dc0d7cb28e6c8934e846d2f29febd48539e3ab8,com.docker.compose.project=tw-accumulation-evidence,com.docker.compose.version=5.1.3\",\"LocalVolumes\":\"1\",\"Mounts\":\"tw-accumulatio…,/volume1/docke…\",\"Name\":\"tw-accumulation-evidence-api-1\",\"Names\":\"tw-accumulation-evidence-api-1\",\"Networks\":\"tw-accumulation-evidence_internal\",\"Ports\":\"8000/tcp\",\"Project\":\"tw-accumulation-evidence\",\"Publishers\":[{\"URL\":\"\",\"TargetPort\":8000,\"PublishedPort\":0,\"Protocol\":\"tcp\"}],\"RunningFor\":\"2 minutes ago\",\"Service\":\"api\",\"Size\":\"0B\",\"State\":\"running\",\"Status\":\"Up 2 minutes (healthy)\"}\n{\"Command\":\"\\\"/docker-entrypoint.…\\\"\",\"CreatedAt\":\"2026-08-20 23:07:05 +0800 CST\",\"ExitCode\":0,\"Health\":\"\",\"ID\":\"5c1e4e45a93d\",\"Image\":\"tw-accumulation-evidence-frontend\",\"Labels\":\"com.docker.compose.project.working_dir=/volume1/docker/tw-accumulation-evidence,com.docker.compose.replace=frontend-1,com.docker.compose.service=frontend,com.docker.compose.config-hash=a702566308f91edb475d417f93a9abdfa502b887e3b1897d9e2c13a44e1940f5,com.docker.compose.depends_on=api:service_healthy:false,com.docker.compose.oneoff=False,com.docker.compose.project=tw-accumulation-evidence,com.docker.compose.version=5.1.3,maintainer=NGINX Docker Maintainers \\u003cdocker-maint@nginx.com\\u003e,com.docker.compose.container-number=1,com.docker.compose.image=sha256:eb26f680fe5e8a4d64d853ec9b148ab3c885a2f35e302f7331ee0bd7cd9b0037,com.docker.compose.project.config_files=/volume1/docker/tw-accumulation-evidence/docker-compose.yml\",\"LocalVolumes\":\"0\",\"Mounts\":\"\",\"Name\":\"tw-accumulation-evidence-frontend-1\",\"Names\":\"tw-accumulation-evidence-frontend-1\",\"Networks\":\"tw-accumulation-evidence_internal\",\"Ports\":\"80/tcp\",\"Project\":\"tw-accumulation-evidence\",\"Publishers\":[{\"URL\":\"\",\"TargetPort\":80,\"PublishedPort\":0,\"Protocol\":\"tcp\"}],\"RunningFor\":\"46 minutes ago\",\"Service\":\"frontend\",\"Size\":\"0B\",\"State\":\"running\",\"Status\":\"Up 44 minutes\"}\n{\"Command\":\"\\\"/docker-entrypoint.…\\\"\",\"CreatedAt\":\"2026-08-20 23:51:31 +0800 CST\",\"ExitCode\":0,\"Health\":\"healthy\",\"ID\":\"3e119d2a1afa\",\"Image\":\"nginx:1.27-alpine\",\"Labels\":\"com.docker.compose.project=tw-accumulation-evidence,com.docker.compose.version=5.1.3,maintainer=NGINX Docker Maintainers \\u003cdocker-maint@nginx.com\\u003e,com.docker.compose.config-hash=5a9ef49cec6d6a18fbff09bcbb084033aeba36c165f4833f8a7d5e9629ed3787,com.docker.compose.depends_on=api:service_healthy:false,frontend:service_started:false,com.docker.compose.image=sha256:6769dc3a703c719c1d2756bda113659be28ae16cf0da58dd5fd823d6b9a050ea,com.docker.compose.project.config_files=/volume1/docker/tw-accumulation-evidence/docker-compose.yml,com.docker.compose.project.working_dir=/volume1/docker/tw-accumulation-evidence,com.docker.compose.replace=nginx-1,com.docker.compose.service=nginx,com.docker.compose.container-number=1,com.docker.compose.oneoff=False\",\"LocalVolumes\":\"0\",\"Mounts\":\"/volume1/docke…\",\"Name\":\"tw-accumulation-evidence-nginx-1\",\"Names\":\"tw-accumulation-evidence-nginx-1\",\"Networks\":\"tw-accumulation-evidence_public,tw-accumulation-evidence_internal\",\"Ports\":\"80/tcp, 0.0.0.0:18080-\\u003e8080/tcp, [::]:18080-\\u003e8080/tcp\",\"Project\":\"tw-accumulation-evidence\",\"Publishers\":[{\"URL\":\"\",\"TargetPort\":80,\"PublishedPort\":0,\"Protocol\":\"tcp\"},{\"URL\":\"0.0.0.0\",\"TargetPort\":8080,\"PublishedPort\":18080,\"Protocol\":\"tcp\"},{\"URL\":\"::\",\"TargetPort\":8080,\"PublishedPort\":18080,\"Protocol\":\"tcp\"}],\"RunningFor\":\"2 minutes ago\",\"Service\":\"nginx\",\"Size\":\"0B\",\"State\":\"running\",\"Status\":\"Up About a minute (healthy)\"}\n{\"Command\":\"\\\"docker-entrypoint.s…\\\"\",\"CreatedAt\":\"2026-08-20 21:01:09 +0800 CST\",\"ExitCode\":0,\"Health\":\"healthy\",\"ID\":\"9f8008f81cb7\",\"Image\":\"postgres:16-alpine\",\"Labels\":\"com.docker.compose.project=tw-accumulation-evidence,com.docker.compose.project.working_dir=/volume1/docker/tw-accumulation-evidence,com.docker.compose.service=postgres,com.docker.compose.version=5.1.3,com.docker.compose.container-number=1,com.docker.compose.image=sha256:75f5a96988cdf694a215073c3e9c001b706b371e2f94df3967f2efdec2787f6b,com.docker.compose.oneoff=False,com.docker.compose.project.config_files=/volume1/docker/tw-accumulation-evidence/docker-compose.yml,com.docker.compose.config-hash=122218bec6fbbdc994df5f049a900bcd4aab04ae646354c8a12917e420bfd50e,com.docker.compose.depends_on=\",\"LocalVolumes\":\"1\",\"Mounts\":\"/volume1/docke…,tw-accumulatio…\",\"Name\":\"tw-accumulation-evidence-postgres-1\",\"Names\":\"tw-accumulation-evidence-postgres-1\",\"Networks\":\"tw-accumulation-evidence_internal\",\"Ports\":\"5432/tcp\",\"Project\":\"tw-accumulation-evidence\",\"Publishers\":[{\"URL\":\"\",\"TargetPort\":5432,\"PublishedPort\":0,\"Protocol\":\"tcp\"}],\"RunningFor\":\"3 hours ago\",\"Service\":\"postgres\",\"Size\":\"0B\",\"State\":\"running\",\"Status\":\"Up 3 hours (healthy)\"}\n{\"Command\":\"\\\"python -m app.worker\\\"\",\"CreatedAt\":\"2026-08-20 23:51:04 +0800 CST\",\"ExitCode\":0,\"Health\":\"\",\"ID\":\"140adb2c2f9e\",\"Image\":\"tw-accumulation-evidence-worker\",\"Labels\":\"com.docker.compose.project.config_files=/volume1/docker/tw-accumulation-evidence/docker-compose.yml,com.docker.compose.project.working_dir=/volume1/docker/tw-accumulation-evidence,com.docker.compose.replace=worker-1,com.docker.compose.service=worker,com.docker.compose.config-hash=809fa38a642e6240f9a4fdc6a58ce997a9d28978720baef46d00f0493abbb710,com.docker.compose.depends_on=postgres:service_healthy:false,com.docker.compose.image=sha256:90c9a7bbdda2a5f652387f3dbc782754dccd1f021ac2f41d67847ea34fbce260,com.docker.compose.version=5.1.3,com.docker.compose.container-number=1,com.docker.compose.oneoff=False,com.docker.compose.project=tw-accumulation-evidence\",\"LocalVolumes\":\"1\",\"Mounts\":\"tw-accumulatio…,/volume1/docke…\",\"Name\":\"tw-accumulation-evidence-worker-1\",\"Names\":\"tw-accumulation-evidence-worker-1\",\"Networks\":\"tw-accumulation-evidence_internal,tw-accumulation-evidence_public\",\"Ports\":\"8000/tcp\",\"Project\":\"tw-accumulation-evidence\",\"Publishers\":[{\"URL\":\"\",\"TargetPort\":8000,\"PublishedPort\":0,\"Protocol\":\"tcp\"}],\"RunningFor\":\"2 minutes ago\",\"Service\":\"worker\",\"Size\":\"0B\",\"State\":\"running\",\"Status\":\"Up 2 minutes\"}",
+  "containers": [
+    "3e119d2a1afa tw-accumulation-evidence-nginx-1 nginx:1.27-alpine Up About a minute (healthy) 80/tcp, 0.0.0.0:18080->8080/tcp, [::]:18080->8080/tcp",
+    "140adb2c2f9e tw-accumulation-evidence-worker-1 tw-accumulation-evidence-worker Up 2 minutes 8000/tcp",
+    "e71db11d87d7 tw-accumulation-evidence-api-1 tw-accumulation-evidence-api Up 2 minutes (healthy) 8000/tcp",
+    "5c1e4e45a93d tw-accumulation-evidence-frontend-1 tw-accumulation-evidence-frontend Up 44 minutes 80/tcp",
+    "9f8008f81cb7 tw-accumulation-evidence-postgres-1 postgres:16-alpine Up 3 hours (healthy) 5432/tcp"
+  ],
+  "images": [
+    "[nginx:1.27-alpine] sha256:6769dc3a703c719c1d2756bda113659be28ae16cf0da58dd5fd823d6b9a050ea",
+    "[postgres:16-alpine] sha256:75f5a96988cdf694a215073c3e9c001b706b371e2f94df3967f2efdec2787f6b",
+    "[tw-accumulation-evidence-api:latest] sha256:319f6fc22c1dd9462609bb841dc0d7cb28e6c8934e846d2f29febd48539e3ab8",
+    "[tw-accumulation-evidence-frontend:latest] sha256:eb26f680fe5e8a4d64d853ec9b148ab3c885a2f35e302f7331ee0bd7cd9b0037",
+    "[tw-accumulation-evidence-worker:latest] sha256:90c9a7bbdda2a5f652387f3dbc782754dccd1f021ac2f41d67847ea34fbce260"
+  ],
+  "volumes": [
+    "tw-accumulation-evidence_postgres_data /volume1/@docker/volumes/tw-accumulation-evidence_postgres_data/_data",
+    "tw-accumulation-evidence_raw_data /volume1/@docker/volumes/tw-accumulation-evidence_raw_data/_data"
+  ],
+  "networks": [
+    "tw-accumulation-evidence_internal tw-accumulation-evidence-worker-1 tw-accumulation-evidence-nginx-1 tw-accumulation-evidence-frontend-1 tw-accumulation-evidence-postgres-1 tw-accumulation-evidence-api-1 ",
+    "tw-accumulation-evidence_public tw-accumulation-evidence-worker-1 tw-accumulation-evidence-nginx-1"
+  ],
+  "persistence": {
+    "before": [
+      "stocks|2148|3cf183b5d4950e9e780560dbb87ca076",
+      "scores|8595|ce59c6dccd88cb2d37350fa5ae979629"
+    ],
+    "after": [
+      "stocks|2148|3cf183b5d4950e9e780560dbb87ca076",
+      "scores|8595|ce59c6dccd88cb2d37350fa5ae979629"
+    ],
+    "identical": true,
+    "postgres_recreated_without_volume_delete": true
+  },
+  "secrets_included": false,
+  "sanitized": true
+}

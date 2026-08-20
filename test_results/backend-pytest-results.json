@@ -1,1 +1,1 @@
-{"command":"PYTHONPATH=backend python -m pytest backend/tests -q","status":"PASS","tests":25,"passed":25,"failed":0,"warnings":14,"secrets_included":false}
+{"command":"PYTHONPATH=backend python -m pytest backend/tests -q","status":"PASS","tests":27,"passed":27,"failed":0,"warnings":14,"secrets_included":false}

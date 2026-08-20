@@ -2,7 +2,7 @@
 
 This file records the reproducible checks used for the reviewer bundle.
 
-- Backend: `.venv\\Scripts\\python.exe -m pytest backend/tests -q` — 25 passed, including scheduled multi-stock catch-up, point-in-time revision safety, actual holding bucket boundaries, broker concentration/window semantics and FinMind failure injection.
+- Backend: `.venv\\Scripts\\python.exe -m pytest backend/tests -q` — 27 passed, including scheduled multi-stock catch-up, point-in-time revision safety, actual holding bucket boundaries, broker concentration/window semantics, partial revision merge and FinMind failure injection.
 - Static checks: `.venv\\Scripts\\python.exe -m ruff check backend/app backend/tests scripts` — passed.
 - Frontend production build: `npm run build` from `frontend/` — passed.
 - Browser E2E against NAS: `E2E_BASE_URL=http://192.168.31.138:18080 npx playwright test` from `frontend/` — 3 passed, including detail provenance/charts.

@@ -1,0 +1,14 @@
+{
+  "generated_at": "2026-08-20T15:56:00+00:00",
+  "source_test": "backend/tests/test_finmind_safety.py",
+  "cases": [
+    {"case": "HTTP 401", "expected_code": "AUTHENTICATION_FAILED", "observed": "PASS", "retries": 0},
+    {"case": "HTTP 402", "expected_code": "QUOTA_EXHAUSTED", "observed": "PASS", "retries": 0},
+    {"case": "HTTP 403", "expected_code": "ACCESS_DENIED", "observed": "PASS", "retries": 0},
+    {"case": "HTTP 400", "expected_code": "NON_RETRYABLE_4XX", "observed": "PASS", "retries": 0},
+    {"case": "HTTP 429 with Retry-After", "expected": "retry delay honored", "observed": "PASS", "retries": 1},
+    {"case": "invalid JSON schema", "expected_code": "SCHEMA_MISMATCH", "observed": "PASS", "retries": 0}
+  ],
+  "secret_values_redacted": true,
+  "secrets_included": false
+}
