@@ -37,6 +37,7 @@ def test_holding_schema_unknown_duplicate_and_null_are_explicit() -> None:
     with pytest.raises(FinMindError) as unknown:
         ingest_records(db, "TaiwanStockHoldingSharesPer", [{"stock_id": "2330", "date": "2026-08-20", "HoldingSharesLevel": "mystery bucket", "percent": 1}])
     assert unknown.value.code == "SCHEMA_MISMATCH"
+    assert ingest_records(db, "TaiwanStockHoldingSharesPer", [{"stock_id": "2330", "date": "2026-08-20", "HoldingSharesLevel": "差異數調整（說明4）", "percent": 1}]) == 0
     with pytest.raises(FinMindError) as duplicate:
         ingest_records(db, "TaiwanStockHoldingSharesPer", [{"stock_id": "2330", "date": "2026-08-20", "HoldingSharesLevel": "400,001-600,000", "percent": 1}, {"stock_id": "2330", "date": "2026-08-20", "HoldingSharesLevel": "400001-600000", "percent": 2}])
     assert duplicate.value.code == "SCHEMA_MISMATCH"

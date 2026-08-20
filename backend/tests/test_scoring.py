@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from app.features import broker_features, holding_distribution_features, institutional_features
-from app.scoring import classify_score, calculate_score, one_day_spike_ratio, parse_holding_level, positive_day_ratio, rolling_sum
+from app.scoring import classify_score, calculate_score, is_holding_metadata_level, one_day_spike_ratio, parse_holding_level, positive_day_ratio, rolling_sum
 
 
 def test_holding_level_parser_supports_explicit_units_and_rejects_ambiguous() -> None:
@@ -10,6 +10,8 @@ def test_holding_level_parser_supports_explicit_units_and_rejects_ambiguous() ->
     assert parse_holding_level("400000股以上") == 400_000
     assert parse_holding_level("400 shares 以上") == 400
     assert parse_holding_level("大於400") is None
+    assert is_holding_metadata_level("差異數調整（說明4）")
+    assert parse_holding_level("差異數調整（說明4）") is None
 
 
 def test_holding_aggregation_does_not_depend_on_row_order() -> None:

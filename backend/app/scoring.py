@@ -8,6 +8,7 @@ from typing import Any, Iterable
 
 SCORE_VERSION = "s-only-v2"
 WEIGHTS = {"institutional_persistence": 0.35, "ownership_accumulation": 0.35, "broker_persistence": 0.30}
+HOLDING_METADATA_LEVELS = frozenset({"total", "all", "差異數調整（說明4）"})
 SCORE_SPEC = {
     "version": SCORE_VERSION,
     "policy": "S-level only; price/reference data is supporting only",
@@ -97,7 +98,7 @@ def parse_holding_level(level: str | int | float | None) -> int | None:
     if level is None:
         return None
     text = str(level).strip().replace(",", "").replace("，", "").replace("股以上", " shares 以上")
-    if text.lower() in {"total", "all"}:
+    if is_holding_metadata_level(text):
         return None
     import re
 
@@ -116,6 +117,11 @@ def parse_holding_level(level: str | int | float | None) -> int | None:
         if match:
             return int(match.group(1)) * multiplier
     return None
+
+
+def is_holding_metadata_level(level: str | int | float | None) -> bool:
+    """Identify provider-declared aggregate/adjustment rows, not real buckets."""
+    return str(level).strip().lower() in {item.lower() for item in HOLDING_METADATA_LEVELS} if level is not None else False
 
 
 def _bounded(value: float, low: float = 0.0, high: float = 100.0) -> float:

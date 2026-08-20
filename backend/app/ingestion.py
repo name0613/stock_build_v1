@@ -185,8 +185,8 @@ def ingest_records(db: Session, dataset: str, records: list[dict[str, Any]]) -> 
         for row in records:
             level = _v(row, "HoldingSharesLevel", "holding_shares_level")
             if level is not None and str(level).strip().lower() not in {"total", "all"} and _v(row, "holding_shares_threshold") is None:
-                from .scoring import parse_holding_level
-                if parse_holding_level(level) is None:
+                from .scoring import is_holding_metadata_level, parse_holding_level
+                if not is_holding_metadata_level(level) and parse_holding_level(level) is None:
                     raise SchemaMismatch("SCHEMA_MISMATCH", "holding source returned an unknown relevant bucket")
             stock = str(_v(row, "stock_id", "證券代號") or "")
             source_day = str(_v(row, "date", "source_date") or "")[:10]

@@ -21,7 +21,7 @@ except ImportError:  # pragma: no cover - production image installs pyarrow
     pq = None
 
 from .config import Settings, get_settings
-from .scoring import parse_holding_level
+from .scoring import is_holding_metadata_level, parse_holding_level
 
 logger = logging.getLogger(__name__)
 # httpx's INFO request logger includes the complete URL.  FinMind carries the
@@ -264,7 +264,7 @@ class FinMindClient:
         if dataset == "TaiwanStockHoldingSharesPer":
             level = result.get("HoldingSharesLevel") or result.get("holding_shares_level")
             result["holding_shares_threshold"] = parse_holding_level(level)
-            if level is not None and result["holding_shares_threshold"] is None and str(level).strip().lower() not in {"total", "all"}:
+            if level is not None and result["holding_shares_threshold"] is None and not is_holding_metadata_level(level):
                 result["_schema_warning"] = "UNRECOGNIZED_HOLDING_LEVEL"
             result["shares"] = result.get("shares") or result.get("HoldingShares") or result.get("unit")
         return result
