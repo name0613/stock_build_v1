@@ -70,6 +70,11 @@ class CapabilityResult:
     response_fields: list[str] | None = None
     requested_shape: dict[str, Any] | None = None
     production_used: bool = False
+    query_mode: str = "unknown"
+    data_id_required: bool = False
+    returned_range: dict[str, str | None] | None = None
+    classification: str = "UNKNOWN"
+    quota_plan: str = "not exposed by provider response"
 
 
 class RawEvidenceStore:
@@ -233,18 +238,21 @@ class FinMindClient:
             code = "QUOTA_EXHAUSTED" if "quota" in message_text or "limit" in message_text else "ACCESS_DENIED"
             raise FinMindError(code, "FinMind application error", status_code)
 
-    def probe(self, dataset: str) -> CapabilityResult:
+    def probe(self, dataset: str, *, mode: str = "per_stock", production_used: bool | None = None) -> CapabilityResult:
         try:
             end_date = date.today().isoformat()
             start_date = (date.today() - timedelta(days=30)).isoformat()
-            data_id = None if dataset == "TaiwanStockInfo" else "2330"
+            data_id = None if dataset == "TaiwanStockInfo" or mode == "broad" else "2330"
             trader_id = "075T" if dataset == "TaiwanStockTradingDailyReportSecIdAgg" else None
             records, meta = self.fetch(dataset, data_id=data_id, start_date=None if dataset == "TaiwanStockInfo" else start_date, end_date=None if dataset == "TaiwanStockInfo" else end_date, securities_trader_id=trader_id)
             method = "GET /api/v4/data" if dataset not in {"TaiwanStockTradingDailyReport", "TaiwanStockTradingDailyReportSecIdAgg"} else f"GET /api/v4/{'taiwan_stock_trading_daily_report' if dataset.endswith('Report') else 'taiwan_stock_trading_daily_report_secid_agg'}"
             fields = sorted({key for row in records[:3] for key in row})
-            return CapabilityResult(dataset, True, method, meta.get("source_date"), len(records[:10]), None, 200, fields, {"data_id": data_id, "start_date": start_date, "end_date": end_date, "securities_trader_id": trader_id}, dataset != "TaiwanStockTradingDailyReportSecIdAgg")
+            dates = sorted({str(row.get("date") or row.get("source_date"))[:10] for row in records if row.get("date") or row.get("source_date")})
+            approved = production_used if production_used is not None else mode == "per_stock" and dataset != "TaiwanStockTradingDailyReportSecIdAgg"
+            classification = "PER_STOCK_HISTORY_USABLE" if records and mode == "per_stock" else ("FULL_MARKET_LIMITED_RANGE" if records else "EMPTY_RESPONSE")
+            return CapabilityResult(dataset, bool(records), method, meta.get("source_date"), len(records), None, 200, fields, {"data_id": data_id, "start_date": start_date, "end_date": end_date, "securities_trader_id": trader_id, "mode": mode}, approved, mode, dataset != "TaiwanStockInfo", {"start": dates[0] if dates else None, "end": dates[-1] if dates else None}, classification)
         except FinMindError as exc:
-            return CapabilityResult(dataset, False, "GET /api/v4/data", None, 0, exc.code, exc.status_code, [], {"data_id": data_id, "start_date": start_date, "end_date": end_date, "securities_trader_id": trader_id}, False)
+            return CapabilityResult(dataset, False, "GET /api/v4/data", None, 0, exc.code, exc.status_code, [], {"data_id": data_id, "start_date": start_date, "end_date": end_date, "securities_trader_id": trader_id, "mode": mode}, False, mode, dataset != "TaiwanStockInfo", {"start": None, "end": None}, exc.code)
 
     def _normalize_record(self, dataset: str, record: Any) -> dict[str, Any]:
         if not isinstance(record, dict):
@@ -417,4 +425,9 @@ def capability_evidence(client: FinMindClient) -> dict[str, Any]:
         "TaiwanStockTradingDailyReport",
         "TaiwanStockTradingDailyReportSecIdAgg",
     ]
-    return {"generated_at": datetime.now(timezone.utc).isoformat(), "results": [asdict(client.probe(dataset)) for dataset in datasets]}
+    results = []
+    for dataset in datasets:
+        results.append(asdict(client.probe(dataset, mode="broad", production_used=False)))
+        if dataset != "TaiwanStockInfo":
+            results.append(asdict(client.probe(dataset, mode="per_stock", production_used=dataset != "TaiwanStockTradingDailyReportSecIdAgg")))
+    return {"generated_at": datetime.now(timezone.utc).isoformat(), "policy": {"approved_datasets": sorted(ALLOWED_S_DATASETS), "raw_institutional_fallback": "disabled", "zero_rows_are_usable": False}, "results": results}
