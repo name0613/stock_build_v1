@@ -242,6 +242,9 @@ class FinMindClient:
         try:
             end_date = date.today().isoformat()
             start_date = (date.today() - timedelta(days=30)).isoformat()
+            if dataset in {"TaiwanStockTradingDailyReport", "TaiwanStockTradingDailyReportSecIdAgg"}:
+                end_date = (date.today() - timedelta(days=1)).isoformat()
+                start_date = end_date
             data_id = None if dataset == "TaiwanStockInfo" or mode == "broad" else "2330"
             trader_id = "075T" if dataset == "TaiwanStockTradingDailyReportSecIdAgg" else None
             records, meta = self.fetch(dataset, data_id=data_id, start_date=None if dataset == "TaiwanStockInfo" else start_date, end_date=None if dataset == "TaiwanStockInfo" else end_date, securities_trader_id=trader_id)

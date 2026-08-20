@@ -9,7 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PATTERNS = {
-    "finmind_token_value": re.compile(r"(?i)(?:FINMIND_API_TOKEN|FINMIND_TOKEN)[ \t]*[:=][ \t]*(?!(?:os\.getenv|None|REMOVED|REDACTED)\b)[^\s<>{}\"']{12,}"),
+    "finmind_token_value": re.compile(r"(?i)(?:FINMIND_API_TOKEN|FINMIND_TOKEN)[ \t]*[:=][ \t]*(?!(?:os\.getenv|self\.|settings\.|None|REMOVED|REDACTED)\b)[^\s<>{}\"']{12,}"),
     "nas_password_value": re.compile(r"(?i)NAS_PASSWORD[ \t]*[:=][ \t]*(?!(?:os\.getenv|None|REMOVED|REDACTED)\b)[^\s<>{}\"']{8,}"),
     "bearer_value": re.compile(r"(?i)authorization\s*[:=]\s*bearer\s+[A-Za-z0-9._-]{12,}"),
     "private_key": re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
