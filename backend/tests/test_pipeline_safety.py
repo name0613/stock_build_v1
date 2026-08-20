@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.calendar import expected_trading_sessions
 from app.finmind import FinMindClient, FinMindError
 from app.ingestion import _model_rows, _natural_key, calculate_stock_features_and_score, ingest_records
-from app.models import AccumulationScore, Base, InstitutionalDaily, SourceRevision, Stock
+from app.models import AccumulationScore, Base, BrokerDaily, InstitutionalDaily, SourceRevision, Stock
 from app.scoring import parse_holding_level
 
 
@@ -104,6 +104,22 @@ def test_partial_revision_batch_does_not_erase_legacy_window() -> None:
     assert rows[-1]["institutional_net"] == 2
     assert len(hashes) == 20
     assert len(set(hashes)) == 20
+
+
+def test_broker_rows_are_bounded_by_sessions_not_broker_count() -> None:
+    db, _ = _db()
+    db.add(Stock(stock_id="2330", stock_name="Test", market="上市", security_type="股票", is_common_stock=True))
+    fetched_at = datetime(2026, 8, 20, 12, tzinfo=timezone.utc)
+    sessions = expected_trading_sessions(date(2026, 8, 20), 20)
+    for day in sessions:
+        for broker_id in ("A", "B", "C"):
+            db.add(BrokerDaily(stock_id="2330", source_date=day, securities_trader_id=broker_id, buy_volume=100, sell_volume=10, net_volume=90, source_dataset="TaiwanStockTradingDailyReport", fetched_at=fetched_at))
+    db.commit()
+
+    rows, _ = _model_rows(db, BrokerDaily, "2330", sessions[-1], fetched_at + timedelta(hours=1), "TaiwanStockTradingDailyReport", 2)
+
+    assert len({str(row["source_date"])[:10] for row in rows}) == 20
+    assert len(rows) == 60
 
 
 def test_scheduled_catch_up_runs_all_phases_for_dynamic_multi_stock_universe() -> None:

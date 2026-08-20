@@ -301,17 +301,21 @@ def _model_rows(db: Session, model: type[Any], stock_id: str, as_of: date, cutof
     before the requested cutoff.  This prevents a small incremental fetch from
     erasing the historical window used by a score.
     """
-    revisions = db.scalars(select(SourceRevision).where(SourceRevision.dataset == dataset, SourceRevision.stock_id == stock_id, SourceRevision.source_date <= as_of, SourceRevision.fetched_at <= cutoff).order_by(SourceRevision.fetched_at, SourceRevision.id)).all()
+    session_dates: list[date] = []
+    if dataset == "TaiwanStockTradingDailyReport":
+        session_dates = list(db.scalars(select(model.source_date).where(model.stock_id == stock_id, model.source_date <= as_of, model.fetched_at <= cutoff).distinct().order_by(model.source_date.desc()).limit(20)).all())
+    revision_query = select(SourceRevision).where(SourceRevision.dataset == dataset, SourceRevision.stock_id == stock_id, SourceRevision.source_date <= as_of, SourceRevision.fetched_at <= cutoff)
+    if session_dates:
+        revision_query = revision_query.where(SourceRevision.source_date.in_(session_dates))
+    revisions = db.scalars(revision_query.order_by(SourceRevision.fetched_at, SourceRevision.id)).all()
     revision_by_key: dict[str, SourceRevision] = {}
     for revision in revisions:
         revision_by_key[revision.natural_key] = revision
 
-    model_rows = db.scalars(
-        select(model)
-        .where(model.stock_id == stock_id, model.source_date <= as_of, model.fetched_at <= cutoff)
-        .order_by(model.source_date.desc(), model.id.desc())
-        .limit(limit)
-    ).all()
+    model_query = select(model).where(model.stock_id == stock_id, model.source_date <= as_of, model.fetched_at <= cutoff).order_by(model.source_date.desc(), model.id.desc())
+    if session_dates:
+        model_query = select(model).where(model.stock_id == stock_id, model.source_date.in_(session_dates), model.fetched_at <= cutoff).order_by(model.source_date.asc(), model.id.asc())
+    model_rows = db.scalars(model_query.limit(limit if not session_dates else 100_000)).all()
     merged: dict[str, tuple[dict[str, Any], str, date | None, int]] = {}
     for row in model_rows:
         payload = {key: getattr(row, key) for key in row.__table__.columns.keys()}
@@ -320,7 +324,8 @@ def _model_rows(db: Session, model: type[Any], stock_id: str, as_of: date, cutof
         payload = dict(revision.payload)
         merged[revision.natural_key] = (payload, _payload_content_hash(payload), revision.source_date, revision.id)
 
-    selected = sorted(merged.values(), key=lambda item: (item[2] or date.min, item[3]))[-limit:]
+    selection_limit = 100_000 if session_dates else limit
+    selected = sorted(merged.values(), key=lambda item: (item[2] or date.min, item[3]))[-selection_limit:]
     return [item[0] for item in selected], [item[1] for item in selected]
 
 
