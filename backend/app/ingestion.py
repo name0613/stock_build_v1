@@ -388,7 +388,8 @@ async def catch_up(db: Session, client: FinMindClient) -> dict[str, Any]:
         broker_metrics = await client.fetch_broker_stocks(stock_ids, end.isoformat(), end.isoformat())
         broker_records = broker_metrics.pop("_records", [])
         stored = ingest_records(db, "TaiwanStockTradingDailyReport", broker_records) if broker_records else 0
-        broker_status = "SUCCESS" if broker_metrics.get("failed", 0) == 0 and (broker_metrics.get("rows", 0) > 0 or not stock_ids) else "PARTIAL"
+        checkpoint_complete = broker_metrics.get("skipped_checkpoint", 0) >= len(stock_ids)
+        broker_status = "SUCCESS" if broker_metrics.get("failed", 0) == 0 and (broker_metrics.get("rows", 0) > 0 or checkpoint_complete or not stock_ids) else "PARTIAL"
         _mark_sync(db, "TaiwanStockTradingDailyReport", broker_status, stored, end if stored else None, None if broker_status == "SUCCESS" else "BROKER_PARTIAL", fetched_at=_now(), metadata=broker_metrics)
         _job_finish(db, broker_job, broker_status, records=stored, retry_count=broker_metrics.get("retries", 0), stocks_completed=broker_metrics.get("success", 0), stocks_failed=broker_metrics.get("failed", 0), checkpoint_state=broker_metrics)
         result["datasets"]["TaiwanStockTradingDailyReport"] = {**broker_metrics, "stored_records": stored}
