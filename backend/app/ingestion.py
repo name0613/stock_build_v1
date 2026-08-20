@@ -284,25 +284,29 @@ def ingest_records(db: Session, dataset: str, records: list[dict[str, Any]]) -> 
 
 def sync_universe(db: Session, client: FinMindClient) -> int:
     records, meta = client.fetch("TaiwanStockInfo")
-    count = ingest_records(db, "TaiwanStockInfo", records)
-    active_ids = {normalized["stock_id"] for row in records if (normalized := normalize_stock(row)) is not None}
+    ingest_records(db, "TaiwanStockInfo", records)
     rejection_counts: dict[str, int] = {}
-    seen_ids: set[str] = set()
     market_counts: dict[str, int] = {}
-    duplicate_count = 0
-    for row in records:
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for index, row in enumerate(records):
         raw_id = str(_v(row, "stock_id", "股票代號", "證券代號") or "").strip()
-        normalized = normalize_stock(row)
-        if raw_id in seen_ids and raw_id:
-            duplicate_count += 1
-            continue
-        if raw_id:
-            seen_ids.add(raw_id)
-        if normalized is None:
-            category = classify_stock_rejection(row)
-            rejection_counts[category] = rejection_counts.get(category, 0) + 1
-        else:
+        groups.setdefault(raw_id or f"__missing_{index}", []).append(row)
+    duplicate_count = sum(max(0, len(rows) - 1) for key, rows in groups.items() if not key.startswith("__missing_"))
+    accepted_ids: set[str] = set()
+    for key, rows in groups.items():
+        normalized_rows = [normalize_stock(row) for row in rows]
+        normalized_rows = [row for row in normalized_rows if row is not None]
+        if normalized_rows:
+            normalized = max(normalized_rows, key=lambda row: row.get("source_date") or date.min)
+            accepted_ids.add(normalized["stock_id"])
             market_counts[normalized["market"]] = market_counts.get(normalized["market"], 0) + 1
+        else:
+            category = classify_stock_rejection(rows[-1])
+            rejection_counts[category] = rejection_counts.get(category, 0) + 1
+    # Keep this derived value explicit so the evidence cannot silently use a
+    # pre-dedup count from the provider response.
+    count = len(accepted_ids)
+    active_ids = accepted_ids
     for existing in db.scalars(select(Stock).where(Stock.is_common_stock.is_(True))).all():
         if existing.stock_id not in active_ids:
             existing.is_common_stock = False
