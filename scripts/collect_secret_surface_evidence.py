@@ -12,8 +12,8 @@ import paramiko
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from scripts.deploy_nas import remote
-from scripts.secret_scan import PATTERNS, scan
+from scripts.deploy_nas import remote  # noqa: E402
+from scripts.secret_scan import PATTERNS, scan  # noqa: E402
 
 
 def scan_text(text: str, surface: str) -> list[dict[str, str]]:
