@@ -1,6 +1,6 @@
 {
   "database_dialect": "postgresql",
-  "temporary_schema": "pit_evidence_4dcc31a65890",
+  "temporary_schema": "pit_evidence_a347321df383",
   "t1_cutoff": "2026-08-20T13:00:00+00:00",
   "first": {
     "score": 70.97,

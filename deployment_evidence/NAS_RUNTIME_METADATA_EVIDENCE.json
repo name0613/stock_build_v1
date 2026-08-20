@@ -1,0 +1,36 @@
+{
+  "generated_at": "2026-08-20T17:08:44.701470+00:00",
+  "host": "192.168.31.138",
+  "project": "/volume1/docker/tw-accumulation-evidence",
+  "local_source_revision": "5a9e638642cc4f21d65256d2c8f8ac782ff071ad",
+  "deployed_source_revision": "5a9e638642cc4f21d65256d2c8f8ac782ff071ad",
+  "source_revision_matches": true,
+  "compose_images": [
+    "tw-accumulation-evidence-frontend",
+    "nginx:1.27-alpine",
+    "postgres:16-alpine",
+    "tw-accumulation-evidence-api",
+    "tw-accumulation-evidence-worker"
+  ],
+  "running_containers": [
+    "tw-accumulation-evidence-nginx-1 nginx:1.27-alpine Up 5 seconds (health: starting)",
+    "tw-accumulation-evidence-postgres-1 postgres:16-alpine Up About a minute (healthy)",
+    "tw-accumulation-evidence-worker-1 tw-accumulation-evidence-worker Up 6 minutes (healthy)",
+    "tw-accumulation-evidence-api-1 tw-accumulation-evidence-api Up 6 minutes (healthy)",
+    "tw-accumulation-evidence-frontend-1 tw-accumulation-evidence-frontend Up 2 hours"
+  ],
+  "image_ids": [
+    "[nginx:1.27-alpine] sha256:6769dc3a703c719c1d2756bda113659be28ae16cf0da58dd5fd823d6b9a050ea",
+    "[postgres:16-alpine] sha256:75f5a96988cdf694a215073c3e9c001b706b371e2f94df3967f2efdec2787f6b",
+    "[tw-accumulation-evidence-api:latest] sha256:461386c926013875a119a5f015d857e7c7996039213d65e75d031cea4b9b565b",
+    "[tw-accumulation-evidence-frontend:latest] sha256:eb26f680fe5e8a4d64d853ec9b148ab3c885a2f35e302f7331ee0bd7cd9b0037",
+    "[tw-accumulation-evidence-worker:latest] sha256:d407c02b1692d75b0dcabb9b357344f7f7c073d288f007638652893c3720c619"
+  ],
+  "named_volumes": [
+    "tw-accumulation-evidence_postgres_data /volume1/@docker/volumes/tw-accumulation-evidence_postgres_data/_data",
+    "tw-accumulation-evidence_raw_data /volume1/@docker/volumes/tw-accumulation-evidence_raw_data/_data"
+  ],
+  "required_named_volumes_present": true,
+  "sanitized": true,
+  "secrets_included": false
+}
