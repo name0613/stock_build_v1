@@ -39,7 +39,7 @@ def main() -> None:
     ssh.connect(host, username=user, password=password, look_for_keys=False, allow_agent=False, timeout=15)
     surfaces: list[dict[str, object]] = []
     try:
-        for service, roots in (("api", "/app"), ("worker", "/app"), ("frontend", "/usr/share/nginx/html")):
+        for service, roots in (("api", "/app/app"), ("worker", "/app/app"), ("frontend", "/usr/share/nginx/html")):
             image = remote(ssh, f"cd {PROJECT} && docker compose images -q {service} | head -n 1", sudo=True, check=False).strip()
             if not image:
                 surfaces.append({"surface": f"image:{service}", "status": "FAIL", "findings": [{"rule": "image_missing", "surface": service}]})
