@@ -8,7 +8,7 @@
 | `TaiwanStockShareholding` | foreign actual shares and ratio | S2 | daily source date |
 | `TaiwanStockHoldingSharesPer` | holding levels, people, percent, shares | S3 | latest weekly source date |
 | `TaiwanStockTradingDailyReport` | broker branch daily rows | S4 | daily source date |
-| `TaiwanStockTradingDailyReportSecIdAgg` | Sponsor/SponsorPro capability probe and aggregate path | S4 equivalent | daily source date |
+| `TaiwanStockTradingDailyReportSecIdAgg` | capability probe only; zero-row/non-equivalent path is not production-used | not used | n/a |
 | `TaiwanStockPrice` | price, volume, return, price impact modifier | supporting only | daily source date |
 | `TaiwanSecuritiesTraderInfo` | broker id -> broker name | reference only | reference source date |
 
@@ -16,7 +16,7 @@ The following are explicitly forbidden in this release: block trades, active ETF
 
 ## Sponsor / SponsorPro
 
-`FinMindClient.probe()` makes a real, server-side capability probe and writes sanitized `FINMIND_CAPABILITY_EVIDENCE.json`. The implementation does not assume SponsorPro. The raw institutional dataset is deliberately removed from the operational allowlist until an equivalent historical-schema normalization is proven; Wide is never combined with raw rows. If a market-wide object is unavailable, `fetch_broker_stocks()` uses a bounded queue, semaphore, rate limiter, retry/backoff/jitter, Retry-After, request metrics and an atomic JSON checkpoint that allows resume after restart.
+`FinMindClient.probe()` makes exact broad and per-stock/per-session server-side capability probes and writes sanitized `FINMIND_CAPABILITY_EVIDENCE.json`. The implementation does not assume SponsorPro. The raw institutional dataset is deliberately removed from the operational allowlist until an equivalent historical-schema normalization is proven; Wide is never combined with raw rows. If a market-wide object is unavailable, `fetch_broker_stocks()` uses a bounded queue, semaphore, one global physical-attempt budget, retry/backoff/jitter, Retry-After, request metrics and an atomic JSON checkpoint that allows resume after restart. Empty responses are never classified as usable.
 
 ## 5%+ disclosure
 

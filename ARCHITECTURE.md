@@ -10,7 +10,7 @@ Services are `postgres`, `api`, `worker`, `frontend`, `nginx`. The Compose netwo
 
 The database stores `source_date`, `fetched_at`, `calculated_at`, and `score_version` separately. Raw broker rows stay in date-partitioned Parquet; PostgreSQL stores normalized rows, aggregation, query-ready features, explanations and health evidence.
 
-Score calculation is pure Python and deterministic. The first release uses configuration `s-only-v1`; it has no black-box ML. The API only sorts a whitelist of columns and uses SQLAlchemy parameters for filters.
+Score calculation is pure Python and deterministic. The current release uses configuration `s-only-v2`; it has no black-box ML. The API only sorts a whitelist of columns and uses SQLAlchemy parameters for filters. The complete score specification and formula hash are exposed by `/api/score-spec` and persisted in `score_versions`.
 
 ## Failure boundaries
 
@@ -19,4 +19,3 @@ Score calculation is pure Python and deterministic. The first release uses confi
 - missing S-level data makes score `NULL` and status `DATA_INSUFFICIENT`.
 - holding distribution is low-frequency; the UI shows source date and latest available date.
 - no official stable 5%+ automated source is assumed; its table remains empty and unavailable is documented.
-
