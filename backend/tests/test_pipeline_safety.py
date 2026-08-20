@@ -7,8 +7,8 @@ from sqlalchemy.orm import Session
 
 from app.calendar import CalendarUnknownError, expected_trading_sessions
 from app.finmind import FinMindClient, FinMindError
-from app.ingestion import _model_rows, _natural_key, calculate_stock_features_and_score, ingest_records, normalize_institutional
-from app.models import AccumulationScore, Base, BrokerDaily, InstitutionalDaily, SourceRevision, Stock
+from app.ingestion import _model_rows, _natural_key, calculate_stock_features_and_score, ingest_records, normalize_institutional, sync_universe
+from app.models import AccumulationScore, Base, BrokerDaily, DataSyncStatus, InstitutionalDaily, SourceRevision, Stock
 from app.scoring import parse_holding_level
 
 
@@ -36,6 +36,28 @@ def test_institutional_dealer_aggregate_is_not_double_counted() -> None:
     assert row["dealer_aggregate_net"] == 5
     assert row["dealer_net"] == 5
     assert row["institutional_net"] == 20
+
+
+def test_universe_reconciliation_is_raw_duplicate_rejection_and_accepted_exact() -> None:
+    db, _ = _db()
+    rows = [
+        {"stock_id": "2330", "stock_name": "Test", "type": "twse", "security_type": "股票", "date": "2026-08-20"},
+        {"stock_id": "2330", "stock_name": "Test duplicate", "type": "twse", "security_type": "股票", "date": "2026-08-20"},
+        {"stock_id": "0050", "stock_name": "ETF", "type": "twse", "security_type": "ETF", "industry_category": "ETF", "date": "2026-08-20"},
+        {"stock_id": "00400A", "stock_name": "invalid", "type": "twse", "security_type": "股票", "date": "2026-08-20"},
+    ]
+
+    class UniverseClient:
+        def fetch(self, dataset: str):
+            assert dataset == "TaiwanStockInfo"
+            return rows, {"source_date": "2026-08-20"}
+
+    assert sync_universe(db, UniverseClient()) == 1
+    sync = db.get(DataSyncStatus, "TaiwanStockInfo")
+    assert sync is not None
+    universe = sync.metadata_json["universe"]
+    assert universe["reconciliation"] == {"raw_count": 4, "duplicate_count": 1, "rejected_unique_count": 2, "accepted_common_count": 1, "reconciles": True}
+    assert universe["market_counts"] == {"上市": 1}
 
 
 def test_holding_schema_unknown_duplicate_and_null_are_explicit() -> None:

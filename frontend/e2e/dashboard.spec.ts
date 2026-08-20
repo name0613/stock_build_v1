@@ -34,9 +34,19 @@ test("filters, rankings, freshness and score hash are exposed", async ({ page })
   expect(summaryJson.formula_hash).toMatch(/^[a-f0-9]{64}$/);
   const rankings = await page.request.get("/api/rankings?kind=top&limit=10");
   expect(rankings.ok()).toBeTruthy();
-  expect((await rankings.json()).score_version).toBe(summaryJson.score_version);
+  const rankingJson = await rankings.json();
+  expect(rankingJson.score_version).toBe(summaryJson.score_version);
+  for (let i = 1; i < rankingJson.items.length; i += 1) {
+    expect(rankingJson.items[i - 1].score).toBeGreaterThanOrEqual(rankingJson.items[i].score);
+  }
   await page.getByLabel("股票代碼或名稱搜尋").fill("2330");
   await page.getByLabel("市場").selectOption("上市");
   await page.getByLabel("狀態").selectOption("DATA_INSUFFICIENT");
-  await expect(page.locator("tbody tr.clickable").first()).toBeVisible();
+  const filteredApi = await page.request.get("/api/stocks?page=1&page_size=50&search=2330&market=%E4%B8%8A%E5%B8%82&status=DATA_INSUFFICIENT");
+  expect(filteredApi.ok()).toBeTruthy();
+  const filteredJson = await filteredApi.json();
+  expect(filteredJson.items.every((item: { status: string }) => item.status === "DATA_INSUFFICIENT")).toBeTruthy();
+  await expect.poll(async () => page.locator("tbody tr.clickable").count()).toBe(filteredJson.items.length);
+  for (const item of filteredJson.items) await expect(page.locator("tbody tr.clickable").filter({ hasText: item.stock_id })).toBeVisible();
+  await expect(page.locator("th").filter({ hasText: ">400 張" })).toBeVisible();
 });

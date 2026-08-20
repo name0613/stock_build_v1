@@ -24,6 +24,25 @@ def test_stocks_endpoint_supports_pagination_and_safe_sort() -> None:
     assert len(payload["items"]) <= 10
 
 
+def test_stocks_filters_sort_nulls_and_pagination_return_real_ids() -> None:
+    with TestClient(app) as client:
+        first = client.get("/api/stocks", params={"page": 1, "page_size": 5, "sort": "score", "order": "desc"}).json()
+        second = client.get("/api/stocks", params={"page": 2, "page_size": 5, "sort": "score", "order": "desc"}).json()
+        searched = client.get("/api/stocks", params={"page": 1, "page_size": 10, "search": "2330", "market": "上市"}).json()
+    items = first["items"]
+    for left, right in zip(items, items[1:]):
+        if left["score"] is None:
+            assert right["score"] is None
+            assert left["stock_id"] <= right["stock_id"]
+        elif right["score"] is not None:
+            assert left["score"] >= right["score"]
+            if left["score"] == right["score"]:
+                assert left["stock_id"] <= right["stock_id"]
+    if first["total"] > 5:
+        assert set(item["stock_id"] for item in items).isdisjoint(item["stock_id"] for item in second["items"])
+    assert all(item["market"] == "上市" and ("2330" in item["stock_id"] or "2330" in item["stock_name"]) for item in searched["items"])
+
+
 def test_api_contract_exposes_score_hash_filters_rankings_and_sync_counters() -> None:
     with TestClient(app) as client:
         spec = client.get("/api/score-spec")
@@ -39,6 +58,22 @@ def test_api_contract_exposes_score_hash_filters_rankings_and_sync_counters() ->
     assert data_status.status_code == 200
     for row in data_status.json()["datasets"]:
         assert {"rows_received_this_attempt", "rows_accepted_this_attempt", "rows_rejected_this_attempt", "stored_rows_total"} <= set(row)
+
+
+def test_detail_contract_exposes_provenance_version_reasons_and_null_safe_charts() -> None:
+    with TestClient(app) as client:
+        stocks = client.get("/api/stocks", params={"page": 1, "page_size": 1}).json()
+        assert stocks["items"]
+        stock_id = stocks["items"][0]["stock_id"]
+        detail = client.get(f"/api/stocks/{stock_id}", params={"limit": 20})
+    assert detail.status_code == 200
+    payload = detail.json()
+    assert payload["stock"]["stock_id"] == stock_id
+    assert len(payload["score"]["formula_hash"]) == 64
+    assert "coverage" in payload["score"]
+    assert "explanation" in payload["score"]
+    assert set(payload["holding_series"]) == {"400", "1000"}
+    assert all(point["value"] is None or isinstance(point["value"], (int, float)) for points in payload["holding_series"].values() for point in points)
 
 
 def test_worker_health_contract_is_sanitized() -> None:

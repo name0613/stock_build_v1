@@ -224,10 +224,10 @@ def _json_dict(value: Any) -> dict[str, Any]:
 
 def _score_dict(db: Session, stock_id: str, latest: date | None) -> dict[str, Any]:
     if latest is None:
-        return {"score": None, "status": "DATA_INSUFFICIENT", "score_version": SCORE_VERSION, "formula_hash": FORMULA_HASH}
+        return {"score": None, "status": "DATA_INSUFFICIENT", "score_version": SCORE_VERSION, "formula_hash": FORMULA_HASH, "coverage": {}, "explanation": [{"label": "資料不足", "value": 0, "detail": "尚未建立可追溯的 S-level score snapshot"}], "input_source_hashes": []}
     score = db.scalar(select(AccumulationScore).where(AccumulationScore.stock_id == stock_id, AccumulationScore.source_date == latest, AccumulationScore.score_version == SCORE_VERSION, AccumulationScore.knowledge_cutoff.is_not(None)).order_by(AccumulationScore.calculated_at.desc()).limit(1))
     if not score:
-        return {"score": None, "status": "DATA_INSUFFICIENT", "score_version": SCORE_VERSION, "formula_hash": FORMULA_HASH}
+        return {"score": None, "status": "DATA_INSUFFICIENT", "score_version": SCORE_VERSION, "formula_hash": FORMULA_HASH, "coverage": {}, "explanation": [{"label": "資料不足", "value": 0, "detail": "required source coverage is incomplete; no zero substitution"}], "input_source_hashes": []}
     return {"score": score.score, "status": score.status, "score_version": score.score_version, "formula_hash": score.formula_hash or FORMULA_HASH, "components": score.components, "explanation": score.explanation, "coverage": score.coverage, "source_date": score.source_date, "calculated_at": score.calculated_at, "knowledge_cutoff": score.knowledge_cutoff, "input_snapshot_hash": score.input_snapshot_hash, "input_source_hashes": score.input_source_hashes}
 
 
