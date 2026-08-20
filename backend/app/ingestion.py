@@ -59,9 +59,14 @@ def _jsonable(value: Any) -> Any:
     return value
 
 
+def _payload_content_hash(payload: dict[str, Any]) -> str:
+    content = {key: value for key, value in payload.items() if key not in {"id", "fetched_at"}}
+    return hashlib.sha256(json.dumps(_jsonable(content), ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
 def _record_revision(db: Session, dataset: str, normalized: dict[str, Any], unique: dict[str, Any], fetched_at: datetime) -> str:
     payload = _jsonable(normalized)
-    content_hash = hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    content_hash = _payload_content_hash(payload)
     natural_key = json.dumps(_jsonable(unique), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     exists = db.scalar(select(SourceRevision).where(SourceRevision.dataset == dataset, SourceRevision.natural_key == natural_key, SourceRevision.content_hash == content_hash))
     if exists is None:
@@ -275,16 +280,48 @@ def _mark_sync(db: Session, dataset: str, status: str, records: int, latest: dat
     db.commit()
 
 
+def _natural_key(dataset: str, row: dict[str, Any]) -> str:
+    values: dict[str, Any] = {
+        "stock_id": row.get("stock_id"),
+        "source_date": row.get("source_date") or row.get("date"),
+    }
+    if dataset == "TaiwanStockHoldingSharesPer":
+        values["holding_shares_level"] = row.get("holding_shares_level")
+    elif dataset == "TaiwanStockTradingDailyReport":
+        values["securities_trader_id"] = row.get("securities_trader_id")
+    return json.dumps(_jsonable(values), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
 def _model_rows(db: Session, model: type[Any], stock_id: str, as_of: date, cutoff: datetime, dataset: str, limit: int) -> tuple[list[dict[str, Any]], list[str]]:
+    """Return the latest point-in-time rows, merging revisions with legacy rows.
+
+    SourceRevision was introduced after the first deployment, so a database can
+    contain a partial revision history.  Revisions override the same natural
+    key, while older model rows remain eligible when their fetch timestamp is
+    before the requested cutoff.  This prevents a small incremental fetch from
+    erasing the historical window used by a score.
+    """
     revisions = db.scalars(select(SourceRevision).where(SourceRevision.dataset == dataset, SourceRevision.stock_id == stock_id, SourceRevision.source_date <= as_of, SourceRevision.fetched_at <= cutoff).order_by(SourceRevision.fetched_at, SourceRevision.id)).all()
-    if revisions:
-        latest: dict[str, SourceRevision] = {}
-        for revision in revisions:
-            latest[revision.natural_key] = revision
-        selected = sorted(latest.values(), key=lambda row: (row.source_date or date.min, row.id))[-limit:]
-        return [dict(row.payload) for row in selected], [row.content_hash for row in selected]
-    rows = db.scalars(select(model).where(model.stock_id == stock_id, model.source_date <= as_of).order_by(model.source_date.desc()).limit(limit)).all()
-    return [{key: getattr(row, key) for key in row.__table__.columns.keys()} for row in reversed(rows)], []
+    revision_by_key: dict[str, SourceRevision] = {}
+    for revision in revisions:
+        revision_by_key[revision.natural_key] = revision
+
+    model_rows = db.scalars(
+        select(model)
+        .where(model.stock_id == stock_id, model.source_date <= as_of, model.fetched_at <= cutoff)
+        .order_by(model.source_date.desc(), model.id.desc())
+        .limit(limit)
+    ).all()
+    merged: dict[str, tuple[dict[str, Any], str, date | None, int]] = {}
+    for row in model_rows:
+        payload = {key: getattr(row, key) for key in row.__table__.columns.keys()}
+        merged[_natural_key(dataset, payload)] = (payload, _payload_content_hash(payload), row.source_date, row.id)
+    for revision in revision_by_key.values():
+        payload = dict(revision.payload)
+        merged[revision.natural_key] = (payload, _payload_content_hash(payload), revision.source_date, revision.id)
+
+    selected = sorted(merged.values(), key=lambda item: (item[2] or date.min, item[3]))[-limit:]
+    return [item[0] for item in selected], [item[1] for item in selected]
 
 
 def _daily_coverage(rows: list[dict[str, Any]], as_of: date, count: int) -> tuple[bool, list[str]]:
@@ -401,8 +438,9 @@ async def catch_up(db: Session, client: FinMindClient) -> dict[str, Any]:
         _job_finish(db, broker_job, "FAILED", error_code=code, error=str(exc), stocks_failed=len(stock_ids))
         result["datasets"]["TaiwanStockTradingDailyReport"] = {"status": "FAILED", "error_code": code}
         result["status"] = "PARTIAL"
-    existing_score_count = db.scalar(select(func.count()).select_from(AccumulationScore).where(AccumulationScore.source_date == end, AccumulationScore.score_version == SCORE_VERSION)) or 0
-    if broker_metrics.get("skipped_checkpoint", 0) >= len(stock_ids) and existing_score_count >= len(stock_ids):
+    existing_scores = db.scalars(select(AccumulationScore).where(AccumulationScore.source_date == end, AccumulationScore.score_version == SCORE_VERSION, AccumulationScore.knowledge_cutoff.is_not(None))).all()
+    reuse_ready = len(existing_scores) >= len(stock_ids) and all(len(score.input_source_hashes or []) >= 20 for score in existing_scores)
+    if broker_metrics.get("skipped_checkpoint", 0) >= len(stock_ids) and reuse_ready:
         score_job = _job_start(db, "score", end, end, stocks_attempted=len(stock_ids))
         _job_finish(db, score_job, "SUCCESS", stocks_completed=len(stock_ids), checkpoint_state={"reused_existing_scores": True})
         result["scores"] = {status: count for status, count in db.execute(select(AccumulationScore.status, func.count()).where(AccumulationScore.source_date == end, AccumulationScore.score_version == SCORE_VERSION).group_by(AccumulationScore.status)).all()}
