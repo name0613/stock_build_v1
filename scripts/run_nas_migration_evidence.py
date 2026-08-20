@@ -3,10 +3,15 @@ from __future__ import annotations
 
 import json
 import os
+import sys
+from pathlib import Path
 
-import paramiko
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
-from scripts.deploy_nas import remote
+import paramiko  # noqa: E402
+
+from scripts.deploy_nas import remote  # noqa: E402
 
 
 PROJECT = "/volume1/docker/tw-accumulation-evidence"

@@ -4,13 +4,17 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 import paramiko
 
-from scripts.deploy_nas import remote
-from scripts.secret_scan import scan_text
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from scripts.deploy_nas import remote  # noqa: E402
+from scripts.secret_scan import PATTERNS  # noqa: E402
 
 
 PROJECT = "/volume1/docker/tw-accumulation-evidence"
@@ -18,7 +22,7 @@ SHELL_SIGNATURES = "eyJ0eXAiOiJKV1Qi|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|" + "
 
 
 def sanitized_findings(output: str, surface: str) -> list[dict[str, str]]:
-    findings = scan_text(output, surface)
+    findings = [{"rule": name, "surface": surface} for name, pattern in PATTERNS.items() if pattern.search(output)]
     if "FINDING" in output:
         findings.extend({"rule": "image_shell_signature", "surface": surface} for _ in range(1))
     return [{"rule": item["rule"], "surface": item["surface"]} for item in findings]

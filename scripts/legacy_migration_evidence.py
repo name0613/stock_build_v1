@@ -25,7 +25,7 @@ def run() -> dict[str, object]:
     try:
         with engine.begin() as connection:
             connection.execute(text(f"CREATE SCHEMA {schema}"))
-            connection.execute(text(f"SET LOCAL search_path TO {schema}"))
+            connection.execute(text(f"SET LOCAL search_path TO {schema}, public"))
             connection.execute(text("CREATE EXTENSION IF NOT EXISTS pgcrypto"))
             connection.execute(text("CREATE TABLE stocks (stock_id VARCHAR(16) PRIMARY KEY)"))
             connection.execute(text("CREATE TABLE institutional_daily (id BIGSERIAL PRIMARY KEY, stock_id VARCHAR(16), source_date DATE, foreign_net DOUBLE PRECISION, foreign_dealer_self_net DOUBLE PRECISION, investment_trust_net DOUBLE PRECISION, dealer_net DOUBLE PRECISION, dealer_self_net DOUBLE PRECISION, dealer_hedging_net DOUBLE PRECISION, institutional_net DOUBLE PRECISION, source_dataset VARCHAR(100), fetched_at TIMESTAMPTZ)"))
