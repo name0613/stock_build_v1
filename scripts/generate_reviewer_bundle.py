@@ -1,0 +1,66 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import shutil
+import stat
+import zipfile
+from datetime import datetime, timezone
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def copy_tree(relative: str, target: Path) -> None:
+    source = ROOT / relative
+    if not source.exists():
+        return
+    destination = target / relative
+    if source.is_dir():
+        shutil.copytree(source, destination, dirs_exist_ok=True, ignore=shutil.ignore_patterns(".env", "*.db", "node_modules", ".venv", "dist", "raw", "postgres"))
+    else:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+
+
+def create_bundle() -> tuple[Path, str]:
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    bundle_dir = ROOT / f"review_bundle_{timestamp}"
+    bundle_dir.mkdir()
+    for relative in ["backend/app", "backend/tests", "frontend/src", "migrations", "nginx", "scripts", "README.md", "ARCHITECTURE.md", "DATA_SOURCES.md", "SCORING.md", "DEPLOYMENT.md", "OPERATIONS.md", "SECURITY.md", "REVIEW_INSTRUCTIONS.md", "docker-compose.yml", ".env.example"]:
+        copy_tree(relative, bundle_dir / "source")
+    for folder in ["test_results", "deployment_evidence", "screenshots", "sanitized_sample_data"]:
+        source = ROOT / folder
+        destination = bundle_dir / folder
+        if source.is_dir():
+            shutil.copytree(source, destination, dirs_exist_ok=True, ignore=shutil.ignore_patterns(".env", "*.db", "node_modules", ".venv", "dist", "raw", "postgres"))
+        else:
+            destination.mkdir(exist_ok=True)
+    manifest = []
+    for path in sorted(p for p in bundle_dir.rglob("*") if p.is_file()):
+        rel = path.relative_to(bundle_dir).as_posix()
+        if rel == "BUNDLE_MANIFEST.json":
+            continue
+        manifest.append({"path": rel, "size": path.stat().st_size, "sha256": sha256(path)})
+    (bundle_dir / "BUNDLE_MANIFEST.json").write_text(json.dumps({"format": "1", "created_at": datetime.now(timezone.utc).isoformat(), "immutable": True, "files": manifest}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    archive = ROOT / f"{bundle_dir.name}.zip"
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for path in sorted(p for p in bundle_dir.rglob("*") if p.is_file()):
+            zf.write(path, path.relative_to(bundle_dir.parent).as_posix())
+    for path in bundle_dir.rglob("*"):
+        if path.is_file():
+            path.chmod(stat.S_IREAD)
+    return archive, sha256(archive)
+
+
+if __name__ == "__main__":
+    archive, digest = create_bundle()
+    print(json.dumps({"bundle": str(archive), "sha256": digest}, ensure_ascii=False))

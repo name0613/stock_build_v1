@@ -1,0 +1,45 @@
+{
+  "generated_at": "2026-08-20T12:14:08.660338+00:00",
+  "results": [
+    {
+      "dataset": "TaiwanStockInstitutionalInvestorsBuySellWide",
+      "accessible": true,
+      "method": "GET /api/v4/data",
+      "latest_date": "2026-08-20",
+      "sample_row_count": 10,
+      "permission_error": null
+    },
+    {
+      "dataset": "TaiwanStockShareholding",
+      "accessible": true,
+      "method": "GET /api/v4/data",
+      "latest_date": "2026-08-19",
+      "sample_row_count": 10,
+      "permission_error": null
+    },
+    {
+      "dataset": "TaiwanStockHoldingSharesPer",
+      "accessible": true,
+      "method": "GET /api/v4/data",
+      "latest_date": "2026-08-14",
+      "sample_row_count": 10,
+      "permission_error": null
+    },
+    {
+      "dataset": "TaiwanStockTradingDailyReport",
+      "accessible": true,
+      "method": "GET /api/v4/taiwan_stock_trading_daily_report",
+      "latest_date": "2026-08-20",
+      "sample_row_count": 10,
+      "permission_error": null
+    },
+    {
+      "dataset": "TaiwanStockTradingDailyReportSecIdAgg",
+      "accessible": true,
+      "method": "GET /api/v4/taiwan_stock_trading_daily_report_secid_agg",
+      "latest_date": null,
+      "sample_row_count": 0,
+      "permission_error": null
+    }
+  ]
+}

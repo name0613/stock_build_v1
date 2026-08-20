@@ -17,5 +17,7 @@ review_bundle_*/
 screenshots/
 *.log
 *.db
+*.tsbuildinfo
+frontend/test-results/
 secrets/
 .DS_Store

@@ -1,0 +1,11 @@
+{
+  "started_at": "2026-08-20T12:41:29.305737+00:00",
+  "source_date": "2026-08-20",
+  "scores": 2148,
+  "statuses": {
+    "DATA_INSUFFICIENT": 2145,
+    "WATCH": 3
+  },
+  "secrets_included": false,
+  "finished_at": "2026-08-20T12:41:36.543832+00:00"
+}

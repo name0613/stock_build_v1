@@ -61,9 +61,13 @@ def parse_holding_level(level: str | int | float | None) -> int | None:
     if level is None:
         return None
     text = str(level).strip().replace(",", "").replace("，", "")
+    if text.lower() in {"total", "all"}:
+        return None
     import re
 
     patterns = [
+        (r"^(?:more than|over)\s*([0-9]+)$", 1),
+        (r"^([0-9]+)\s*[-~至]\s*([0-9]+)$", 1),
         (r"^([0-9]+)\s*張\s*以上$", 1000),
         (r"^([0-9]+)\s*張\s*以上.*$", 1000),
         (r"^([0-9]+)\s*shares?\s*以上$", 1),
@@ -132,4 +136,3 @@ def calculate_score(features: dict[str, Any], coverage: dict[str, bool], score_v
         {"label": "低調修正", "value": round(modifier, 2), "detail": "價格影響僅作 -10 至 +10 modifier，不獨立產生建倉證據"},
     ]
     return ScoreResult(score, classify_score(score), {"InstitutionalPersistence": round(institutional, 2), "OwnershipAccumulation": round(ownership, 2), "BrokerPersistence": round(broker, 2), "LowProfileModifier": round(modifier, 2)}, explanation)
-

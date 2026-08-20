@@ -1,0 +1,73 @@
+# Taiwan Stock Accumulation Evidence
+
+台股上市、上櫃、興櫃普通股的法人／大型資金「持續、分散、低調」建倉證據監控系統。系統只把資料解讀為 `Accumulation Evidence`，不宣稱「主力一定在買」、內線、保證上漲或買進建議。
+
+## 目前範圍
+
+- Universe 動態來自 FinMind `TaiwanStockInfo`；依市場與普通股欄位篩選，不把代碼硬寫死。
+- S-only scoring：三大法人、外資實際持股、集保持股級距、券商分點／SponsorPro capability probe。
+- `TaiwanStockPrice` 只作顯示、成交量 normalization、價格影響 modifier；`TaiwanSecuritiesTraderInfo` 只作券商名稱對照。
+- 分點是券商營業據點彙總，不等同於單一投資人或「主力」。
+- 缺重要資料時為 `DATA_INSUFFICIENT` 且 score 為 `NULL`，不把 missing 轉成 0。
+- 5%+ 重大持股申報 schema 已保留；在確認官方、穩定、合法 machine-readable source 前不偽造、不補 0。
+
+## 本機啟動
+
+```powershell
+Copy-Item .env.example .env
+New-Item -ItemType Directory -Force secrets | Out-Null
+Set-Content secrets/postgres_password (python -c "import secrets; print(secrets.token_urlsafe(24))")
+
+# backend unit/integration tests
+.venv\Scripts\python.exe -m pip install -r backend\requirements.txt
+$env:PYTHONPATH = "backend"
+.venv\Scripts\python.exe -m pytest backend\tests -q
+
+# frontend build
+cd frontend
+npm install
+npm run build
+```
+
+Docker 需要 Docker Engine／Compose v2。部署前把 `FINMIND_API_TOKEN` 只放在執行環境或未被 Git 追蹤的 `.env`；不能貼到聊天、source、frontend 或 bundle。
+
+```powershell
+docker compose build
+docker compose up -d
+docker compose ps
+```
+
+預設 Web port 是 `18080`；若 NAS 該 port 已占用，以 `WEB_PORT` 指定已驗證未使用的 LAN port。PostgreSQL 僅在 internal network，LAN 只看到 nginx。
+
+## NAS deployment
+
+不要猜 NAS volume path。部署腳本會先讀 OS／架構／Docker／Compose／磁碟／port／containers／volumes／networks，再在已存在的容器 volume (`/volume1/docker`, `/share/Container`, `/share/CACHEDEV1_DATA/Container`, `/mnt/user/appdata`) 中選擇第一個已驗證目錄；找不到就停止。
+
+```powershell
+$env:NAS_HOST = "192.168.31.138"
+$env:NAS_USER = "Name"
+$env:NAS_PASSWORD = ... # 由 secret manager 注入，勿寫檔
+$env:FINMIND_API_TOKEN = ... # 由 secret manager 注入，勿寫檔
+python -m pip install paramiko
+python scripts/deploy_nas.py
+.\scripts\verify_deployment.ps1 -Url http://192.168.31.138:18080
+```
+
+`deploy_nas.py` 不會輸出密碼、token 或 Authorization header；NAS `.env` 與 PostgreSQL secret 設為 `0600`，且不會被 Docker image 包入。
+
+## Initial backfill / daily jobs
+
+Worker 啟動時做 catch-up，工作日 21:30 做主更新，23:00 做補抓／retry，時區為 `Asia/Taipei`。完整 backfill 應在 NAS 以 quota-aware checkpoint 工作執行；分點走逐股票 async、bounded concurrency、rate limiter、exponential backoff、jitter、retry-after 與 checkpoint/resume，不以無限呼叫換取 coverage。
+
+## Data status / troubleshooting
+
+- `/health`：API／DB health。
+- `/api/data-status`：每個 dataset 的 status、source date、last successful sync、job runs 與安全錯誤碼。
+- `/api/docs`：API schema。
+- `ACCESS_DENIED` 代表 plan permission，不代表沒有資料；`SCHEMA_MISMATCH` 代表欄位漂移，不會 silent ingest。
+- Raw Parquet 在 `/data/raw/<dataset>/date=YYYY-MM-DD/`，metadata sidecar 保存 source、parameters（不含 token）、source date、fetched_at、SHA256。
+
+## Backup / restore
+
+備份 PostgreSQL volume 與 `/data/raw`，並將 manifest 與 score version 一起保存。恢復時先停止 worker，還原 volume，再啟動 postgres、API、worker；恢復後檢查 `/health`、row counts、latest source dates、score version 與 bundle evidence。不要刪除無關 container／volume，也不要執行 broad prune。
+

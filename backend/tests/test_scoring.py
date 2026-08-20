@@ -20,9 +20,9 @@ def test_holding_aggregation_does_not_depend_on_row_order() -> None:
         {"date": "2026-08-07", "holding_shares_level": "1000張以上", "percent": 33.0, "people": 81, "shares": 980_000},
     ]
     result = holding_distribution_features(rows)
-    assert result["LargeHolder400LotsPercent"] == 55.0
-    assert result["LargeHolder400LotsPeople"] == 99
-    assert result["LargeHolder400Change1W"] == 3.0
+    assert result["LargeHolder400LotsPercent"] == 90.0
+    assert result["LargeHolder400LotsPeople"] == 179
+    assert result["LargeHolder400Change1W"] == 5.0
     assert result["LargeHolder1000LotsPercent"] == 35.0
 
 

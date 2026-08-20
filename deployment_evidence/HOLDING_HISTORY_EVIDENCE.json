@@ -1,0 +1,28 @@
+{
+  "started_at": "2026-08-20T12:34:43.700837+00:00",
+  "dataset": "TaiwanStockHoldingSharesPer",
+  "start_date": "2024-08-20",
+  "end_date": "2026-08-20",
+  "stocks": {
+    "2330": {
+      "records": 1530,
+      "latest_source_date": "2026-08-14",
+      "score": 60.81,
+      "status": "WATCH"
+    },
+    "2317": {
+      "records": 1530,
+      "latest_source_date": "2026-08-14",
+      "score": 57.68,
+      "status": "WATCH"
+    },
+    "2454": {
+      "records": 1530,
+      "latest_source_date": "2026-08-14",
+      "score": 59.73,
+      "status": "WATCH"
+    }
+  },
+  "secrets_included": false,
+  "finished_at": "2026-08-20T12:34:49.684058+00:00"
+}

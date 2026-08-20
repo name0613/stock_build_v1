@@ -7,7 +7,7 @@ import logging
 import random
 import time
 from dataclasses import asdict, dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -70,24 +70,33 @@ class RawEvidenceStore:
         if pa is None or pq is None:
             raise FinMindError("RAW_STORAGE_UNAVAILABLE", "Parquet runtime is not installed")
         fetched_at = datetime.now(timezone.utc)
-        date_part = source_date or "unknown"
-        target_dir = self.root / dataset / f"date={date_part}"
-        target_dir.mkdir(parents=True, exist_ok=True)
-        payload = []
+        grouped: dict[str, list[dict[str, Any]]] = {}
         for record in records:
-            enriched = dict(record)
-            enriched["_evidence_source"] = "FinMind"
-            enriched["_evidence_dataset"] = dataset
-            enriched["_evidence_source_date"] = source_date
-            enriched["_evidence_fetched_at"] = fetched_at.isoformat()
-            payload.append(enriched)
-        path = target_dir / f"part-{fetched_at.strftime('%Y%m%dT%H%M%S%fZ')}.parquet"
-        table = pa.Table.from_pylist(payload or [{"_evidence_dataset": dataset, "_evidence_source_date": source_date, "_evidence_fetched_at": fetched_at.isoformat()}])
-        pq.write_table(table, path, compression="zstd")
-        digest = hashlib.sha256(path.read_bytes()).hexdigest()
-        metadata_path = path.with_suffix(".metadata.json")
-        metadata_path.write_text(json.dumps({"source": "FinMind", "dataset": dataset, "parameters": parameters, "source_date": source_date, "fetched_at": fetched_at.isoformat(), "sha256": digest}, ensure_ascii=False, indent=2), encoding="utf-8")
-        return {"path": str(path), "sha256": digest, "fetched_at": fetched_at.isoformat(), "records": len(records)}
+            row_date = str(record.get("date") or record.get("Date") or source_date or "unknown")
+            grouped.setdefault(row_date, []).append(record)
+        if not grouped:
+            grouped = {source_date or "unknown": []}
+        paths: list[str] = []
+        hashes: list[str] = []
+        for row_date, date_records in grouped.items():
+            target_dir = self.root / dataset / f"date={row_date}"
+            target_dir.mkdir(parents=True, exist_ok=True)
+            payload = []
+            for record in date_records:
+                enriched = dict(record)
+                enriched["_evidence_source"] = "FinMind"
+                enriched["_evidence_dataset"] = dataset
+                enriched["_evidence_source_date"] = row_date
+                enriched["_evidence_fetched_at"] = fetched_at.isoformat()
+                payload.append(enriched)
+            path = target_dir / f"part-{fetched_at.strftime('%Y%m%dT%H%M%S%fZ')}.parquet"
+            table = pa.Table.from_pylist(payload or [{"_evidence_dataset": dataset, "_evidence_source_date": row_date, "_evidence_fetched_at": fetched_at.isoformat()}])
+            pq.write_table(table, path, compression="zstd")
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            path.with_suffix(".metadata.json").write_text(json.dumps({"source": "FinMind", "dataset": dataset, "parameters": parameters, "source_date": row_date, "fetched_at": fetched_at.isoformat(), "sha256": digest}, ensure_ascii=False, indent=2), encoding="utf-8")
+            paths.append(str(path))
+            hashes.append(digest)
+        return {"paths": paths, "sha256": hashes, "fetched_at": fetched_at.isoformat(), "records": len(records)}
 
 
 class RateLimiter:
@@ -111,30 +120,38 @@ class FinMindClient:
         self.store = RawEvidenceStore(self.settings.raw_root)
         self.timeout = httpx.Timeout(30.0, connect=10.0)
 
-    def _params(self, dataset: str, data_id: str | None, start_date: str | None, end_date: str | None) -> dict[str, str]:
-        params = {"dataset": dataset}
-        if data_id:
-            params["data_id"] = data_id
-        if start_date:
-            params["start_date"] = start_date
-        if end_date:
-            params["end_date"] = end_date
+    def _request_spec(self, dataset: str, data_id: str | None, start_date: str | None, end_date: str | None, securities_trader_id: str | None = None) -> tuple[str, dict[str, str]]:
+        if dataset == "TaiwanStockTradingDailyReport":
+            params = {"data_id": data_id or "", "date": end_date or start_date or "", "must_need_date": "true"}
+            endpoint = "/taiwan_stock_trading_daily_report"
+        elif dataset == "TaiwanStockTradingDailyReportSecIdAgg":
+            params = {"data_id": data_id or "", "securities_trader_id": securities_trader_id or "", "start_date": start_date or "", "end_date": end_date or "", "must_need_date": "true"}
+            endpoint = "/taiwan_stock_trading_daily_report_secid_agg"
+        else:
+            params = {"dataset": dataset}
+            endpoint = "/data"
+            if data_id:
+                params["data_id"] = data_id
+            if start_date:
+                params["start_date"] = start_date
+            if end_date:
+                params["end_date"] = end_date
         if self.settings.finmind_api_token:
             params["token"] = self.settings.finmind_api_token
-        return params
+        return endpoint, params
 
-    def fetch(self, dataset: str, data_id: str | None = None, start_date: str | None = None, end_date: str | None = None, *, persist_raw: bool = True) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    def fetch(self, dataset: str, data_id: str | None = None, start_date: str | None = None, end_date: str | None = None, *, persist_raw: bool = True, securities_trader_id: str | None = None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         if dataset in FORBIDDEN_DATASETS:
             raise FinMindError("FORBIDDEN_DATASET", f"dataset is excluded by S-only policy: {dataset}")
         if dataset not in ALLOWED_S_DATASETS | REFERENCE_DATASETS:
             raise FinMindError("DATASET_NOT_ALLOWLISTED", f"dataset is not allowlisted: {dataset}")
-        params = self._params(dataset, data_id, start_date, end_date)
+        endpoint, params = self._request_spec(dataset, data_id, start_date, end_date, securities_trader_id)
         safe_params = {key: value for key, value in params.items() if key != "token"}
         last_error: FinMindError | None = None
         for attempt in range(self.settings.broker_max_retries + 1):
             try:
                 with httpx.Client(base_url=self.settings.finmind_base_url, timeout=self.timeout, follow_redirects=True) as client:
-                    response = client.get("/data", params=params)
+                    response = client.get(endpoint, params=params)
                 if response.status_code == 401:
                     raise FinMindError("AUTHENTICATION_FAILED", "FinMind authentication failed", 401)
                 if response.status_code == 403:
@@ -145,7 +162,8 @@ class FinMindClient:
                     raise FinMindError("RATE_LIMITED", f"FinMind rate limit; retry after {delay:.1f}s", 429)
                 if response.status_code >= 500:
                     raise FinMindError("UPSTREAM_5XX", "FinMind upstream server error", response.status_code)
-                response.raise_for_status()
+                if response.status_code >= 400:
+                    raise FinMindError("BAD_REQUEST", "FinMind rejected the sanitized request", response.status_code)
                 try:
                     payload = response.json()
                 except ValueError as exc:
@@ -170,8 +188,13 @@ class FinMindClient:
 
     def probe(self, dataset: str) -> CapabilityResult:
         try:
-            records, meta = self.fetch(dataset, end_date=date.today().isoformat())
-            return CapabilityResult(dataset, True, "GET /api/v4/data", meta.get("source_date"), len(records[:10]), None)
+            end_date = date.today().isoformat()
+            start_date = (date.today() - timedelta(days=30)).isoformat()
+            data_id = None if dataset == "TaiwanStockInfo" else "2330"
+            trader_id = "075T" if dataset == "TaiwanStockTradingDailyReportSecIdAgg" else None
+            records, meta = self.fetch(dataset, data_id=data_id, start_date=None if dataset == "TaiwanStockInfo" else start_date, end_date=None if dataset == "TaiwanStockInfo" else end_date, securities_trader_id=trader_id)
+            method = "GET /api/v4/data" if dataset not in {"TaiwanStockTradingDailyReport", "TaiwanStockTradingDailyReportSecIdAgg"} else f"GET /api/v4/{'taiwan_stock_trading_daily_report' if dataset.endswith('Report') else 'taiwan_stock_trading_daily_report_secid_agg'}"
+            return CapabilityResult(dataset, True, method, meta.get("source_date"), len(records[:10]), None)
         except FinMindError as exc:
             return CapabilityResult(dataset, False, "GET /api/v4/data", None, 0, exc.code)
 
@@ -182,9 +205,9 @@ class FinMindClient:
         if dataset == "TaiwanStockHoldingSharesPer":
             level = result.get("HoldingSharesLevel") or result.get("holding_shares_level")
             result["holding_shares_threshold"] = parse_holding_level(level)
-            if level is not None and result["holding_shares_threshold"] is None:
-                raise SchemaMismatch("SCHEMA_MISMATCH", f"unrecognized HoldingSharesLevel: {level}")
-            result["shares"] = result.get("shares") or result.get("HoldingShares")
+            if level is not None and result["holding_shares_threshold"] is None and str(level).strip().lower() not in {"total", "all"}:
+                result["_schema_warning"] = "UNRECOGNIZED_HOLDING_LEVEL"
+            result["shares"] = result.get("shares") or result.get("HoldingShares") or result.get("unit")
         return result
 
     @staticmethod
@@ -201,24 +224,37 @@ class FinMindClient:
         completed = set(checkpoint.get("completed", []))
         limiter = RateLimiter(self.settings.broker_rate_per_second)
         semaphore = asyncio.Semaphore(self.settings.broker_concurrency)
+        checkpoint_lock = asyncio.Lock()
         metrics = {"requested": len(stock_ids), "skipped_checkpoint": len(completed), "success": 0, "failed": 0, "rows": 0}
 
-        async def one(stock_id: str) -> None:
-            if stock_id in completed:
+        days = [(start_date if start_date == end_date else start_date)]
+        if dataset == "TaiwanStockTradingDailyReport":
+            start = date.fromisoformat(start_date)
+            end = date.fromisoformat(end_date)
+            days = [(start + timedelta(days=offset)).isoformat() for offset in range((end - start).days + 1)]
+
+        async def one(stock_id: str, requested_date: str) -> None:
+            checkpoint_key = f"{stock_id}:{requested_date}"
+            if checkpoint_key in completed:
                 return
             async with semaphore:
                 await limiter.wait()
                 try:
-                    records, _ = await asyncio.to_thread(self.fetch, dataset, stock_id, start_date, end_date)
-                    checkpoint["completed"].append(stock_id)
-                    metrics["success"] += 1
-                    metrics["rows"] += len(records)
+                    records, _ = await asyncio.to_thread(self.fetch, dataset, stock_id, requested_date, requested_date)
+                    async with checkpoint_lock:
+                        if checkpoint_key not in completed:
+                            checkpoint["completed"].append(checkpoint_key)
+                            completed.add(checkpoint_key)
+                        metrics["success"] += 1
+                        metrics["rows"] += len(records)
+                        checkpoint_file.write_text(json.dumps(checkpoint, ensure_ascii=False, indent=2), encoding="utf-8")
                 except FinMindError as exc:
-                    checkpoint.setdefault("failed", []).append({"stock_id": stock_id, "code": exc.code})
-                    metrics["failed"] += 1
-                checkpoint_file.write_text(json.dumps(checkpoint, ensure_ascii=False, indent=2), encoding="utf-8")
+                    async with checkpoint_lock:
+                        checkpoint.setdefault("failed", []).append({"stock_id": stock_id, "requested_date": requested_date, "code": exc.code})
+                        metrics["failed"] += 1
+                        checkpoint_file.write_text(json.dumps(checkpoint, ensure_ascii=False, indent=2), encoding="utf-8")
 
-        await asyncio.gather(*(one(stock_id) for stock_id in stock_ids))
+        await asyncio.gather(*(one(stock_id, requested_date) for stock_id in stock_ids for requested_date in days))
         return metrics
 
 

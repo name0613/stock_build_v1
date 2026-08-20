@@ -1,0 +1,81 @@
+{
+  "started_at": "2026-08-20T12:28:52.560058+00:00",
+  "stock_ids": [
+    "2330",
+    "2317",
+    "2454"
+  ],
+  "dates": [
+    "2026-07-20",
+    "2026-07-21",
+    "2026-07-22",
+    "2026-07-23",
+    "2026-07-24",
+    "2026-07-27",
+    "2026-07-28",
+    "2026-07-29",
+    "2026-07-30",
+    "2026-07-31",
+    "2026-08-03",
+    "2026-08-04",
+    "2026-08-05",
+    "2026-08-06",
+    "2026-08-07",
+    "2026-08-10",
+    "2026-08-11",
+    "2026-08-12",
+    "2026-08-13",
+    "2026-08-14",
+    "2026-08-17",
+    "2026-08-18",
+    "2026-08-19",
+    "2026-08-20"
+  ],
+  "datasets": [
+    "TaiwanStockInstitutionalInvestorsBuySellWide",
+    "TaiwanStockShareholding",
+    "TaiwanStockHoldingSharesPer",
+    "TaiwanStockPrice",
+    "TaiwanStockTradingDailyReport"
+  ],
+  "success": 297,
+  "empty": 63,
+  "failed": 0,
+  "secrets_included": false,
+  "scores": {
+    "2330": {
+      "score": null,
+      "status": "DATA_INSUFFICIENT",
+      "coverage": {
+        "InstitutionalDataAvailable": true,
+        "ForeignHoldingDataAvailable": true,
+        "HoldingDistributionAvailable": true,
+        "BrokerDataAvailable": true,
+        "PriceDataAvailable": true
+      }
+    },
+    "2317": {
+      "score": null,
+      "status": "DATA_INSUFFICIENT",
+      "coverage": {
+        "InstitutionalDataAvailable": true,
+        "ForeignHoldingDataAvailable": true,
+        "HoldingDistributionAvailable": true,
+        "BrokerDataAvailable": true,
+        "PriceDataAvailable": true
+      }
+    },
+    "2454": {
+      "score": null,
+      "status": "DATA_INSUFFICIENT",
+      "coverage": {
+        "InstitutionalDataAvailable": true,
+        "ForeignHoldingDataAvailable": true,
+        "HoldingDistributionAvailable": true,
+        "BrokerDataAvailable": true,
+        "PriceDataAvailable": true
+      }
+    }
+  },
+  "finished_at": "2026-08-20T12:33:30.273090+00:00"
+}

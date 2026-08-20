@@ -41,7 +41,7 @@ def health(db: Session = Depends(get_db)) -> dict[str, Any]:
 @app.get("/api/summary")
 def summary(db: Session = Depends(get_db)) -> dict[str, Any]:
     total = db.scalar(select(func.count()).select_from(Stock).where(Stock.is_common_stock.is_(True))) or 0
-    counts = {status: db.scalar(select(func.count()).select_from(AccumulationScore).where(AccumulationScore.source_date == _latest_score_date(db), AccumulationScore.status == status)) or 0 for status in ("STRONG_ACCUMULATION", "ACCUMULATION", "WATCH", "DATA_INSUFFICIENT", "NO_STRONG_EVIDENCE")}
+    counts = {status: db.scalar(select(func.count()).select_from(AccumulationScore).join(Stock, Stock.stock_id == AccumulationScore.stock_id).where(Stock.is_common_stock.is_(True), AccumulationScore.source_date == _latest_score_date(db), AccumulationScore.status == status)) or 0 for status in ("STRONG_ACCUMULATION", "ACCUMULATION", "WATCH", "DATA_INSUFFICIENT", "NO_STRONG_EVIDENCE")}
     sync = db.scalars(select(DataSyncStatus).order_by(DataSyncStatus.dataset)).all()
     return {"stock_count": total, "strong_count": counts["STRONG_ACCUMULATION"], "accumulation_count": counts["ACCUMULATION"], "watch_count": counts["WATCH"], "data_insufficient_count": counts["DATA_INSUFFICIENT"], "no_strong_evidence_count": counts["NO_STRONG_EVIDENCE"], "latest_score_date": _latest_score_date(db), "last_data_update": max((s.last_successful_sync for s in sync if s.last_successful_sync), default=None), "sync_status": [{"dataset": s.dataset, "status": s.status, "latest_source_date": s.latest_source_date, "last_successful_sync": s.last_successful_sync, "records": s.records, "error_code": s.last_error_code} for s in sync]}
 
@@ -154,7 +154,16 @@ def _rows(db: Session, model: type[Any], stock_id: str) -> list[dict[str, Any]]:
 
 
 def _broker_summary(db: Session, stock_id: str) -> list[dict[str, Any]]:
-    rows = db.scalars(select(BrokerDaily).where(BrokerDaily.stock_id == stock_id, BrokerDaily.source_date >= func.current_date() - 30).order_by(BrokerDaily.source_date, BrokerDaily.securities_trader_id)).all()
+    latest_dates = db.scalars(
+        select(BrokerDaily.source_date)
+        .where(BrokerDaily.stock_id == stock_id)
+        .distinct()
+        .order_by(BrokerDaily.source_date.desc())
+        .limit(20)
+    ).all()
+    rows = db.scalars(
+        select(BrokerDaily).where(BrokerDaily.stock_id == stock_id, BrokerDaily.source_date.in_(latest_dates))
+    ).all()
     by_broker: dict[str, dict[str, Any]] = {}
     for row in rows:
         item = by_broker.setdefault(row.securities_trader_id, {"securities_trader_id": row.securities_trader_id, "securities_trader_name": row.securities_trader_name, "buy_volume": 0, "sell_volume": 0, "net_volume": 0, "positive_days": 0, "negative_days": 0})

@@ -1,0 +1,11 @@
+.env
+.git
+.venv
+node_modules
+dist
+data
+secrets
+review_bundle_*
+screenshots
+*.db
+

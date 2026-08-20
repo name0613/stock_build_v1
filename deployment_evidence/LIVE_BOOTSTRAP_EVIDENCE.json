@@ -1,0 +1,59 @@
+{
+  "started_at": "2026-08-20T12:17:59.455334+00:00",
+  "start_date": "2026-08-20",
+  "end_date": "2026-08-20",
+  "datasets": {
+    "TaiwanStockInfo": {
+      "status": "SUCCESS",
+      "records": 2162
+    },
+    "TaiwanStockInstitutionalInvestorsBuySellWide": {
+      "status": "SUCCESS",
+      "records": 20450,
+      "latest_source_date": "2026-08-20",
+      "raw_evidence": [
+        "data\\raw\\TaiwanStockInstitutionalInvestorsBuySellWide\\date=2026-08-20\\part-20260820T121803109251Z.parquet"
+      ]
+    },
+    "TaiwanStockShareholding": {
+      "status": "SUCCESS",
+      "records": 0,
+      "latest_source_date": null,
+      "raw_evidence": [
+        "data\\raw\\TaiwanStockShareholding\\date=unknown\\part-20260820T121806894155Z.parquet"
+      ]
+    },
+    "TaiwanStockHoldingSharesPer": {
+      "status": "SUCCESS",
+      "records": 0,
+      "latest_source_date": null,
+      "raw_evidence": [
+        "data\\raw\\TaiwanStockHoldingSharesPer\\date=unknown\\part-20260820T121807086969Z.parquet"
+      ]
+    },
+    "TaiwanStockPrice": {
+      "status": "SUCCESS",
+      "records": 43939,
+      "latest_source_date": "2026-08-20",
+      "raw_evidence": [
+        "data\\raw\\TaiwanStockPrice\\date=2026-08-20\\part-20260820T121808733769Z.parquet"
+      ]
+    }
+  },
+  "secrets_included": false,
+  "score_samples": {
+    "2330": {
+      "score": null,
+      "status": "DATA_INSUFFICIENT"
+    },
+    "2317": {
+      "score": null,
+      "status": "DATA_INSUFFICIENT"
+    },
+    "2454": {
+      "score": null,
+      "status": "DATA_INSUFFICIENT"
+    }
+  },
+  "finished_at": "2026-08-20T12:18:15.352329+00:00"
+}

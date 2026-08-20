@@ -60,7 +60,11 @@ def holding_distribution_features(rows: list[dict[str, Any]]) -> dict[str, Any]:
     ordered_dates = sorted(by_date)
 
     def metric(threshold: int, field: str) -> list[float | None]:
-        return [by_date[d].get(threshold, {}).get(field) for d in ordered_dates]
+        values: list[float | None] = []
+        for day in ordered_dates:
+            selected = [row.get(field) for lower, row in by_date[day].items() if lower >= threshold and row.get(field) is not None]
+            values.append(sum(selected) if selected else None)
+        return values
 
     out: dict[str, Any] = {}
     for threshold, label in ((400_000, "400"), (1_000_000, "1000")):
@@ -175,8 +179,10 @@ def build_features(institutional: list[dict[str, Any]], foreign: list[dict[str, 
         if row.get("net_volume") is not None:
             broker_daily[key] += row["net_volume"]
     price_rows = []
+    institutional_by_date = {str(row.get("date") or row.get("source_date") or ""): row.get("institutional_net") for row in institutional}
     for row in prices:
         price_row = dict(row)
+        price_row["institutional_net"] = institutional_by_date.get(str(row.get("date") or row.get("source_date") or ""))
         price_row["broker_net"] = broker_daily.get(str(row.get("date") or row.get("source_date") or ""))
         price_rows.append(price_row)
     result.update(broker_features(brokers))
