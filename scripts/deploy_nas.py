@@ -130,14 +130,19 @@ def main() -> None:
             remote(ssh, f"mkdir -p {parent}")
             sftp.put(str(file), to_sftp_path(target, sftp_prefix))
         env_path = to_sftp_path(posixpath.join(project, ".env"), sftp_prefix)
+        token_path = to_sftp_path(posixpath.join(project, "secrets/finmind_api_token"), sftp_prefix)
         if FINMIND_TOKEN:
+            token_file = sftp.file(token_path, "w")
+            token_file.write(FINMIND_TOKEN + "\n")
+            token_file.close()
+            sftp.chmod(token_path, 0o600)
             env_file = sftp.file(env_path, "w")
-            env_file.write(f"FINMIND_API_TOKEN={FINMIND_TOKEN}\n")
+            env_file.write("# Production credentials are mounted as Compose secrets.\n")
             env_file.close()
             sftp.chmod(env_path, 0o600)
         else:
             try:
-                sftp.stat(env_path)
+                sftp.stat(token_path)
             except OSError as exc:
                 raise RuntimeError("FINMIND_API_TOKEN is required for the first NAS deployment") from exc
         secret_path = to_sftp_path(posixpath.join(project, "secrets/postgres_password"), sftp_prefix)

@@ -89,3 +89,16 @@ def test_historical_score_does_not_change_when_future_row_arrives() -> None:
     day21_score = calculate_score(future, full_coverage())
     assert day20.score == future_score_as_day20.score
     assert day21_score.score != day20.score
+
+
+def test_score_golden_vector_and_complete_spec_hash() -> None:
+    from app.scoring import FORMULA_HASH, SCORE_MANIFEST
+    import hashlib
+    import json
+
+    result = calculate_score(full_features(), full_coverage())
+    assert result.score == 78.71
+    mutated = dict(SCORE_MANIFEST)
+    mutated["formulas"] = {**SCORE_MANIFEST["formulas"], "final": {**SCORE_MANIFEST["formulas"]["final"], "rounding": "round(score, 3)"}}
+    mutated_hash = hashlib.sha256(json.dumps(mutated, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    assert mutated_hash != FORMULA_HASH

@@ -5,7 +5,7 @@ import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
-from app.calendar import expected_trading_sessions
+from app.calendar import CalendarUnknownError, expected_trading_sessions
 from app.finmind import FinMindClient, FinMindError
 from app.ingestion import _model_rows, _natural_key, calculate_stock_features_and_score, ingest_records
 from app.models import AccumulationScore, Base, BrokerDaily, InstitutionalDaily, SourceRevision, Stock
@@ -23,6 +23,24 @@ def test_raw_institutional_fallback_is_explicitly_rejected() -> None:
     with pytest.raises(FinMindError) as exc:
         client.fetch("TaiwanStockInstitutionalInvestorsBuySell", persist_raw=False)
     assert exc.value.code == "DATASET_NOT_ALLOWLISTED"
+
+
+def test_calendar_version_fails_closed_outside_known_coverage() -> None:
+    with pytest.raises(CalendarUnknownError):
+        expected_trading_sessions(date(2027, 1, 4), 1)
+
+
+def test_holding_schema_unknown_duplicate_and_null_are_explicit() -> None:
+    db, _ = _db()
+    db.add(Stock(stock_id="2330", stock_name="Test", market="上市", security_type="股票", is_common_stock=True))
+    db.commit()
+    with pytest.raises(FinMindError) as unknown:
+        ingest_records(db, "TaiwanStockHoldingSharesPer", [{"stock_id": "2330", "date": "2026-08-20", "HoldingSharesLevel": "mystery bucket", "percent": 1}])
+    assert unknown.value.code == "SCHEMA_MISMATCH"
+    with pytest.raises(FinMindError) as duplicate:
+        ingest_records(db, "TaiwanStockHoldingSharesPer", [{"stock_id": "2330", "date": "2026-08-20", "HoldingSharesLevel": "400,001-600,000", "percent": 1}, {"stock_id": "2330", "date": "2026-08-20", "HoldingSharesLevel": "400,001-600,000", "percent": 2}])
+    assert duplicate.value.code == "SCHEMA_MISMATCH"
+    assert ingest_records(db, "TaiwanStockHoldingSharesPer", [{"stock_id": "2330", "date": "2026-08-20", "HoldingSharesLevel": "400,001-600,000", "percent": None}]) == 1
 
 
 def test_holding_real_bucket_boundaries_and_weekly_gap_fail_closed() -> None:
@@ -150,8 +168,11 @@ def test_scheduled_catch_up_runs_all_phases_for_dynamic_multi_stock_universe() -
                         rows.append({"stock_id": stock_id, "date": day, "HoldingSharesLevel": "400,001-600,000", "percent": 10, "people": 1})
             return rows, {"source_date": end.isoformat()}
 
-        async def fetch_broker_stocks(self, stock_ids: list[str], start_date: str, end_date: str):
-            return {"requested": len(stock_ids), "skipped_checkpoint": 0, "success": len(stock_ids), "failed": 0, "rows": len(stock_ids), "retries": 0, "_records": [{"stock_id": stock_id, "date": end, "securities_trader_id": "A", "buy_volume": 100, "sell_volume": 10} for stock_id in stock_ids]}
+        async def fetch_broker_stocks(self, stock_ids: list[str], start_date: str, end_date: str, record_sink=None):
+            rows = [{"stock_id": stock_id, "date": day, "securities_trader_id": "A", "buy_volume": 100, "sell_volume": 10} for stock_id in stock_ids for day in sessions]
+            if record_sink:
+                record_sink(rows)
+            return {"requested": len(stock_ids), "skipped_checkpoint": 0, "success": len(stock_ids) * len(sessions), "failed": 0, "rows": len(rows), "retries": 0}
 
     result = asyncio.run(catch_up(db, FakeClient()))
     assert result["status"] in {"SUCCESS", "PARTIAL"}

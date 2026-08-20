@@ -308,8 +308,11 @@ class FinMindClient:
                     async with checkpoint_lock:
                         global_fatal = exc.code in {"AUTHENTICATION_FAILED", "ACCESS_DENIED", "QUOTA_EXHAUSTED", "SCHEMA_MISMATCH"}
                         permanent = exc.code in {"NON_RETRYABLE_4XX"}
-                        failure = {"key": checkpoint_key, "stock_id": stock_id, "requested_date": requested_date, "code": exc.code, "retryable": not (global_fatal or permanent), "last_attempt_at": datetime.now(timezone.utc).isoformat()}
-                        checkpoint.setdefault("failed", []).append(failure)
+                        retryable = not (global_fatal or permanent)
+                        failed_by_key = {item.get("key"): item for item in checkpoint.setdefault("failed", [])}
+                        previous = failed_by_key.get(checkpoint_key, {})
+                        failure = {"key": checkpoint_key, "stock_id": stock_id, "requested_date": requested_date, "code": exc.code, "classification": "global_fatal" if global_fatal else ("permanent_failed" if permanent else "retryable_failed"), "retryable": retryable, "retry_count": int(previous.get("retry_count", 0)) + 1, "last_attempt_at": datetime.now(timezone.utc).isoformat(), "next_eligible_retry_at": datetime.now(timezone.utc).isoformat() if retryable else None}
+                        checkpoint["failed"] = [item for item in checkpoint["failed"] if item.get("key") != checkpoint_key] + [failure]
                         if permanent:
                             checkpoint.setdefault("permanent_failed", []).append(checkpoint_key)
                             permanent_failed.add(checkpoint_key)
@@ -347,7 +350,7 @@ class FinMindClient:
         semaphore = asyncio.Semaphore(self.settings.source_concurrency)
         queue: asyncio.Queue[str | None] = asyncio.Queue(maxsize=max(1, self.settings.source_concurrency * 2))
         fatal_event = asyncio.Event()
-        metrics: dict[str, Any] = {"requested": len(stock_ids), "success": 0, "failed": 0, "rows": 0, "fatal_code": None, "per_stock": {}}
+        metrics: dict[str, Any] = {"requested": len(stock_ids), "success": 0, "usable_success": 0, "no_data": 0, "failed": 0, "rows": 0, "fatal_code": None, "per_stock": {}}
         batch: list[dict[str, Any]] = []
 
         async def one(stock_id: str) -> None:
@@ -359,7 +362,11 @@ class FinMindClient:
                     dates = sorted({str(row.get("date") or row.get("source_date") or "")[:10] for row in records if row.get("date") or row.get("source_date")})
                     metrics["success"] += 1
                     metrics["rows"] += len(records)
-                    metrics["per_stock"][stock_id] = {"rows": len(records), "first_source_date": dates[0] if dates else None, "last_source_date": dates[-1] if dates else None}
+                    if records:
+                        metrics["usable_success"] += 1
+                    else:
+                        metrics["no_data"] += 1
+                    metrics["per_stock"][stock_id] = {"rows": len(records), "first_source_date": dates[0] if dates else None, "last_source_date": dates[-1] if dates else None, "classification": "usable" if records else "no_data"}
                     batch.extend(records)
                     if record_sink and len(batch) >= self.settings.source_batch_size:
                         record_sink(batch.copy())

@@ -2,6 +2,14 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
+CALENDAR_VERSION = "tw-exchange-2026-v1"
+CALENDAR_COVERAGE_START = date(2026, 1, 1)
+CALENDAR_COVERAGE_END = date(2026, 12, 31)
+
+
+class CalendarUnknownError(ValueError):
+    """The versioned exchange calendar does not cover a requested date."""
+
 # Taiwan exchange holidays used by the rolling-window validator.  The list is
 # deliberately explicit and reviewable; an unknown future holiday is treated
 # as an expected session until the next release adds it, never silently
@@ -15,10 +23,14 @@ TW_HOLIDAYS = {
 
 
 def is_trading_session(day: date, holidays: set[date] | None = None) -> bool:
+    if holidays is None and not CALENDAR_COVERAGE_START <= day <= CALENDAR_COVERAGE_END:
+        raise CalendarUnknownError(f"calendar coverage unknown for {day.isoformat()}")
     return day.weekday() < 5 and day not in (holidays or TW_HOLIDAYS)
 
 
 def expected_trading_sessions(end: date, count: int, holidays: set[date] | None = None) -> list[date]:
+    if holidays is None and not CALENDAR_COVERAGE_START <= end <= CALENDAR_COVERAGE_END:
+        raise CalendarUnknownError(f"calendar coverage unknown for {end.isoformat()}")
     sessions: list[date] = []
     cursor = end
     while len(sessions) < count:
@@ -28,8 +40,11 @@ def expected_trading_sessions(end: date, count: int, holidays: set[date] | None 
     return list(reversed(sessions))
 
 
+def calendar_snapshot() -> dict[str, object]:
+    return {"version": CALENDAR_VERSION, "coverage_start": CALENDAR_COVERAGE_START.isoformat(), "coverage_end": CALENDAR_COVERAGE_END.isoformat(), "holiday_count": len(TW_HOLIDAYS)}
+
+
 def missing_sessions(observed: list[date], end: date, count: int) -> list[str]:
     expected = expected_trading_sessions(end, count)
     observed_set = set(observed)
     return [day.isoformat() for day in expected if day not in observed_set]
-

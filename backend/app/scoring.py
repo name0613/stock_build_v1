@@ -6,20 +6,42 @@ import json
 from statistics import mean
 from typing import Any, Iterable
 
-SCORE_VERSION = "s-only-v1"
+SCORE_VERSION = "s-only-v2"
 WEIGHTS = {"institutional_persistence": 0.35, "ownership_accumulation": 0.35, "broker_persistence": 0.30}
-SCORE_MANIFEST = {
+SCORE_SPEC = {
     "version": SCORE_VERSION,
     "policy": "S-level only; price/reference data is supporting only",
-    "weights": WEIGHTS,
-    "coverage": ["InstitutionalDataAvailable", "ForeignHoldingDataAvailable", "HoldingDistributionAvailable", "BrokerDataAvailable", "PriceDataAvailable"],
+    "weights": {**WEIGHTS, "base_sum": 1.0},
+    "required_features": {
+        "InstitutionalNet20D": {"dataset": "TaiwanStockInstitutionalInvestorsBuySellWide", "window": 20, "cadence": "trading_session"},
+        "InstitutionalPositiveDayRatio20D": {"dataset": "TaiwanStockInstitutionalInvestorsBuySellWide", "window": 20, "cadence": "trading_session"},
+        "InstitutionalNetSlope20D": {"dataset": "TaiwanStockInstitutionalInvestorsBuySellWide", "window": 20, "cadence": "trading_session"},
+        "InstitutionalOneDaySpikeRatio20D": {"dataset": "TaiwanStockInstitutionalInvestorsBuySellWide", "window": 20, "cadence": "trading_session"},
+        "ForeignShareRatioChange20D": {"dataset": "TaiwanStockShareholding", "window": 21, "cadence": "trading_session"},
+        "LargeHolder400Change4W": {"dataset": "TaiwanStockHoldingSharesPer", "window": 4, "cadence": "weekly_publication"},
+        "BrokerPersistenceScore": {"dataset": "TaiwanStockTradingDailyReport", "window": 20, "cadence": "trading_session"},
+        "BrokerOneDaySpikeRatio20D": {"dataset": "TaiwanStockTradingDailyReport", "window": 20, "cadence": "trading_session"},
+        "PriceReturn20D": {"dataset": "TaiwanStockPrice", "window": 21, "cadence": "trading_session", "role": "supporting_modifier"},
+    },
     "windows": {"institutional": [5, 10, 20], "ownership": [5, 20], "holding": [1, 2, 4, 8], "broker": [5, 10, 20]},
+    "coverage": {
+        "required_datasets": ["TaiwanStockInstitutionalInvestorsBuySellWide", "TaiwanStockShareholding", "TaiwanStockHoldingSharesPer", "TaiwanStockTradingDailyReport", "TaiwanStockPrice"],
+        "five_of_five_means": "every required feature is present, valid, and calculable",
+        "missing_policy": "DATA_INSUFFICIENT; never substitute an older row or numeric zero",
+    },
+    "formulas": {
+        "institutional": {"positive_day_ratio": "ratio * 100 * 0.65", "slope": "clamp(slope / max(abs(InstitutionalNet20D), 1) * 1000, -35, 35)", "spike": "(1 - min(spike_ratio, 1)) * 25", "cap": [0, 100]},
+        "ownership": {"formula": "clamp(50 + ForeignShareRatioChange20D * 2 + LargeHolder400Change4W * 2, 0, 100)"},
+        "broker": {"persistence": "min(persistent_buyer_count, 10) / 10 * 50 + sum(positive_days) / max(persistent_buyer_count * 20, 1) * 30", "concentration": "top_n_positive_broker_flow / gross_positive_broker_flow", "formula": "clamp(persistence + concentration * 20, 0, 100)", "spike_penalty": "broker_score * (1 - min(spike_ratio, 0.8) * 0.35)"},
+        "final": {"formula": "clamp(institutional * 0.35 + ownership * 0.35 + broker * 0.30 + low_profile_modifier, 0, 100)", "low_profile_modifier": "clamp(LowPriceImpactFactor * 10, -10, 10)", "rounding": "round(score, 2)"},
+    },
     "thresholds": {"strong": 80, "accumulation": 65, "watch": 50},
-    "spike_penalty": {"institutional": 25, "broker_cap": 0.8, "broker_weight": 0.35},
-    "low_profile_modifier": [-10, 10],
     "holding_boundaries": {"400": ">400 lots (source bucket lower bound >= 400,000 shares)", "1000": ">1000 lots (source bucket lower bound >= 1,000,000 shares)"},
+    "holding_schema": {"accepted": "all real numeric threshold buckets; total/all are metadata only", "unknown_relevant_bucket": "SCHEMA_MISMATCH", "missing_or_duplicate_bucket": "PARTIAL"},
+    "calendar_version": "tw-exchange-2026-v1",
 }
-FORMULA_HASH = hashlib.sha256(json.dumps(SCORE_MANIFEST, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+SCORE_MANIFEST = SCORE_SPEC
+FORMULA_HASH = hashlib.sha256(json.dumps(SCORE_SPEC, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -113,7 +135,8 @@ def classify_score(score: float | None) -> str:
 
 
 def _required_coverage(coverage: dict[str, bool]) -> bool:
-    return all(coverage.get(k) is True for k in ("InstitutionalDataAvailable", "ForeignHoldingDataAvailable", "HoldingDistributionAvailable", "BrokerDataAvailable", "PriceDataAvailable"))
+    validation = coverage.get("RequiredFeatureValidation") or {}
+    return all(coverage.get(k) is True for k in ("InstitutionalDataAvailable", "ForeignHoldingDataAvailable", "HoldingDistributionAvailable", "BrokerDataAvailable", "PriceDataAvailable")) and all(item.get("valid") is True for item in validation.values()) if validation else all(coverage.get(k) is True for k in ("InstitutionalDataAvailable", "ForeignHoldingDataAvailable", "HoldingDistributionAvailable", "BrokerDataAvailable", "PriceDataAvailable"))
 
 
 def calculate_score(features: dict[str, Any], coverage: dict[str, bool], score_version: str = SCORE_VERSION) -> ScoreResult:
@@ -121,23 +144,24 @@ def calculate_score(features: dict[str, Any], coverage: dict[str, bool], score_v
     if score_version != SCORE_VERSION:
         raise ValueError(f"unsupported score version: {score_version}")
     if not _required_coverage(coverage):
-        return ScoreResult(None, "DATA_INSUFFICIENT", {"InstitutionalPersistence": None, "OwnershipAccumulation": None, "BrokerPersistence": None, "LowProfileModifier": None}, [])
+        reasons = coverage.get("missing_reasons") or ["required feature validation failed"]
+        return ScoreResult(None, "DATA_INSUFFICIENT", {"InstitutionalPersistence": None, "OwnershipAccumulation": None, "BrokerPersistence": None, "LowProfileModifier": None}, [{"label": "資料不足", "value": 0, "detail": reason} for reason in reasons])
 
     institutional_ratio = features.get("InstitutionalPositiveDayRatio20D")
     institutional_slope = features.get("InstitutionalNetSlope20D")
     institutional_spike = features.get("InstitutionalOneDaySpikeRatio20D")
     if any(v is None for v in (institutional_ratio, institutional_slope, institutional_spike)):
-        return ScoreResult(None, "DATA_INSUFFICIENT", {"InstitutionalPersistence": None, "OwnershipAccumulation": None, "BrokerPersistence": None, "LowProfileModifier": None}, [])
+        return ScoreResult(None, "DATA_INSUFFICIENT", {"InstitutionalPersistence": None, "OwnershipAccumulation": None, "BrokerPersistence": None, "LowProfileModifier": None}, [{"label": "資料不足", "value": 0, "detail": "Institutional required feature is missing or invalid"}])
     institutional = _bounded(institutional_ratio * 100 * 0.65 + _bounded(institutional_slope / max(abs(features.get("InstitutionalNet20D") or 1), 1) * 1000, -35, 35) + (1 - min(institutional_spike, 1)) * 25)
     foreign_change = features.get("ForeignShareRatioChange20D")
     large_change = features.get("LargeHolder400Change4W")
     if foreign_change is None or large_change is None:
-        return ScoreResult(None, "DATA_INSUFFICIENT", {"InstitutionalPersistence": institutional, "OwnershipAccumulation": None, "BrokerPersistence": None, "LowProfileModifier": None}, [])
+        return ScoreResult(None, "DATA_INSUFFICIENT", {"InstitutionalPersistence": institutional, "OwnershipAccumulation": None, "BrokerPersistence": None, "LowProfileModifier": None}, [{"label": "資料不足", "value": 0, "detail": "Ownership required feature is missing or invalid"}])
     ownership = _bounded(50 + foreign_change * 2 + large_change * 2)
     broker_score = features.get("BrokerPersistenceScore")
     broker_spike = features.get("BrokerOneDaySpikeRatio20D")
     if broker_score is None or broker_spike is None:
-        return ScoreResult(None, "DATA_INSUFFICIENT", {"InstitutionalPersistence": institutional, "OwnershipAccumulation": ownership, "BrokerPersistence": None, "LowProfileModifier": None}, [])
+        return ScoreResult(None, "DATA_INSUFFICIENT", {"InstitutionalPersistence": institutional, "OwnershipAccumulation": ownership, "BrokerPersistence": None, "LowProfileModifier": None}, [{"label": "資料不足", "value": 0, "detail": "Broker required feature is missing or invalid"}])
     broker = _bounded(broker_score * (1 - min(broker_spike, 0.8) * 0.35))
     base = institutional * WEIGHTS["institutional_persistence"] + ownership * WEIGHTS["ownership_accumulation"] + broker * WEIGHTS["broker_persistence"]
     low_profile = features.get("LowPriceImpactFactor")

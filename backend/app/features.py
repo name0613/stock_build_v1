@@ -127,7 +127,6 @@ def broker_features(rows: list[dict[str, Any]]) -> dict[str, Any]:
     if not rows:
         return {"BrokerPersistenceScore": None, "BrokerOneDaySpikeRatio20D": None}
     dates = sorted({str(row.get("date") or row.get("source_date") or "") for row in rows})
-    daily_totals: dict[str, float] = defaultdict(float)
     broker_daily: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
     for row in rows:
         day = str(row.get("date") or row.get("source_date") or "")
@@ -140,8 +139,7 @@ def broker_features(rows: list[dict[str, Any]]) -> dict[str, Any]:
             continue
         broker = str(row.get("securities_trader_id") or "unknown")
         broker_daily[broker][day] += float(net)
-        daily_totals[day] += float(net)
-    if len(dates) < 20 or any(day not in daily_totals for day in dates[-20:]):
+    if len(dates) < 20 or any(day not in {d for daily in broker_daily.values() for d in daily} for day in dates[-20:]):
         return {"BrokerPersistenceScore": None, "BrokerOneDaySpikeRatio20D": None}
     last_dates = dates[-20:]
     positive_brokers = []
@@ -150,8 +148,9 @@ def broker_features(rows: list[dict[str, Any]]) -> dict[str, Any]:
         total = sum(daily.get(day, 0) for day in last_dates if daily.get(day) is not None)
         if positive_days >= 5 and total > 0:
             positive_brokers.append((broker, positive_days, total))
-    total_abs = sum(abs(daily_totals[day]) for day in last_dates)
-    spike = max((abs(daily_totals[day]) for day in last_dates), default=0) / total_abs if total_abs else 0.0
+    gross_positive_by_day = {day: sum(max(daily.get(day, 0.0), 0.0) for daily in broker_daily.values()) for day in last_dates}
+    total_positive_flow = sum(gross_positive_by_day.values())
+    spike = max(gross_positive_by_day.values(), default=0.0) / total_positive_flow if total_positive_flow else 0.0
     persistent_count = len(positive_brokers)
     true_20_score = (min(persistent_count, 10) / 10) * 50 + (sum(x[1] for x in positive_brokers) / max(persistent_count * 20, 1)) * 30
     ranked = sorted(positive_brokers, key=lambda x: x[2], reverse=True)
@@ -179,6 +178,7 @@ def broker_features(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "TopBrokerPositiveDays20D": ranked[0][1] if ranked else None,
         "BrokerPersistenceScore": score,
         "BrokerOneDaySpikeRatio20D": spike,
+        "BrokerPositiveFlowSpikeRatio20D": spike,
     }
 
 

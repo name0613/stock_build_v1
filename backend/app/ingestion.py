@@ -8,9 +8,9 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .calendar import expected_trading_sessions, missing_sessions
+from .calendar import CALENDAR_VERSION, expected_trading_sessions, missing_sessions
 from .features import build_features
-from .finmind import FinMindClient
+from .finmind import FinMindClient, SchemaMismatch
 from .models import (
     AccumulationFeature, AccumulationScore, BrokerDaily, DataSyncStatus, ForeignShareholdingDaily,
     HoldingDistribution, InstitutionalDaily, JobRun, PriceDaily, ScoreVersion, SourceRevision, Stock,
@@ -180,6 +180,22 @@ def _net_field(row: dict[str, Any], buy_keys: tuple[str, ...], sell_keys: tuple[
 
 
 def ingest_records(db: Session, dataset: str, records: list[dict[str, Any]]) -> int:
+    if dataset == "TaiwanStockHoldingSharesPer":
+        seen_buckets: set[tuple[str, str, str]] = set()
+        for row in records:
+            level = _v(row, "HoldingSharesLevel", "holding_shares_level")
+            if level is not None and str(level).strip().lower() not in {"total", "all"} and _v(row, "holding_shares_threshold") is None:
+                from .scoring import parse_holding_level
+                if parse_holding_level(level) is None:
+                    raise SchemaMismatch("SCHEMA_MISMATCH", "holding source returned an unknown relevant bucket")
+            stock = str(_v(row, "stock_id", "證券代號") or "")
+            source_day = str(_v(row, "date", "source_date") or "")[:10]
+            bucket = str(level or "").strip()
+            key = (stock, source_day, bucket)
+            if bucket and key in seen_buckets:
+                raise SchemaMismatch("SCHEMA_MISMATCH", "holding source returned a duplicate bucket for a stock/date")
+            if bucket:
+                seen_buckets.add(key)
     if dataset == "TaiwanStockInfo":
         latest_by_stock: dict[str, dict[str, Any]] = {}
         for row in records:
@@ -239,13 +255,27 @@ def sync_universe(db: Session, client: FinMindClient) -> int:
     records, meta = client.fetch("TaiwanStockInfo")
     count = ingest_records(db, "TaiwanStockInfo", records)
     active_ids = {normalized["stock_id"] for row in records if (normalized := normalize_stock(row)) is not None}
+    rejection_counts: dict[str, int] = {}
+    seen_ids: set[str] = set()
+    market_counts: dict[str, int] = {}
+    for row in records:
+        raw_id = str(_v(row, "stock_id", "股票代號", "證券代號") or "").strip()
+        normalized = normalize_stock(row)
+        if raw_id in seen_ids and raw_id:
+            rejection_counts["duplicate_stock_id"] = rejection_counts.get("duplicate_stock_id", 0) + 1
+        if raw_id:
+            seen_ids.add(raw_id)
+        if normalized is None:
+            rejection_counts["not_supported_common_stock"] = rejection_counts.get("not_supported_common_stock", 0) + 1
+        else:
+            market_counts[normalized["market"]] = market_counts.get(normalized["market"], 0) + 1
     for existing in db.scalars(select(Stock).where(Stock.is_common_stock.is_(True))).all():
         if existing.stock_id not in active_ids:
             existing.is_common_stock = False
     db.commit()
     info_dates = [_as_date(_v(row, "date", "source_date")) for row in records]
     latest = max((value for value in info_dates if value is not None), default=None)
-    _mark_sync(db, "TaiwanStockInfo", "SUCCESS" if count else "PARTIAL", count, latest or _as_date(meta.get("source_date")), fetched_at=_now())
+    _mark_sync(db, "TaiwanStockInfo", "SUCCESS" if count else "PARTIAL", count, latest or _as_date(meta.get("source_date")), fetched_at=_now(), rows_received=len(records), rows_accepted=count, rows_rejected=max(0, len(records) - count), stored_total=_stored_rows_total(db, "TaiwanStockInfo"), metadata={"universe": {"candidate_raw_count": len(records), "accepted_common_count": count, "rejection_counts": rejection_counts, "duplicate_stock_ids": len(records) - len(seen_ids), "market_counts": market_counts, "pagination_complete": True, "latest_source_date": (latest or _as_date(meta.get("source_date")))}})
     return count
 
 
@@ -323,7 +353,7 @@ def _mark_sync(db: Session, dataset: str, status: str, records: int, latest: dat
     item.last_error_code = error_code
     item.last_error = error[:500] if error else None
     if metadata:
-        item.metadata_json = {**(item.metadata_json or {}), **metadata}
+        item.metadata_json = {**(item.metadata_json or {}), **_jsonable(metadata)}
     db.commit()
 
 
@@ -397,19 +427,33 @@ def calculate_stock_features_and_score(db: Session, stock_id: str, as_of: date |
     prices, price_hashes = _model_rows(db, PriceDaily, stock_id, as_of, cutoff, "TaiwanStockPrice", 21)
     features = build_features(inst, foreign, holdings, brokers, prices)
     inst_ok, inst_missing = _daily_coverage(inst, as_of, 20)
-    foreign_ok, foreign_missing = _daily_coverage(foreign, as_of, 2)
-    price_ok, price_missing = _daily_coverage(prices, as_of, 20)
+    foreign_ok, foreign_missing = _daily_coverage(foreign, as_of, 21)
+    price_ok, price_missing = _daily_coverage(prices, as_of, 21)
     broker_dates = {_as_date(row.get("source_date") or row.get("date")) for row in brokers}
     broker_dates.discard(None)
     expected_broker = expected_trading_sessions(as_of, 20)
     broker_missing = [day.isoformat() for day in expected_broker if day not in broker_dates]
     holding_coverage = features.get("HoldingDistributionCoverage") or {}
+    required_validation = {
+        "InstitutionalNet20D": {"expected_window": 20, "cadence": "trading_session", "present": features.get("InstitutionalNet20D") is not None, "valid": inst_ok and features.get("InstitutionalNet20D") is not None, "reason": "20 trading sessions with complete institutional net" if inst_ok and features.get("InstitutionalNet20D") is not None else "missing institutional session or null net"},
+        "InstitutionalPositiveDayRatio20D": {"expected_window": 20, "cadence": "trading_session", "present": features.get("InstitutionalPositiveDayRatio20D") is not None, "valid": inst_ok and features.get("InstitutionalPositiveDayRatio20D") is not None, "reason": "20 trading sessions" if inst_ok and features.get("InstitutionalPositiveDayRatio20D") is not None else "missing institutional session or null net"},
+        "InstitutionalNetSlope20D": {"expected_window": 20, "cadence": "trading_session", "present": features.get("InstitutionalNetSlope20D") is not None, "valid": inst_ok and features.get("InstitutionalNetSlope20D") is not None, "reason": "20 trading sessions" if inst_ok and features.get("InstitutionalNetSlope20D") is not None else "missing institutional session or null net"},
+        "InstitutionalOneDaySpikeRatio20D": {"expected_window": 20, "cadence": "trading_session", "present": features.get("InstitutionalOneDaySpikeRatio20D") is not None, "valid": inst_ok and features.get("InstitutionalOneDaySpikeRatio20D") is not None, "reason": "20 trading sessions" if inst_ok and features.get("InstitutionalOneDaySpikeRatio20D") is not None else "missing institutional session or null net"},
+        "ForeignShareRatioChange20D": {"expected_window": 21, "cadence": "trading_session", "present": features.get("ForeignShareRatioChange20D") is not None, "valid": foreign_ok and features.get("ForeignShareRatioChange20D") is not None, "reason": "21 trading sessions required for a 20-session change" if foreign_ok and features.get("ForeignShareRatioChange20D") is not None else "missing foreign holding session or ratio"},
+        "LargeHolder400Change4W": {"expected_window": 4, "cadence": "weekly_publication", "present": features.get("LargeHolder400Change4W") is not None, "valid": bool(holding_coverage.get("available")) and features.get("LargeHolder400Change4W") is not None, "reason": "4-week holding observation" if bool(holding_coverage.get("available")) and features.get("LargeHolder400Change4W") is not None else "missing 4-week holding bucket"},
+        "BrokerPersistenceScore": {"expected_window": 20, "cadence": "trading_session", "present": features.get("BrokerPersistenceScore") is not None, "valid": not broker_missing and features.get("BrokerPersistenceScore") is not None, "reason": "20 trading sessions with complete broker rows" if not broker_missing and features.get("BrokerPersistenceScore") is not None else "missing broker session or null net"},
+        "BrokerOneDaySpikeRatio20D": {"expected_window": 20, "cadence": "trading_session", "present": features.get("BrokerOneDaySpikeRatio20D") is not None, "valid": not broker_missing and features.get("BrokerOneDaySpikeRatio20D") is not None, "reason": "20 trading sessions" if not broker_missing and features.get("BrokerOneDaySpikeRatio20D") is not None else "missing broker session or null net"},
+        "PriceReturn20D": {"expected_window": 21, "cadence": "trading_session", "present": features.get("PriceReturn20D") is not None, "valid": price_ok and features.get("PriceReturn20D") is not None, "reason": "21 trading sessions required for a 20-session return" if price_ok and features.get("PriceReturn20D") is not None else "missing price session or close"},
+    }
     coverage = {
-        "InstitutionalDataAvailable": inst_ok and features.get("InstitutionalNet20D") is not None,
-        "ForeignHoldingDataAvailable": foreign_ok,
-        "HoldingDistributionAvailable": bool(holdings) and features.get("LargeHolder400Change4W") is not None,
-        "BrokerDataAvailable": not broker_missing,
-        "PriceDataAvailable": price_ok,
+        "InstitutionalDataAvailable": all(required_validation[key]["valid"] for key in ("InstitutionalNet20D", "InstitutionalPositiveDayRatio20D", "InstitutionalNetSlope20D", "InstitutionalOneDaySpikeRatio20D")),
+        "ForeignHoldingDataAvailable": required_validation["ForeignShareRatioChange20D"]["valid"],
+        "HoldingDistributionAvailable": required_validation["LargeHolder400Change4W"]["valid"],
+        "BrokerDataAvailable": required_validation["BrokerPersistenceScore"]["valid"] and required_validation["BrokerOneDaySpikeRatio20D"]["valid"],
+        "PriceDataAvailable": required_validation["PriceReturn20D"]["valid"],
+        "RequiredFeatureValidation": required_validation,
+        "missing_reasons": [f"{name}: {item['reason']}" for name, item in required_validation.items() if not item["valid"]],
+        "calendar_version": CALENDAR_VERSION,
         "missing_sessions": {"institutional": inst_missing, "foreign_holding": foreign_missing, "broker": broker_missing, "price": price_missing},
         "holding_missing_weeks": holding_coverage.get("missing_weeks", []),
     }
@@ -471,10 +515,11 @@ async def catch_up(db: Session, client: FinMindClient, end_date: date | None = N
                 received = int(metrics.get("rows", 0))
                 latest_dates = [_as_date(item.get("last_source_date")) for item in metrics.get("per_stock", {}).values() if item.get("last_source_date")]
                 latest = max(latest_dates, default=None)
-                failed = int(metrics.get("failed", 0))
-                status = "FAILED" if metrics.get("fatal_code") else ("SUCCESS" if failed == 0 and metrics.get("success", 0) == len(stock_ids) and received > 0 else "PARTIAL")
+                failed = int(metrics.get("failed", 0)) + int(metrics.get("no_data", 0))
+                usable_success = int(metrics.get("usable_success", metrics.get("success", 0)))
+                status = "FAILED" if metrics.get("fatal_code") else ("SUCCESS" if failed == 0 and usable_success == len(stock_ids) and received > 0 else "PARTIAL")
                 code = metrics.get("fatal_code") or ("NO_DATA" if received == 0 else ("STOCK_PARTIAL" if failed else None))
-                coverage = {"requested": len(stock_ids), "success": metrics.get("success", 0), "failed": failed, "rows": received, "fatal_code": metrics.get("fatal_code")}
+                coverage = {"requested": len(stock_ids), "success": usable_success, "no_data": metrics.get("no_data", 0), "failed": failed, "rows": received, "fatal_code": metrics.get("fatal_code")}
             else:
                 records, meta = client.fetch(dataset, start_date=(start - timedelta(days=30)).isoformat(), end_date=end.isoformat())
                 received = len(records)
@@ -493,6 +538,7 @@ async def catch_up(db: Session, client: FinMindClient, end_date: date | None = N
             if coverage.get("fatal_code"):
                 break
         except Exception as exc:
+            db.rollback()
             code = getattr(exc, "code", "UNEXPECTED")
             _job_finish(db, job, "FAILED", error_code=code, error=str(exc), stocks_failed=len(stock_ids))
             _mark_sync(db, dataset, "FAILED", accepted, None, code, str(exc), fetched_at=_now(), expected_latest=_expected_latest_source_date(dataset, end), rows_received=received, rows_accepted=accepted, rows_rejected=max(0, received - accepted), stored_total=_stored_rows_total(db, dataset))
@@ -527,6 +573,7 @@ async def catch_up(db: Session, client: FinMindClient, end_date: date | None = N
         if broker_status not in {"SUCCESS", "REUSED"}:
             result["status"] = "PARTIAL"
     except Exception as exc:
+        db.rollback()
         code = getattr(exc, "code", "UNEXPECTED")
         _job_finish(db, broker_job, "FAILED", error_code=code, error=str(exc), stocks_failed=len(stock_ids))
         result["datasets"]["TaiwanStockTradingDailyReport"] = {"status": "FAILED", "error_code": code}

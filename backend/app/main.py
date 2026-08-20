@@ -15,7 +15,8 @@ from .db import get_db, init_db
 from .ingestion import seed_score_version
 from .models import AccumulationFeature, AccumulationScore, BrokerDaily, DataSyncStatus, ForeignShareholdingDaily, HoldingDistribution, InstitutionalDaily, JobRun, PriceDaily, Stock
 from .schemas import PaginatedStocks, StockListItem
-from .scoring import FORMULA_HASH, SCORE_VERSION
+from .calendar import CALENDAR_VERSION
+from .scoring import FORMULA_HASH, SCORE_MANIFEST, SCORE_VERSION
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -38,6 +39,11 @@ def health(db: Session = Depends(get_db)) -> dict[str, Any]:
         return {"status": "ok", "service": "api", "database": "ok", "score_version": SCORE_VERSION, "formula_hash": FORMULA_HASH, "timezone": settings.timezone}
     except Exception:
         raise HTTPException(status_code=503, detail={"status": "degraded", "database": "unavailable"})
+
+
+@app.get("/api/score-spec")
+def score_spec() -> dict[str, Any]:
+    return {"score_version": SCORE_VERSION, "formula_hash": FORMULA_HASH, "calendar_version": CALENDAR_VERSION, "spec": SCORE_MANIFEST}
 
 
 @app.get("/api/summary")
@@ -101,7 +107,7 @@ def stock_detail(stock_id: str, limit: int = Query(365, ge=1, le=1000), db: Sess
     if stock is None:
         raise HTTPException(status_code=404, detail="stock not found")
     latest = _latest_score_date(db)
-    return {"stock": {"stock_id": stock.stock_id, "stock_name": stock.stock_name, "market": stock.market, "industry": stock.industry}, "score": _score_dict(db, stock_id, latest), "sources": _source_status(db, stock_id), "institutional": _rows(db, InstitutionalDaily, stock_id, min(limit, 365)), "foreign_holding": _rows(db, ForeignShareholdingDaily, stock_id, min(limit, 365)), "holding_distribution": _rows(db, HoldingDistribution, stock_id, min(limit, 200)), "holding_series": _holding_chart_series(db, stock_id, min(limit, 200)), "brokers": _broker_summary(db, stock_id), "prices": _rows(db, PriceDaily, stock_id, min(limit, 365)), "score_history": _score_history(db, stock_id, min(limit, 365))}
+    return {"stock": {"stock_id": stock.stock_id, "stock_name": stock.stock_name, "market": stock.market, "industry": stock.industry}, "score": _score_dict(db, stock_id, latest), "sources": _source_status(db, stock_id), "institutional": _rows(db, InstitutionalDaily, stock_id, min(limit, 365)), "foreign_holding": _rows(db, ForeignShareholdingDaily, stock_id, min(limit, 365)), "holding_distribution": _rows(db, HoldingDistribution, stock_id, min(limit, 200)), "holding_series": _holding_chart_series(db, stock_id, min(limit, 200)), "brokers": _broker_summary(db, stock_id), "prices": _rows(db, PriceDaily, stock_id, min(limit, 365)), "score_history": _score_history(db, stock_id, min(limit, 365)), "calendar_version": CALENDAR_VERSION}
 
 
 @app.get("/api/stocks/{stock_id}/institutional")
@@ -257,7 +263,9 @@ def _source_status(db: Session, stock_id: str) -> dict[str, Any]:
         latest = db.scalar(select(func.max(model.source_date)).where(model.stock_id == stock_id))
         fetched = db.scalar(select(func.max(model.fetched_at)).where(model.stock_id == stock_id))
         sync = db.get(DataSyncStatus, dataset)
-        result[name] = {"provider": "FinMind", "dataset": dataset, "latest_source_date": latest, "fetched_at": fetched, "last_successful_fetch": sync.last_fetch_at if sync else None, "row_count": db.scalar(select(func.count()).select_from(model).where(model.stock_id == stock_id)) or 0, "staleness": sync.staleness_state if sync else "UNKNOWN", "fallback": "not_used"}
+        expected = sync.expected_latest_source_date if sync else None
+        stock_staleness = "NO_DATA" if latest is None else ("STALE" if expected and latest < expected else "FRESH")
+        result[name] = {"provider": "FinMind", "dataset": dataset, "latest_source_date": latest, "fetched_at": fetched, "last_successful_fetch": sync.last_fetch_at if sync else None, "attempt_latest_source_date": sync.attempt_latest_source_date if sync else None, "expected_latest_source_date": expected, "source_age_days": (expected - latest).days if expected and latest else None, "row_count": db.scalar(select(func.count()).select_from(model).where(model.stock_id == stock_id)) or 0, "staleness": stock_staleness, "global_sync_staleness": sync.staleness_state if sync else "UNKNOWN", "fallback": "not_used"}
     result["major_shareholder_5pct"] = {"provider": "TWSE/TPEx/MOPS", "dataset": None, "status": "UNAVAILABLE_NOT_CONFIGURED", "fallback": "none"}
     return result
 
@@ -280,4 +288,4 @@ def _holding_chart_series(db: Session, stock_id: str, limit: int) -> dict[str, l
 
 
 def _sync_dict(row: DataSyncStatus) -> dict[str, Any]:
-    return {"dataset": row.dataset, "status": row.status, "latest_source_date": row.latest_source_date, "last_attempt_at": row.last_attempt_at, "last_fetch_at": row.last_fetch_at, "last_successful_sync": row.last_successful_sync, "records": row.records, "usable_records": row.usable_records, "stored_records": row.stored_records, "staleness": row.staleness_state, "error_code": row.last_error_code}
+    return {"dataset": row.dataset, "status": row.status, "latest_source_date": row.latest_source_date, "attempt_latest_source_date": row.attempt_latest_source_date, "expected_latest_source_date": row.expected_latest_source_date, "source_age_days": row.source_age_days, "last_attempt_at": row.last_attempt_at, "last_fetch_at": row.last_fetch_at, "last_successful_sync": row.last_successful_sync, "records": row.records, "usable_records": row.usable_records, "stored_records": row.stored_records, "rows_received_this_attempt": row.rows_received_this_attempt, "rows_accepted_this_attempt": row.rows_accepted_this_attempt, "rows_rejected_this_attempt": row.rows_rejected_this_attempt, "rows_versioned_this_attempt": row.rows_versioned_this_attempt, "stored_rows_total": row.stored_rows_total, "staleness": row.staleness_state, "metadata": row.metadata_json, "error_code": row.last_error_code}

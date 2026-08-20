@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-08-20T15:17:49.215009+00:00",
+  "generated_at": "2026-08-20T16:10:43.567419+00:00",
   "results": [
     {
       "dataset": "TaiwanStockInstitutionalInvestorsBuySellWide",
@@ -27,8 +27,8 @@
       ],
       "requested_shape": {
         "data_id": "2330",
-        "start_date": "2026-07-21",
-        "end_date": "2026-08-20",
+        "start_date": "2026-07-22",
+        "end_date": "2026-08-21",
         "securities_trader_id": null
       },
       "production_used": true
@@ -58,8 +58,8 @@
       ],
       "requested_shape": {
         "data_id": "2330",
-        "start_date": "2026-07-21",
-        "end_date": "2026-08-20",
+        "start_date": "2026-07-22",
+        "end_date": "2026-08-21",
         "securities_trader_id": null
       },
       "production_used": true
@@ -84,8 +84,8 @@
       ],
       "requested_shape": {
         "data_id": "2330",
-        "start_date": "2026-07-21",
-        "end_date": "2026-08-20",
+        "start_date": "2026-07-22",
+        "end_date": "2026-08-21",
         "securities_trader_id": null
       },
       "production_used": true
@@ -94,23 +94,15 @@
       "dataset": "TaiwanStockTradingDailyReport",
       "accessible": true,
       "method": "GET /api/v4/taiwan_stock_trading_daily_report",
-      "latest_date": "2026-08-20",
-      "sample_row_count": 10,
+      "latest_date": null,
+      "sample_row_count": 0,
       "permission_error": null,
       "status_code": 200,
-      "response_fields": [
-        "buy",
-        "date",
-        "price",
-        "securities_trader",
-        "securities_trader_id",
-        "sell",
-        "stock_id"
-      ],
+      "response_fields": [],
       "requested_shape": {
         "data_id": "2330",
-        "start_date": "2026-07-21",
-        "end_date": "2026-08-20",
+        "start_date": "2026-07-22",
+        "end_date": "2026-08-21",
         "securities_trader_id": null
       },
       "production_used": true
@@ -126,8 +118,8 @@
       "response_fields": [],
       "requested_shape": {
         "data_id": "2330",
-        "start_date": "2026-07-21",
-        "end_date": "2026-08-20",
+        "start_date": "2026-07-22",
+        "end_date": "2026-08-21",
         "securities_trader_id": "075T"
       },
       "production_used": false

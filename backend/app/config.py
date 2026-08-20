@@ -15,10 +15,11 @@ class Settings(BaseSettings):
     database_name: str = "accumulation"
     database_user: str = "accumulation"
     finmind_api_token: str | None = None
+    finmind_api_token_file: Path | None = None
     finmind_base_url: str = "https://api.finmindtrade.com/api/v4"
     raw_root: Path = Path("data/raw")
     timezone: str = "Asia/Taipei"
-    score_version: str = "s-only-v1"
+    score_version: str = "s-only-v2"
     broker_concurrency: int = 4
     broker_rate_per_second: float = 4.0
     broker_max_retries: int = 4
@@ -29,6 +30,11 @@ class Settings(BaseSettings):
     allow_demo_data: bool = False
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    def model_post_init(self, __context: object) -> None:
+        if not self.finmind_api_token and self.finmind_api_token_file:
+            if self.finmind_api_token_file.exists():
+                self.finmind_api_token = self.finmind_api_token_file.read_text(encoding="utf-8").strip()
 
     def resolved_database_url(self) -> str:
         if self.database_url and not self.database_url.startswith("sqlite"):
