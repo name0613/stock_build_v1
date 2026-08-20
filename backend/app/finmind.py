@@ -60,6 +60,10 @@ class CapabilityResult:
     latest_date: str | None
     sample_row_count: int
     permission_error: str | None
+    status_code: int | None = None
+    response_fields: list[str] | None = None
+    requested_shape: dict[str, Any] | None = None
+    production_used: bool = False
 
 
 class RawEvidenceStore:
@@ -199,9 +203,10 @@ class FinMindClient:
             trader_id = "075T" if dataset == "TaiwanStockTradingDailyReportSecIdAgg" else None
             records, meta = self.fetch(dataset, data_id=data_id, start_date=None if dataset == "TaiwanStockInfo" else start_date, end_date=None if dataset == "TaiwanStockInfo" else end_date, securities_trader_id=trader_id)
             method = "GET /api/v4/data" if dataset not in {"TaiwanStockTradingDailyReport", "TaiwanStockTradingDailyReportSecIdAgg"} else f"GET /api/v4/{'taiwan_stock_trading_daily_report' if dataset.endswith('Report') else 'taiwan_stock_trading_daily_report_secid_agg'}"
-            return CapabilityResult(dataset, True, method, meta.get("source_date"), len(records[:10]), None)
+            fields = sorted({key for row in records[:3] for key in row})
+            return CapabilityResult(dataset, True, method, meta.get("source_date"), len(records[:10]), None, 200, fields, {"data_id": data_id, "start_date": start_date, "end_date": end_date, "securities_trader_id": trader_id}, dataset != "TaiwanStockTradingDailyReportSecIdAgg")
         except FinMindError as exc:
-            return CapabilityResult(dataset, False, "GET /api/v4/data", None, 0, exc.code)
+            return CapabilityResult(dataset, False, "GET /api/v4/data", None, 0, exc.code, exc.status_code, [], {"data_id": data_id, "start_date": start_date, "end_date": end_date, "securities_trader_id": trader_id}, False)
 
     def _normalize_record(self, dataset: str, record: Any) -> dict[str, Any]:
         if not isinstance(record, dict):

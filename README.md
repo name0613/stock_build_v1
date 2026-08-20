@@ -5,7 +5,7 @@
 ## 目前範圍
 
 - Universe 動態來自 FinMind `TaiwanStockInfo`；依市場與普通股欄位篩選，不把代碼硬寫死。
-- S-only scoring：三大法人、外資實際持股、集保持股級距、券商分點／SponsorPro capability probe。
+- S-only scoring：三大法人 Wide、外資實際持股、集保持股級距、券商分點；原始法人 dataset 在等價 normalization 完成前明確拒絕，不假稱為 fallback。
 - `TaiwanStockPrice` 只作顯示、成交量 normalization、價格影響 modifier；`TaiwanSecuritiesTraderInfo` 只作券商名稱對照。
 - 分點是券商營業據點彙總，不等同於單一投資人或「主力」。
 - 缺重要資料時為 `DATA_INSUFFICIENT` 且 score 為 `NULL`，不把 missing 轉成 0。
@@ -57,7 +57,7 @@ python scripts/deploy_nas.py
 
 ## Initial backfill / daily jobs
 
-Worker 啟動時做 catch-up，工作日 21:30 做主更新，23:00 做補抓／retry，時區為 `Asia/Taipei`。完整 backfill 應在 NAS 以 quota-aware checkpoint 工作執行；分點走逐股票 async、bounded concurrency、rate limiter、exponential backoff、jitter、retry-after 與 checkpoint/resume，不以無限呼叫換取 coverage。
+Worker 啟動時做完整 catch-up：動態 universe、四個 full-market S/reference source、當日券商 bounded queue、全 universe feature/score，並以 JobRun 記錄每階段狀態；工作日 21:30 做主更新，23:00 做補抓／retry，時區為 `Asia/Taipei`。完整 backfill 應在 NAS 以 quota-aware checkpoint 工作執行；分點走 bounded queue、bounded concurrency、rate limiter、exponential backoff、jitter、Retry-After 與 atomic checkpoint/resume，不以無限呼叫換取 coverage。
 
 ## Data status / troubleshooting
 
@@ -70,4 +70,3 @@ Worker 啟動時做 catch-up，工作日 21:30 做主更新，23:00 做補抓／
 ## Backup / restore
 
 備份 PostgreSQL volume 與 `/data/raw`，並將 manifest 與 score version 一起保存。恢復時先停止 worker，還原 volume，再啟動 postgres、API、worker；恢復後檢查 `/health`、row counts、latest source dates、score version 與 bundle evidence。不要刪除無關 container／volume，也不要執行 broad prune。
-

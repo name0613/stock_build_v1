@@ -155,7 +155,10 @@ def broker_features(rows: list[dict[str, Any]]) -> dict[str, Any]:
     persistent_count = len(positive_brokers)
     true_20_score = (min(persistent_count, 10) / 10) * 50 + (sum(x[1] for x in positive_brokers) / max(persistent_count * 20, 1)) * 30
     ranked = sorted(positive_brokers, key=lambda x: x[2], reverse=True)
-    gross_positive20 = sum(max(daily_totals[day], 0.0) for day in last_dates)
+    # Gross positive flow is defined over broker-level positive totals, not
+    # signed market net; otherwise an equally large seller would force a
+    # zero denominator despite real buying concentration.
+    gross_positive20 = sum(max(sum(daily.get(day, 0.0) for day in last_dates), 0.0) for daily in broker_daily.values())
     concentration = _concentration(ranked, 3, gross_positive20)
     score = min(100.0, true_20_score + (concentration or 0.0) * 20)
     true_window_counts: dict[int, int | None] = {}

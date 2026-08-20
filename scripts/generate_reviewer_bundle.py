@@ -35,7 +35,14 @@ def create_bundle() -> tuple[Path, str]:
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     bundle_dir = ROOT / f"review_bundle_{timestamp}"
     bundle_dir.mkdir()
-    for relative in ["backend/app", "backend/tests", "frontend/src", "migrations", "nginx", "scripts", "README.md", "ARCHITECTURE.md", "DATA_SOURCES.md", "SCORING.md", "DEPLOYMENT.md", "OPERATIONS.md", "SECURITY.md", "REVIEW_INSTRUCTIONS.md", "docker-compose.yml", ".env.example"]:
+    for relative in [
+        "backend/app", "backend/tests", "backend/Dockerfile", "backend/requirements.txt",
+        "frontend/src", "frontend/e2e", "frontend/Dockerfile", "frontend/package.json",
+        "frontend/package-lock.json", "frontend/playwright.config.ts", "frontend/vite.config.ts",
+        "frontend/tsconfig.json", "frontend/index.html", "migrations", "nginx", "scripts",
+        "README.md", "ARCHITECTURE.md", "DATA_SOURCES.md", "SCORING.md", "DEPLOYMENT.md",
+        "OPERATIONS.md", "SECURITY.md", "REVIEW_INSTRUCTIONS.md", "docker-compose.yml", ".env.example",
+    ]:
         copy_tree(relative, bundle_dir / "source")
     for folder in ["test_results", "deployment_evidence", "screenshots", "sanitized_sample_data"]:
         source = ROOT / folder

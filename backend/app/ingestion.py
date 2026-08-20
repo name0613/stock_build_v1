@@ -356,10 +356,13 @@ async def catch_up(db: Session, client: FinMindClient) -> dict[str, Any]:
     start = end - timedelta(days=45)
     result: dict[str, Any] = {"status": "SUCCESS", "datasets": {}, "scores": {}}
     required = ["TaiwanStockInstitutionalInvestorsBuySellWide", "TaiwanStockShareholding", "TaiwanStockHoldingSharesPer", "TaiwanStockPrice"]
+    info_job = _job_start(db, "TaiwanStockInfo", end, end)
     try:
-        sync_universe(db, client)
-        result["datasets"]["TaiwanStockInfo"] = {"status": "SUCCESS"}
+        info_count = sync_universe(db, client)
+        _job_finish(db, info_job, "SUCCESS" if info_count else "PARTIAL", records=info_count)
+        result["datasets"]["TaiwanStockInfo"] = {"status": "SUCCESS" if info_count else "PARTIAL", "records": info_count}
     except Exception as exc:
+        _job_finish(db, info_job, "FAILED", error_code=getattr(exc, "code", "UNEXPECTED"), error=str(exc))
         result["datasets"]["TaiwanStockInfo"] = {"status": "FAILED", "error_code": getattr(exc, "code", "UNEXPECTED")}
         result["status"] = "PARTIAL"
     for dataset in required:
