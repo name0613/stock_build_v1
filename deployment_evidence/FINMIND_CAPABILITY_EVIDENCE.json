@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-08-20T12:14:08.660338+00:00",
+  "generated_at": "2026-08-20T15:17:49.215009+00:00",
   "results": [
     {
       "dataset": "TaiwanStockInstitutionalInvestorsBuySellWide",
@@ -7,15 +7,62 @@
       "method": "GET /api/v4/data",
       "latest_date": "2026-08-20",
       "sample_row_count": 10,
-      "permission_error": null
+      "permission_error": null,
+      "status_code": 200,
+      "response_fields": [
+        "Dealer_Hedging_buy",
+        "Dealer_Hedging_sell",
+        "Dealer_buy",
+        "Dealer_self_buy",
+        "Dealer_self_sell",
+        "Dealer_sell",
+        "Foreign_Dealer_Self_buy",
+        "Foreign_Dealer_Self_sell",
+        "Foreign_Investor_buy",
+        "Foreign_Investor_sell",
+        "Investment_Trust_buy",
+        "Investment_Trust_sell",
+        "date",
+        "stock_id"
+      ],
+      "requested_shape": {
+        "data_id": "2330",
+        "start_date": "2026-07-21",
+        "end_date": "2026-08-20",
+        "securities_trader_id": null
+      },
+      "production_used": true
     },
     {
       "dataset": "TaiwanStockShareholding",
       "accessible": true,
       "method": "GET /api/v4/data",
-      "latest_date": "2026-08-19",
+      "latest_date": "2026-08-20",
       "sample_row_count": 10,
-      "permission_error": null
+      "permission_error": null,
+      "status_code": 200,
+      "response_fields": [
+        "ChineseInvestmentUpperLimitRatio",
+        "ForeignInvestmentRemainRatio",
+        "ForeignInvestmentRemainingShares",
+        "ForeignInvestmentShares",
+        "ForeignInvestmentSharesRatio",
+        "ForeignInvestmentUpperLimitRatio",
+        "InternationalCode",
+        "NumberOfSharesIssued",
+        "RecentlyDeclareDate",
+        "date",
+        "note",
+        "stock_id",
+        "stock_name"
+      ],
+      "requested_shape": {
+        "data_id": "2330",
+        "start_date": "2026-07-21",
+        "end_date": "2026-08-20",
+        "securities_trader_id": null
+      },
+      "production_used": true
     },
     {
       "dataset": "TaiwanStockHoldingSharesPer",
@@ -23,7 +70,25 @@
       "method": "GET /api/v4/data",
       "latest_date": "2026-08-14",
       "sample_row_count": 10,
-      "permission_error": null
+      "permission_error": null,
+      "status_code": 200,
+      "response_fields": [
+        "HoldingSharesLevel",
+        "date",
+        "holding_shares_threshold",
+        "people",
+        "percent",
+        "shares",
+        "stock_id",
+        "unit"
+      ],
+      "requested_shape": {
+        "data_id": "2330",
+        "start_date": "2026-07-21",
+        "end_date": "2026-08-20",
+        "securities_trader_id": null
+      },
+      "production_used": true
     },
     {
       "dataset": "TaiwanStockTradingDailyReport",
@@ -31,7 +96,24 @@
       "method": "GET /api/v4/taiwan_stock_trading_daily_report",
       "latest_date": "2026-08-20",
       "sample_row_count": 10,
-      "permission_error": null
+      "permission_error": null,
+      "status_code": 200,
+      "response_fields": [
+        "buy",
+        "date",
+        "price",
+        "securities_trader",
+        "securities_trader_id",
+        "sell",
+        "stock_id"
+      ],
+      "requested_shape": {
+        "data_id": "2330",
+        "start_date": "2026-07-21",
+        "end_date": "2026-08-20",
+        "securities_trader_id": null
+      },
+      "production_used": true
     },
     {
       "dataset": "TaiwanStockTradingDailyReportSecIdAgg",
@@ -39,7 +121,16 @@
       "method": "GET /api/v4/taiwan_stock_trading_daily_report_secid_agg",
       "latest_date": null,
       "sample_row_count": 0,
-      "permission_error": null
+      "permission_error": null,
+      "status_code": 200,
+      "response_fields": [],
+      "requested_shape": {
+        "data_id": "2330",
+        "start_date": "2026-07-21",
+        "end_date": "2026-08-20",
+        "securities_trader_id": "075T"
+      },
+      "production_used": false
     }
   ]
 }

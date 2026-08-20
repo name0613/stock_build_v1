@@ -1,0 +1,1 @@
+{"dataset":"TaiwanStockTradingDailyReport","provider":"FinMind","fields":["stock_id","date","securities_trader_id","securities_trader","buy","sell","price"],"rows":[{"stock_id":"2330","date":"2026-08-20","securities_trader_id":"0010","securities_trader":"sample branch","buy":100000,"sell":80000,"price":100.0}]}

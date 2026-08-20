@@ -1,0 +1,1 @@
+{"dataset":"TaiwanStockInfo","provider":"FinMind","fields":["stock_id","stock_name","type","industry_category","security_type","date"],"rows":[{"stock_id":"2330","stock_name":"sample","type":"twse","industry_category":"semiconductor","security_type":"stock","date":"2026-08-20"}]}

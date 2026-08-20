@@ -1,0 +1,1 @@
+{"command":"E2E_BASE_URL=http://192.168.31.138:18080 npx playwright test","status":"PASS","tests":3,"passed":3,"failed":0,"target":"NAS endpoint","secrets_included":false}
