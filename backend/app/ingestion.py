@@ -566,6 +566,8 @@ async def catch_up(db: Session, client: FinMindClient, end_date: date | None = N
         checkpoint_complete = broker_metrics.get("skipped_checkpoint", 0) >= len(stock_ids) * 20
         no_work_reused = checkpoint_complete and broker_metrics.get("success", 0) == 0 and broker_metrics.get("rows", 0) == 0 and broker_metrics.get("failed", 0) == 0
         broker_status = "REUSED" if no_work_reused else ("SUCCESS" if broker_metrics.get("failed", 0) == 0 and (broker_metrics.get("rows", 0) > 0 or not stock_ids) else "PARTIAL")
+        if no_work_reused:
+            broker_metrics["reuse_reason"] = "all requested stock-session keys already completed; no new physical requests"
         broker_error = None if broker_status in {"SUCCESS", "REUSED"} else (broker_metrics.get("fatal_code") or "BROKER_PARTIAL")
         _mark_sync(db, "TaiwanStockTradingDailyReport", broker_status, stored, end if stored else None, broker_error, fetched_at=_now(), expected_latest=_expected_latest_source_date("TaiwanStockTradingDailyReport", end), rows_received=broker_metrics.get("rows", 0), rows_accepted=stored, rows_rejected=max(0, broker_metrics.get("rows", 0) - stored), rows_versioned=stored, stored_total=_stored_rows_total(db, "TaiwanStockTradingDailyReport"), metadata={"query_mode": "per_stock_per_session", **broker_metrics})
         _job_finish(db, broker_job, broker_status, records=stored, retry_count=broker_metrics.get("retries", 0), stocks_completed=broker_metrics.get("stocks_completed", 0), stocks_failed=broker_metrics.get("stocks_failed", 0), error_code=broker_error, checkpoint_state=broker_metrics)
