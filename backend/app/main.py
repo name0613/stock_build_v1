@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import json
 from datetime import date
 from typing import Any
 
@@ -136,7 +137,7 @@ def data_status(db: Session = Depends(get_db)) -> dict[str, Any]:
 
 
 def _latest_score_date(db: Session) -> date | None:
-    return db.scalar(select(func.max(AccumulationScore.source_date)).where(AccumulationScore.score_version == SCORE_VERSION))
+    return db.scalar(select(func.max(AccumulationScore.source_date)).where(AccumulationScore.score_version == SCORE_VERSION, AccumulationScore.knowledge_cutoff.is_not(None)))
 
 
 def _canonical_statuses(db: Session) -> tuple[int, dict[str, str]]:
@@ -144,7 +145,7 @@ def _canonical_statuses(db: Session) -> tuple[int, dict[str, str]]:
     latest = _latest_score_date(db)
     if latest is None:
         return len(stock_ids), {stock_id: "DATA_INSUFFICIENT" for stock_id in stock_ids}
-    scores = db.scalars(select(AccumulationScore).where(AccumulationScore.source_date == latest, AccumulationScore.score_version == SCORE_VERSION).order_by(AccumulationScore.calculated_at.desc())).all()
+    scores = db.scalars(select(AccumulationScore).where(AccumulationScore.source_date == latest, AccumulationScore.score_version == SCORE_VERSION, AccumulationScore.knowledge_cutoff.is_not(None)).order_by(AccumulationScore.calculated_at.desc())).all()
     statuses = {stock_id: "DATA_INSUFFICIENT" for stock_id in stock_ids}
     seen: set[str] = set()
     for score in scores:
@@ -158,7 +159,7 @@ def _score_subqueries(latest: date | None, components: bool = False):
     def field(name: str):
         if latest is None:
             return select(func.cast(None, getattr(AccumulationScore, name).type)).scalar_subquery()
-        return select(getattr(AccumulationScore, name)).where(AccumulationScore.stock_id == Stock.stock_id, AccumulationScore.source_date == latest, AccumulationScore.score_version == SCORE_VERSION).order_by(AccumulationScore.calculated_at.desc()).limit(1).correlate(Stock).scalar_subquery()
+        return select(getattr(AccumulationScore, name)).where(AccumulationScore.stock_id == Stock.stock_id, AccumulationScore.source_date == latest, AccumulationScore.score_version == SCORE_VERSION, AccumulationScore.knowledge_cutoff.is_not(None)).order_by(AccumulationScore.calculated_at.desc()).limit(1).correlate(Stock).scalar_subquery()
     return field("score"), field("status"), field("score_version"), field("components" if components else "coverage")
 
 
@@ -175,13 +176,25 @@ def _feature_subqueries(latest: date | None):
 
 def _stock_item_from_row(row: Any) -> StockListItem:
     stock, score, status, score_version, coverage, price, price_change, features, latest_data = row
-    return StockListItem(stock_id=stock.stock_id, stock_name=stock.stock_name, market=stock.market, industry=stock.industry, price=price, price_change=price_change, score=score, status=status or "DATA_INSUFFICIENT", score_version=score_version, features=features or {}, coverage=coverage or {}, latest_data=latest_data)
+    return StockListItem(stock_id=stock.stock_id, stock_name=stock.stock_name, market=stock.market, industry=stock.industry, price=price, price_change=price_change, score=score, status=status or "DATA_INSUFFICIENT", score_version=score_version, features=_json_dict(features), coverage=_json_dict(coverage), latest_data=latest_data)
+
+
+def _json_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
 
 
 def _score_dict(db: Session, stock_id: str, latest: date | None) -> dict[str, Any]:
     if latest is None:
         return {"score": None, "status": "DATA_INSUFFICIENT", "score_version": SCORE_VERSION, "formula_hash": FORMULA_HASH}
-    score = db.scalar(select(AccumulationScore).where(AccumulationScore.stock_id == stock_id, AccumulationScore.source_date == latest, AccumulationScore.score_version == SCORE_VERSION).order_by(AccumulationScore.calculated_at.desc()).limit(1))
+    score = db.scalar(select(AccumulationScore).where(AccumulationScore.stock_id == stock_id, AccumulationScore.source_date == latest, AccumulationScore.score_version == SCORE_VERSION, AccumulationScore.knowledge_cutoff.is_not(None)).order_by(AccumulationScore.calculated_at.desc()).limit(1))
     if not score:
         return {"score": None, "status": "DATA_INSUFFICIENT", "score_version": SCORE_VERSION, "formula_hash": FORMULA_HASH}
     return {"score": score.score, "status": score.status, "score_version": score.score_version, "formula_hash": score.formula_hash or FORMULA_HASH, "components": score.components, "explanation": score.explanation, "coverage": score.coverage, "source_date": score.source_date, "calculated_at": score.calculated_at, "knowledge_cutoff": score.knowledge_cutoff, "input_snapshot_hash": score.input_snapshot_hash, "input_source_hashes": score.input_source_hashes}
@@ -233,8 +246,8 @@ def _accumulate_nullable(item: dict[str, Any], field: str, value: float | None) 
 
 
 def _score_history(db: Session, stock_id: str, limit: int) -> list[dict[str, Any]]:
-    rows = db.scalars(select(AccumulationScore).where(AccumulationScore.stock_id == stock_id, AccumulationScore.score_version == SCORE_VERSION).order_by(AccumulationScore.source_date.desc()).limit(limit)).all()
-    return [{"source_date": row.source_date, "score": row.score, "status": row.status, "components": row.components, "formula_hash": row.formula_hash, "input_snapshot_hash": row.input_snapshot_hash} for row in reversed(rows)]
+    rows = db.scalars(select(AccumulationScore).where(AccumulationScore.stock_id == stock_id, AccumulationScore.score_version == SCORE_VERSION, AccumulationScore.knowledge_cutoff.is_not(None)).order_by(AccumulationScore.source_date.desc(), AccumulationScore.calculated_at.desc()).limit(limit)).all()
+    return [{"source_date": row.source_date, "score": row.score, "status": row.status, "components": row.components, "formula_hash": row.formula_hash, "input_snapshot_hash": row.input_snapshot_hash, "calculated_at": row.calculated_at, "knowledge_cutoff": row.knowledge_cutoff} for row in reversed(rows)]
 
 
 def _source_status(db: Session, stock_id: str) -> dict[str, Any]:
