@@ -11,10 +11,15 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def junit_counts(path: Path) -> dict[str, int | str]:
     suite = ET.parse(path).getroot()
-    tests = int(suite.attrib.get("tests", 0))
-    failures = int(suite.attrib.get("failures", 0))
-    errors = int(suite.attrib.get("errors", 0))
-    skipped = int(suite.attrib.get("skipped", 0))
+    suites = [suite] if suite.tag == "testsuite" else list(suite.findall("testsuite"))
+
+    def total(name: str) -> int:
+        return sum(int(item.attrib.get(name, 0)) for item in suites)
+
+    tests = total("tests")
+    failures = total("failures")
+    errors = total("errors")
+    skipped = total("skipped")
     return {"status": "PASS" if failures + errors == 0 else "FAIL", "tests": tests, "passed": tests - failures - errors - skipped, "failed": failures + errors, "skipped": skipped, "secrets_included": False}
 
 
