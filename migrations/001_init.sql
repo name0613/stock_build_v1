@@ -8,7 +8,7 @@ CREATE INDEX IF NOT EXISTS ix_stocks_market ON stocks(market);
 CREATE TABLE IF NOT EXISTS institutional_daily (
   id BIGSERIAL PRIMARY KEY, stock_id VARCHAR(16) NOT NULL REFERENCES stocks(stock_id), source_date DATE NOT NULL,
   foreign_net DOUBLE PRECISION, foreign_dealer_self_net DOUBLE PRECISION, investment_trust_net DOUBLE PRECISION,
-  dealer_net DOUBLE PRECISION, dealer_self_net DOUBLE PRECISION, dealer_hedging_net DOUBLE PRECISION,
+  dealer_net DOUBLE PRECISION, dealer_aggregate_net DOUBLE PRECISION, dealer_self_net DOUBLE PRECISION, dealer_hedging_net DOUBLE PRECISION,
   institutional_net DOUBLE PRECISION, source_dataset VARCHAR(100) NOT NULL, fetched_at TIMESTAMPTZ NOT NULL,
   UNIQUE(stock_id, source_date)
 );
@@ -66,4 +66,3 @@ CREATE TABLE IF NOT EXISTS major_shareholder_disclosures (
   declare_date DATE NOT NULL, holding_shares DOUBLE PRECISION, holding_ratio DOUBLE PRECISION, change DOUBLE PRECISION,
   source VARCHAR(255) NOT NULL, UNIQUE(stock_id, holder, declare_date)
 );
-

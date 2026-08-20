@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import json
-from datetime import datetime, timezone
 from pathlib import Path
 from datetime import date
 from typing import Any
@@ -19,6 +18,7 @@ from .models import AccumulationFeature, AccumulationScore, BrokerDaily, DataSyn
 from .schemas import PaginatedStocks, StockListItem
 from .calendar import CALENDAR_VERSION
 from .scoring import FORMULA_HASH, SCORE_MANIFEST, SCORE_VERSION
+from .worker_health import evaluate_health
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -53,12 +53,12 @@ def worker_health() -> dict[str, Any]:
     path = Path(settings.worker_heartbeat_file)
     try:
         heartbeat = json.loads(path.read_text(encoding="utf-8"))
-        last = datetime.fromisoformat(str(heartbeat["last_heartbeat_at"]))
-        age_seconds = max(0, int((datetime.now(timezone.utc) - last).total_seconds()))
     except (OSError, KeyError, TypeError, ValueError):
         return {"status": "degraded", "ready": False, "reason": "heartbeat_missing"}
-    overdue = age_seconds > 90
-    return {"status": "degraded" if overdue or not heartbeat.get("ready") else "ok", "ready": bool(heartbeat.get("ready")) and not overdue, "age_seconds": age_seconds, "overdue": overdue, "heartbeat": heartbeat}
+    result = evaluate_health(heartbeat)
+    result["age_seconds"] = result.get("heartbeat_age_seconds")
+    result["overdue"] = result.get("stale")
+    return result
 
 
 @app.get("/api/summary")
@@ -280,7 +280,7 @@ def _source_status(db: Session, stock_id: str) -> dict[str, Any]:
         sync = db.get(DataSyncStatus, dataset)
         expected = sync.expected_latest_source_date if sync else None
         stock_staleness = "NO_DATA" if latest is None else ("STALE" if expected and latest < expected else "FRESH")
-        result[name] = {"provider": "FinMind", "dataset": dataset, "latest_source_date": latest, "fetched_at": fetched, "last_successful_fetch": sync.last_fetch_at if sync else None, "attempt_latest_source_date": sync.attempt_latest_source_date if sync else None, "expected_latest_source_date": expected, "source_age_days": (expected - latest).days if expected and latest else None, "row_count": db.scalar(select(func.count()).select_from(model).where(model.stock_id == stock_id)) or 0, "staleness": stock_staleness, "global_sync_staleness": sync.staleness_state if sync else "UNKNOWN", "fallback": "not_used"}
+        result[name] = {"provider": "FinMind", "dataset": dataset, "latest_source_date": latest, "fetched_at": fetched, "last_successful_fetch": sync.last_http_success_at if sync else None, "last_fully_successful_sync": sync.last_fully_successful_sync if sync else None, "last_usable_data_at": sync.last_usable_data_at if sync else None, "attempt_latest_source_date": sync.attempt_latest_source_date if sync else None, "expected_latest_source_date": expected, "source_age_days": (expected - latest).days if expected and latest else None, "row_count": db.scalar(select(func.count()).select_from(model).where(model.stock_id == stock_id)) or 0, "staleness": stock_staleness, "global_sync_staleness": sync.staleness_state if sync else "UNKNOWN", "fallback": "not_used"}
     result["major_shareholder_5pct"] = {"provider": "TWSE/TPEx/MOPS", "dataset": None, "status": "UNAVAILABLE_NOT_CONFIGURED", "fallback": "none"}
     return result
 
@@ -303,4 +303,4 @@ def _holding_chart_series(db: Session, stock_id: str, limit: int) -> dict[str, l
 
 
 def _sync_dict(row: DataSyncStatus) -> dict[str, Any]:
-    return {"dataset": row.dataset, "status": row.status, "latest_source_date": row.latest_source_date, "attempt_latest_source_date": row.attempt_latest_source_date, "expected_latest_source_date": row.expected_latest_source_date, "source_age_days": row.source_age_days, "last_attempt_at": row.last_attempt_at, "last_fetch_at": row.last_fetch_at, "last_successful_sync": row.last_successful_sync, "records": row.records, "usable_records": row.usable_records, "stored_records": row.stored_records, "rows_received_this_attempt": row.rows_received_this_attempt, "rows_accepted_this_attempt": row.rows_accepted_this_attempt, "rows_rejected_this_attempt": row.rows_rejected_this_attempt, "rows_versioned_this_attempt": row.rows_versioned_this_attempt, "stored_rows_total": row.stored_rows_total, "staleness": row.staleness_state, "metadata": row.metadata_json, "error_code": row.last_error_code}
+    return {"dataset": row.dataset, "status": row.status, "latest_source_date": row.latest_source_date, "attempt_latest_source_date": row.attempt_latest_source_date, "expected_latest_source_date": row.expected_latest_source_date, "source_age_days": row.source_age_days, "last_attempt_at": row.last_attempt_at, "last_fetch_at": row.last_fetch_at, "last_http_success_at": row.last_http_success_at, "last_fully_successful_sync": row.last_fully_successful_sync, "last_usable_data_at": row.last_usable_data_at, "last_successful_sync": row.last_successful_sync, "records": row.records, "usable_records": row.usable_records, "stored_records": row.stored_records, "rows_received_this_attempt": row.rows_received_this_attempt, "rows_accepted_this_attempt": row.rows_accepted_this_attempt, "rows_rejected_this_attempt": row.rows_rejected_this_attempt, "rows_versioned_this_attempt": row.rows_versioned_this_attempt, "stored_rows_total": row.stored_rows_total, "staleness": row.staleness_state, "metadata": row.metadata_json, "error_code": row.last_error_code}
