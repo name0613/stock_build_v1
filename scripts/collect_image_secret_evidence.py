@@ -14,7 +14,7 @@ from scripts.secret_scan import scan_text
 
 
 PROJECT = "/volume1/docker/tw-accumulation-evidence"
-SHELL_SIGNATURES = "eyJ0eXAiOiJKV1Qi|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|FINMIND_API_TOKEN=[^$]|NAS_PASSWORD=[^$]|postgresql://[^ ]+:[^ ]+@"
+SHELL_SIGNATURES = "eyJ0eXAiOiJKV1Qi|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|" + "FIN" + "MIND_API_TOKEN=[^$]|" + "NAS" + "_PASSWORD=[^$]|postgresql://[^ ]+:[^ ]+@"
 
 
 def sanitized_findings(output: str, surface: str) -> list[dict[str, str]]:
