@@ -285,7 +285,9 @@ class FinMindClient:
         semaphore = asyncio.Semaphore(self.settings.broker_concurrency)
         checkpoint_lock = asyncio.Lock()
         fatal_event = asyncio.Event()
-        metrics = {"requested": len(stock_ids), "skipped_checkpoint": len(completed), "success": 0, "failed": 0, "retryable_failed": 0, "permanent_failed": len(permanent_failed), "rows": 0, "retries": 0, "fatal_code": None}
+        metrics = {"requested": len(stock_ids), "skipped_checkpoint": len(completed), "success": 0, "stocks_completed": 0, "stocks_failed": 0, "retryable_failed": 0, "permanent_failed": len(permanent_failed), "rows": 0, "retries": 0, "fatal_code": None}
+        completed_stocks: set[str] = set()
+        failed_stocks: set[str] = set()
 
         days = [(start_date if start_date == end_date else start_date)]
         if dataset == "TaiwanStockTradingDailyReport":
@@ -305,13 +307,16 @@ class FinMindClient:
                 return
             async with semaphore:
                 try:
-                    records, _ = await asyncio.to_thread(self.fetch, dataset, stock_id, requested_date, requested_date)
+                    records, meta = await asyncio.to_thread(self.fetch, dataset, stock_id, requested_date, requested_date)
                     async with checkpoint_lock:
                         if checkpoint_key not in completed:
                             checkpoint["completed"].append(checkpoint_key)
                         completed.add(checkpoint_key)
                         metrics["success"] += 1
+                        completed_stocks.add(stock_id)
+                        metrics["stocks_completed"] = len(completed_stocks)
                         metrics["rows"] += len(records)
+                        metrics["retries"] += max(0, int(meta.get("attempt", 1)) - 1)
                         if record_sink:
                             record_sink(records)
                         await persist()
@@ -334,6 +339,8 @@ class FinMindClient:
                             metrics["fatal_code"] = exc.code
                             fatal_event.set()
                         metrics["failed"] += 1
+                        failed_stocks.add(stock_id)
+                        metrics["stocks_failed"] = len(failed_stocks)
                         await persist()
 
         async def worker() -> None:
