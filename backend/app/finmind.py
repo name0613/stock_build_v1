@@ -24,6 +24,9 @@ from .config import Settings, get_settings
 from .scoring import is_holding_metadata_level, parse_holding_level
 
 logger = logging.getLogger(__name__)
+CHECKPOINT_SCHEMA_VERSION = "2026-08-21-v2"
+NORMALIZATION_POLICY_VERSION = "s-only-normalization-v3"
+REQUEST_POLICY_VERSION = "finmind-request-policy-v3"
 # httpx's INFO request logger includes the complete URL.  FinMind carries the
 # token as a query parameter for compatibility, so request URLs must never be
 # emitted by application or worker logs.
@@ -136,7 +139,11 @@ class FinMindClient:
         self.timeout = httpx.Timeout(30.0, connect=10.0)
         self._request_lock = threading.Lock()
         self._next_request_at = 0.0
-        self._request_interval = 1 / max(self.settings.source_rate_per_second, self.settings.broker_rate_per_second, 0.1)
+        # One explicit provider-wide physical-attempt budget covers source,
+        # broker, first attempts and retries.  It must not use the faster of
+        # two path-specific settings and accidentally exceed the stricter
+        # provider-safe limit.
+        self._request_interval = 1 / max(self.settings.provider_rate_per_second, 0.1)
 
     def _wait_for_http_attempt(self) -> None:
         """Apply one process-wide budget to every physical HTTP attempt."""
@@ -278,24 +285,43 @@ class FinMindClient:
         """Bounded async Sponsor-compatible path with checkpoint/resume semantics."""
         checkpoint_dir = self.settings.raw_root / "checkpoints"
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
-        checkpoint_file = checkpoint_dir / f"{dataset}-{start_date}-{end_date}.json"
-        checkpoint = json.loads(checkpoint_file.read_text(encoding="utf-8")) if checkpoint_file.exists() else {"completed": [], "failed": [], "permanent_failed": []}
-        completed = set(checkpoint.get("completed", []))
-        permanent_failed = set(checkpoint.get("permanent_failed", []))
-        semaphore = asyncio.Semaphore(self.settings.broker_concurrency)
-        checkpoint_lock = asyncio.Lock()
-        fatal_event = asyncio.Event()
-        metrics = {"requested": len(stock_ids), "skipped_checkpoint": len(completed), "success": 0, "failed": 0, "stocks_completed": 0, "stocks_failed": 0, "retryable_failed": 0, "permanent_failed": len(permanent_failed), "rows": 0, "retries": 0, "fatal_code": None}
-        completed_stocks: set[str] = set()
-        failed_stocks: set[str] = set()
-
         days = [(start_date if start_date == end_date else start_date)]
         if dataset == "TaiwanStockTradingDailyReport":
             from .calendar import expected_trading_sessions
             days = [day.isoformat() for day in expected_trading_sessions(date.fromisoformat(end_date), 20) if date.fromisoformat(start_date) <= day <= date.fromisoformat(end_date)]
 
+        requested_keys = {f"{stock_id}:{requested_date}" for stock_id in stock_ids for requested_date in days}
+        universe_hash = hashlib.sha256(json.dumps(sorted(set(stock_ids)), separators=(",", ":")).encode()).hexdigest()
+        session_hash = hashlib.sha256(json.dumps(days, separators=(",", ":")).encode()).hexdigest()
+        manifest = {"dataset": dataset, "start_date": start_date, "end_date": end_date, "universe_hash": universe_hash, "session_set_hash": session_hash, "schema_version": CHECKPOINT_SCHEMA_VERSION, "normalization_version": NORMALIZATION_POLICY_VERSION, "request_policy_version": REQUEST_POLICY_VERSION, "query_mode": "per_stock_per_session"}
+        manifest_hash = hashlib.sha256(json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        checkpoint_file = checkpoint_dir / f"{dataset}-{start_date}-{end_date}-{manifest_hash[:16]}.json"
+        checkpoint: dict[str, Any] = {"manifest": manifest, "manifest_hash": manifest_hash, "completed": [], "failed": [], "permanent_failed": []}
+        checkpoint_state = "new"
+        if checkpoint_file.exists():
+            try:
+                candidate = json.loads(checkpoint_file.read_text(encoding="utf-8"))
+                if candidate.get("manifest") == manifest and candidate.get("manifest_hash") == manifest_hash:
+                    checkpoint = candidate
+                    checkpoint_state = "resumed"
+                else:
+                    checkpoint_state = "incompatible_ignored"
+            except (OSError, ValueError, TypeError):
+                checkpoint_state = "corrupt_ignored"
+        completed = set(checkpoint.get("completed", [])) & requested_keys
+        permanent_failed = set(checkpoint.get("permanent_failed", [])) & requested_keys
+        semaphore = asyncio.Semaphore(self.settings.broker_concurrency)
+        checkpoint_lock = asyncio.Lock()
+        sink_lock = asyncio.Lock()
+        fatal_event = asyncio.Event()
+        metrics = {"requested": len(stock_ids), "requested_keys": len(requested_keys), "skipped_checkpoint": len(completed), "checkpoint_state": checkpoint_state, "checkpoint_manifest_hash": manifest_hash, "success": 0, "failed": 0, "stocks_completed": 0, "stocks_failed": 0, "retryable_failed": 0, "permanent_failed": len(permanent_failed), "rows": 0, "retries": 0, "fatal_code": None}
+        completed_stocks: set[str] = set()
+        failed_stocks: set[str] = set()
+
         async def persist() -> None:
             temporary = checkpoint_file.with_suffix(".tmp")
+            checkpoint["manifest"] = manifest
+            checkpoint["manifest_hash"] = manifest_hash
             temporary.write_text(json.dumps(checkpoint, ensure_ascii=False, indent=2), encoding="utf-8")
             temporary.replace(checkpoint_file)
 
@@ -318,7 +344,10 @@ class FinMindClient:
                         metrics["rows"] += len(records)
                         metrics["retries"] += max(0, int(meta.get("attempt", 1)) - 1)
                         if record_sink:
-                            record_sink(records)
+                            # The provider calls remain concurrent, but the
+                            # shared SQLAlchemy sink must be serialized.
+                            async with sink_lock:
+                                record_sink(records)
                         await persist()
                 except FinMindError as exc:
                     async with checkpoint_lock:
@@ -364,37 +393,96 @@ class FinMindClient:
         return metrics
 
     async def fetch_stocks_dataset(self, stock_ids: list[str], dataset: str, start_date: str, end_date: str, *, record_sink: Callable[[list[dict[str, Any]]], int] | None = None) -> dict[str, Any]:
-        """Fetch a date-range dataset per stock with bounded queue and batches."""
+        """Fetch per-stock history with a durable, workload-bound checkpoint."""
+        stock_ids = sorted(set(stock_ids))
+        manifest = {"dataset": dataset, "start_date": start_date, "end_date": end_date, "universe_hash": hashlib.sha256(json.dumps(stock_ids, separators=(",", ":")).encode()).hexdigest(), "query_mode": "per_stock_date_range", "schema_version": CHECKPOINT_SCHEMA_VERSION, "normalization_version": NORMALIZATION_POLICY_VERSION, "request_policy_version": REQUEST_POLICY_VERSION}
+        manifest_hash = hashlib.sha256(json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        checkpoint_dir = self.settings.raw_root / "checkpoints"
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        checkpoint_file = checkpoint_dir / f"source-{dataset}-{manifest_hash[:16]}.json"
+        checkpoint: dict[str, Any] = {"manifest": manifest, "manifest_hash": manifest_hash, "completed": [], "no_data_but_valid": [], "failed": [], "permanent_failed": [], "global_fatal": None, "entries": {}}
+        checkpoint_state = "new"
+        if checkpoint_file.exists():
+            try:
+                candidate = json.loads(checkpoint_file.read_text(encoding="utf-8"))
+                if candidate.get("manifest") == manifest and candidate.get("manifest_hash") == manifest_hash:
+                    checkpoint = candidate
+                    checkpoint_state = "resumed"
+                else:
+                    checkpoint_state = "incompatible_ignored"
+            except (OSError, ValueError, TypeError):
+                checkpoint_state = "corrupt_ignored"
+        done = set(checkpoint.get("completed", [])) | set(checkpoint.get("no_data_but_valid", [])) | set(checkpoint.get("permanent_failed", []))
+        pending = [stock_id for stock_id in stock_ids if stock_id not in done]
+        # A quota/auth/schema failure is fatal for this invocation, not a
+        # permanent block on the next scheduled cycle.  Keep the prior code
+        # as history while allowing pending keys to retry after recovery.
+        previous_global_fatal = checkpoint.get("global_fatal")
+        checkpoint["last_global_fatal"] = previous_global_fatal
+        checkpoint["global_fatal"] = None
         semaphore = asyncio.Semaphore(self.settings.source_concurrency)
         queue: asyncio.Queue[str | None] = asyncio.Queue(maxsize=max(1, self.settings.source_concurrency * 2))
         fatal_event = asyncio.Event()
-        metrics: dict[str, Any] = {"requested": len(stock_ids), "success": 0, "usable_success": 0, "no_data": 0, "failed": 0, "rows": 0, "fatal_code": None, "per_stock": {}}
-        batch: list[dict[str, Any]] = []
+        checkpoint_lock = asyncio.Lock()
+        sink_lock = asyncio.Lock()
+        metrics: dict[str, Any] = {"requested": len(stock_ids), "skipped_checkpoint": len(stock_ids) - len(pending), "checkpoint_state": checkpoint_state, "checkpoint_manifest_hash": manifest_hash, "success": 0, "usable_success": 0, "no_data": 0, "failed": 0, "rows": 0, "fatal_code": None, "previous_global_fatal": previous_global_fatal, "per_stock": {key: value for key, value in checkpoint.get("entries", {}).items() if key in done}}
+
+        async def persist() -> None:
+            checkpoint["manifest"] = manifest
+            checkpoint["manifest_hash"] = manifest_hash
+            temporary = checkpoint_file.with_suffix(".tmp")
+            temporary.write_text(json.dumps(checkpoint, ensure_ascii=False, indent=2), encoding="utf-8")
+            temporary.replace(checkpoint_file)
+
+        async def mark_failure(stock_id: str, code: str, classification: str, *, global_fatal: bool = False) -> None:
+            now = datetime.now(timezone.utc).isoformat()
+            async with checkpoint_lock:
+                previous = checkpoint.get("entries", {}).get(stock_id, {})
+                entry = {"rows": 0, "error_code": code, "classification": classification, "retry_count": int(previous.get("retry_count", 0)) + 1, "last_attempt_at": now, "next_eligible_retry_at": now if classification == "retryable_failed" else None}
+                checkpoint.setdefault("entries", {})[stock_id] = entry
+                checkpoint["failed"] = [item for item in checkpoint.get("failed", []) if item.get("stock_id") != stock_id] + [{"stock_id": stock_id, **entry}]
+                if classification == "permanent_failed":
+                    checkpoint["permanent_failed"] = sorted(set(checkpoint.get("permanent_failed", [])) | {stock_id})
+                if global_fatal:
+                    checkpoint["global_fatal"] = code
+                    metrics["fatal_code"] = code
+                    fatal_event.set()
+                metrics["failed"] += 1
+                metrics["per_stock"][stock_id] = entry
+                await persist()
 
         async def one(stock_id: str) -> None:
             if fatal_event.is_set():
                 return
             async with semaphore:
                 try:
-                    records, _ = await asyncio.to_thread(self.fetch, dataset, stock_id, start_date, end_date)
-                    dates = sorted({str(row.get("date") or row.get("source_date") or "")[:10] for row in records if row.get("date") or row.get("source_date")})
+                    records, meta = await asyncio.to_thread(self.fetch, dataset, stock_id, start_date, end_date)
+                except FinMindError as exc:
+                    global_fatal = exc.code in {"AUTHENTICATION_FAILED", "ACCESS_DENIED", "QUOTA_EXHAUSTED", "SCHEMA_MISMATCH"}
+                    await mark_failure(stock_id, exc.code, "global_fatal" if global_fatal else ("permanent_failed" if exc.code == "NON_RETRYABLE_4XX" else "retryable_failed"), global_fatal=global_fatal)
+                    return
+                try:
+                    # Sink per stock so an isolated provider bucket/schema row
+                    # cannot abort an otherwise valid full-market batch.
+                    if record_sink:
+                        async with sink_lock:
+                            record_sink(records)
+                except SchemaMismatch:
+                    await mark_failure(stock_id, "STOCK_SCHEMA_MISMATCH", "permanent_failed")
+                    return
+                dates = sorted({str(row.get("date") or row.get("source_date") or "")[:10] for row in records if row.get("date") or row.get("source_date")})
+                entry = {"rows": len(records), "first_source_date": dates[0] if dates else None, "last_source_date": dates[-1] if dates else None, "classification": "usable" if records else "no_data_but_valid", "attempt": int(meta.get("attempt", 1))}
+                async with checkpoint_lock:
                     metrics["success"] += 1
                     metrics["rows"] += len(records)
-                    if records:
-                        metrics["usable_success"] += 1
-                    else:
-                        metrics["no_data"] += 1
-                    metrics["per_stock"][stock_id] = {"rows": len(records), "first_source_date": dates[0] if dates else None, "last_source_date": dates[-1] if dates else None, "classification": "usable" if records else "no_data"}
-                    batch.extend(records)
-                    if record_sink and len(batch) >= self.settings.source_batch_size:
-                        record_sink(batch.copy())
-                        batch.clear()
-                except FinMindError as exc:
-                    metrics["failed"] += 1
-                    metrics["per_stock"][stock_id] = {"rows": 0, "error_code": exc.code}
-                    if exc.code in {"AUTHENTICATION_FAILED", "ACCESS_DENIED", "QUOTA_EXHAUSTED", "SCHEMA_MISMATCH"}:
-                        metrics["fatal_code"] = exc.code
-                        fatal_event.set()
+                    metrics["usable_success"] += bool(records)
+                    metrics["no_data"] += not records
+                    metrics["per_stock"][stock_id] = entry
+                    checkpoint.setdefault("entries", {})[stock_id] = entry
+                    bucket = "completed" if records else "no_data_but_valid"
+                    checkpoint[bucket] = sorted(set(checkpoint.get(bucket, [])) | {stock_id})
+                    checkpoint["failed"] = [item for item in checkpoint.get("failed", []) if item.get("stock_id") != stock_id]
+                    await persist()
 
         async def worker() -> None:
             while True:
@@ -407,14 +495,12 @@ class FinMindClient:
                     queue.task_done()
 
         workers = [asyncio.create_task(worker()) for _ in range(max(1, self.settings.source_concurrency))]
-        for stock_id in stock_ids:
+        for stock_id in pending:
             await queue.put(stock_id)
         await queue.join()
         for _ in workers:
             await queue.put(None)
         await asyncio.gather(*workers)
-        if record_sink and batch:
-            record_sink(batch)
         return metrics
 
 

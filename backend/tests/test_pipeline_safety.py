@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.calendar import CalendarUnknownError, expected_trading_sessions
 from app.finmind import FinMindClient, FinMindError
-from app.ingestion import _model_rows, _natural_key, calculate_stock_features_and_score, ingest_records
+from app.ingestion import _model_rows, _natural_key, calculate_stock_features_and_score, ingest_records, normalize_institutional
 from app.models import AccumulationScore, Base, BrokerDaily, InstitutionalDaily, SourceRevision, Stock
 from app.scoring import parse_holding_level
 
@@ -28,6 +28,14 @@ def test_raw_institutional_fallback_is_explicitly_rejected() -> None:
 def test_calendar_version_fails_closed_outside_known_coverage() -> None:
     with pytest.raises(CalendarUnknownError):
         expected_trading_sessions(date(2027, 1, 4), 1)
+
+
+def test_institutional_dealer_aggregate_is_not_double_counted() -> None:
+    row = normalize_institutional({"stock_id": "2330", "date": "2026-08-20", "Foreign_Investor_Net": 10, "Foreign_Dealer_Self_Net": 2, "Investment_Trust_Net": 3, "Dealer_Net": 5, "Dealer_self_Net": 3, "Dealer_Hedging_Net": 2})
+    assert row is not None
+    assert row["dealer_aggregate_net"] == 5
+    assert row["dealer_net"] == 5
+    assert row["institutional_net"] == 20
 
 
 def test_holding_schema_unknown_duplicate_and_null_are_explicit() -> None:
@@ -181,3 +189,34 @@ def test_scheduled_catch_up_runs_all_phases_for_dynamic_multi_stock_universe() -
     assert db.scalar(select(Stock.stock_id).where(Stock.is_common_stock.is_(True))) == "2330"
     jobs = db.scalars(select(JobRun)).all()
     assert {job.dataset for job in jobs} >= {"TaiwanStockInfo", "score", "TaiwanStockTradingDailyReport"}
+
+
+def test_quota_at_first_required_source_defers_all_later_provider_requests() -> None:
+    import asyncio
+    from app.ingestion import catch_up
+
+    db, _ = _db()
+    end = date(2026, 8, 20)
+
+    class QuotaClient:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def fetch(self, dataset: str, *_args, **_kwargs):
+            self.calls.append(dataset)
+            assert dataset == "TaiwanStockInfo"
+            return ([{"stock_id": "2330", "stock_name": "Test", "type": "twse", "security_type": "股票", "date": end}], {"source_date": end.isoformat()})
+
+        async def fetch_stocks_dataset(self, stock_ids, dataset, *_args, **_kwargs):
+            self.calls.append(dataset)
+            assert dataset == "TaiwanStockInstitutionalInvestorsBuySellWide"
+            return {"requested": len(stock_ids), "success": 0, "usable_success": 0, "no_data": 0, "failed": 1, "rows": 0, "fatal_code": "QUOTA_EXHAUSTED", "per_stock": {}}
+
+        async def fetch_broker_stocks(self, *_args, **_kwargs):
+            raise AssertionError("broker requests must be deferred after global quota failure")
+
+    client = QuotaClient()
+    result = asyncio.run(catch_up(db, client, end_date=end))
+    assert result["fatal_code"] == "QUOTA_EXHAUSTED"
+    assert result["provider_work_deferred"]["error_code"] == "QUOTA_EXHAUSTED"
+    assert client.calls == ["TaiwanStockInfo", "TaiwanStockInstitutionalInvestorsBuySellWide"]

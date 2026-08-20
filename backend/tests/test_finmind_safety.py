@@ -167,3 +167,59 @@ def test_global_broker_fatal_stops_queue_promptly(monkeypatch: pytest.MonkeyPatc
     result = asyncio.run(client.fetch_broker_stocks([str(index) for index in range(100)], "2026-08-20", "2026-08-20"))
     assert result["fatal_code"] == "ACCESS_DENIED"
     assert len(calls) == 1
+
+
+def test_source_checkpoint_resumes_finite_quota_without_repeating_completed_stock(tmp_path: Path) -> None:
+    import asyncio
+
+    settings = Settings(raw_root=tmp_path, broker_max_retries=0, source_concurrency=1)
+    client = FinMindClient(settings)
+    first_calls: list[str] = []
+
+    def first_fetch(_dataset: str, stock_id: str, *_args, **_kwargs):
+        first_calls.append(stock_id)
+        if stock_id == "2330":
+            raise FinMindError("QUOTA_EXHAUSTED", "quota exhausted")
+        return ([{"stock_id": stock_id, "date": "2026-08-20"}], {"attempt": 1})
+
+    client.fetch = first_fetch  # type: ignore[method-assign]
+    first = asyncio.run(client.fetch_stocks_dataset(["2317", "2330"], "TaiwanStockPrice", "2026-08-01", "2026-08-20"))
+    assert first["fatal_code"] == "QUOTA_EXHAUSTED"
+    assert first_calls == ["2317", "2330"]
+
+    second_calls: list[str] = []
+    resumed_client = FinMindClient(settings)
+
+    def resumed_fetch(_dataset: str, stock_id: str, *_args, **_kwargs):
+        second_calls.append(stock_id)
+        return ([{"stock_id": stock_id, "date": "2026-08-20"}], {"attempt": 1})
+
+    resumed_client.fetch = resumed_fetch  # type: ignore[method-assign]
+    second = asyncio.run(resumed_client.fetch_stocks_dataset(["2317", "2330"], "TaiwanStockPrice", "2026-08-01", "2026-08-20"))
+    assert second["skipped_checkpoint"] == 1
+    assert second_calls == ["2330"]
+    assert second["fatal_code"] is None
+
+
+def test_broker_checkpoint_manifest_rejects_changed_universe_and_corruption(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+    import json
+
+    client = FinMindClient(Settings(raw_root=tmp_path, broker_max_retries=0, broker_concurrency=1))
+    monkeypatch.setattr(client, "fetch", lambda *_args, **_kwargs: ([{"stock_id": "2330", "date": "2026-08-20", "securities_trader_id": "A"}], {"attempt": 1}))
+    first = asyncio.run(client.fetch_broker_stocks(["2330"], "2026-08-20", "2026-08-20"))
+    assert first["success"] == 1
+    checkpoint_file = next((tmp_path / "checkpoints").glob("TaiwanStockTradingDailyReport-*.json"))
+    checkpoint_file.write_text("{not-json", encoding="utf-8")
+    corrupt = asyncio.run(client.fetch_broker_stocks(["2330"], "2026-08-20", "2026-08-20"))
+    assert corrupt["checkpoint_state"] == "corrupt_ignored"
+    changed = asyncio.run(client.fetch_broker_stocks(["2330", "2317"], "2026-08-20", "2026-08-20"))
+    assert changed["checkpoint_state"] == "new"
+    assert changed["skipped_checkpoint"] == 0
+    valid_manifests = []
+    for path in (tmp_path / "checkpoints").glob("TaiwanStockTradingDailyReport-*.json"):
+        try:
+            valid_manifests.append(json.loads(path.read_text(encoding="utf-8"))["manifest"])
+        except json.JSONDecodeError:
+            continue
+    assert any(manifest["universe_hash"] != first["checkpoint_manifest_hash"] for manifest in valid_manifests)

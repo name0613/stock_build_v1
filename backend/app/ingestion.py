@@ -89,6 +89,27 @@ def normalize_stock(row: dict[str, Any], fetched_at: datetime | None = None) -> 
     return {"stock_id": stock_id, "stock_name": name or stock_id, "market": market, "industry": industry or None, "security_type": security_type or "股票", "is_common_stock": True, "source_date": _as_date(_v(row, "date", "source_date")), "fetched_at": fetched_at or _now()}
 
 
+def classify_stock_rejection(row: dict[str, Any]) -> str:
+    """Classify one rejected TaiwanStockInfo row without overlapping buckets."""
+    stock_id = str(_v(row, "stock_id", "股票代號", "證券代號") or "").strip()
+    name = str(_v(row, "stock_name", "股票名稱", "證券名稱") or "").strip()
+    raw_market = str(_v(row, "market", "市場別", "type") or "").strip().lower()
+    market = {"twse": "上市", "tpex": "上櫃", "esb": "興櫃", "rotc": "興櫃"}.get(raw_market, str(_v(row, "market", "市場別") or "").strip())
+    security_type = str(_v(row, "security_type", "證券類別") or "").strip()
+    industry = str(_v(row, "industry_category", "industry", "產業類別") or "").strip()
+    if not stock_id.isdigit() or len(stock_id) != 4:
+        return "invalid_identifier"
+    if market not in {"上市", "上櫃", "興櫃", "TWSE", "TPEx", "ESB"}:
+        return "unsupported_market"
+    if security_type not in {"股票", "普通股", "Common Stock", ""}:
+        return "unsupported_security_type"
+    lowered = f"{name} {security_type} {industry}".lower()
+    for term, category in (("etf", "etf"), ("etn", "etn"), ("權證", "warrant"), ("牛熊", "warrant"), ("特別股", "preferred"), ("認購權利", "subscription_right"), ("可轉債", "convertible")):
+        if term.lower() in lowered:
+            return category
+    return "other_non_common_instrument"
+
+
 def normalize_institutional(row: dict[str, Any], fetched_at: datetime | None = None) -> dict[str, Any] | None:
     source_date = _as_date(_v(row, "date", "source_date"))
     stock_id = str(_v(row, "stock_id", "證券代號") or "").strip()
@@ -100,9 +121,17 @@ def normalize_institutional(row: dict[str, Any], fetched_at: datetime | None = N
     dealer = _net_field(row, ("Dealer_Buy", "Dealer_buy", "dealer_buy"), ("Dealer_Sell", "Dealer_sell", "dealer_sell"), ("Dealer_Net", "dealer_net", "DealerNet"))
     dealer_self = _net_field(row, ("Dealer_self_Buy", "Dealer_self_buy", "Dealer_Self_Buy", "dealer_self_buy"), ("Dealer_self_Sell", "Dealer_self_sell", "Dealer_Self_Sell", "dealer_self_sell"), ("Dealer_self_Net", "Dealer_Self_Net", "dealer_self_net"))
     hedge = _net_field(row, ("Dealer_Hedging_Buy", "Dealer_Hedging_buy", "dealer_hedging_buy"), ("Dealer_Hedging_Sell", "Dealer_Hedging_sell", "dealer_hedging_sell"), ("Dealer_Hedging_Net", "dealer_hedging_net"))
-    components = [foreign, foreign_self, trust, dealer, dealer_self, hedge]
+    # FinMind's Dealer field is an aggregate when its self/hedging
+    # components are present.  Use exactly one representation so dealer
+    # activity cannot be counted twice; fall back to the aggregate only when
+    # the provider did not return the components.
+    if dealer_self is not None and hedge is not None:
+        dealer_component = dealer_self + hedge
+    else:
+        dealer_component = dealer
+    components = [foreign, foreign_self, trust, dealer_component]
     institutional = sum(float(v) for v in components) if all(v is not None for v in components) else None
-    return {"stock_id": stock_id, "source_date": source_date, "foreign_net": _num(foreign), "foreign_dealer_self_net": _num(foreign_self), "investment_trust_net": _num(trust), "dealer_net": _num(dealer), "dealer_self_net": _num(dealer_self), "dealer_hedging_net": _num(hedge), "institutional_net": institutional, "source_dataset": "TaiwanStockInstitutionalInvestorsBuySellWide", "fetched_at": fetched_at or _now()}
+    return {"stock_id": stock_id, "source_date": source_date, "foreign_net": _num(foreign), "foreign_dealer_self_net": _num(foreign_self), "investment_trust_net": _num(trust), "dealer_net": _num(dealer_component), "dealer_aggregate_net": _num(dealer), "dealer_self_net": _num(dealer_self), "dealer_hedging_net": _num(hedge), "institutional_net": institutional, "source_dataset": "TaiwanStockInstitutionalInvestorsBuySellWide", "fetched_at": fetched_at or _now()}
 
 
 def normalize_foreign(row: dict[str, Any], fetched_at: datetime | None = None) -> dict[str, Any] | None:
@@ -260,15 +289,18 @@ def sync_universe(db: Session, client: FinMindClient) -> int:
     rejection_counts: dict[str, int] = {}
     seen_ids: set[str] = set()
     market_counts: dict[str, int] = {}
+    duplicate_count = 0
     for row in records:
         raw_id = str(_v(row, "stock_id", "股票代號", "證券代號") or "").strip()
         normalized = normalize_stock(row)
         if raw_id in seen_ids and raw_id:
-            rejection_counts["duplicate_stock_id"] = rejection_counts.get("duplicate_stock_id", 0) + 1
+            duplicate_count += 1
+            continue
         if raw_id:
             seen_ids.add(raw_id)
         if normalized is None:
-            rejection_counts["not_supported_common_stock"] = rejection_counts.get("not_supported_common_stock", 0) + 1
+            category = classify_stock_rejection(row)
+            rejection_counts[category] = rejection_counts.get(category, 0) + 1
         else:
             market_counts[normalized["market"]] = market_counts.get(normalized["market"], 0) + 1
     for existing in db.scalars(select(Stock).where(Stock.is_common_stock.is_(True))).all():
@@ -277,7 +309,9 @@ def sync_universe(db: Session, client: FinMindClient) -> int:
     db.commit()
     info_dates = [_as_date(_v(row, "date", "source_date")) for row in records]
     latest = max((value for value in info_dates if value is not None), default=None)
-    _mark_sync(db, "TaiwanStockInfo", "SUCCESS" if count else "PARTIAL", count, latest or _as_date(meta.get("source_date")), fetched_at=_now(), rows_received=len(records), rows_accepted=count, rows_rejected=max(0, len(records) - count), stored_total=_stored_rows_total(db, "TaiwanStockInfo"), metadata={"universe": {"candidate_raw_count": len(records), "accepted_common_count": count, "rejection_counts": rejection_counts, "duplicate_stock_ids": len(records) - len(seen_ids), "market_counts": market_counts, "pagination_complete": True, "latest_source_date": (latest or _as_date(meta.get("source_date")))}})
+    rejected_unique = sum(rejection_counts.values())
+    reconciliation = {"raw_count": len(records), "duplicate_count": duplicate_count, "rejected_unique_count": rejected_unique, "accepted_common_count": count, "reconciles": len(records) == duplicate_count + rejected_unique + count}
+    _mark_sync(db, "TaiwanStockInfo", "SUCCESS" if count else "PARTIAL", count, latest or _as_date(meta.get("source_date")), fetched_at=_now(), rows_received=len(records), rows_accepted=count, rows_rejected=duplicate_count + rejected_unique, stored_total=_stored_rows_total(db, "TaiwanStockInfo"), metadata={"universe": {"candidate_raw_count": len(records), "accepted_common_count": count, "rejection_counts": rejection_counts, "duplicate_stock_ids": duplicate_count, "market_counts": market_counts, "pagination_complete": True, "latest_source_date": (latest or _as_date(meta.get("source_date"))), "reconciliation": reconciliation}})
     return count
 
 
@@ -340,8 +374,13 @@ def _mark_sync(db: Session, dataset: str, status: str, records: int, latest: dat
     item.rows_versioned_this_attempt = rows_versioned if rows_versioned is not None else records
     item.stored_rows_total = item.stored_records
     if status in {"SUCCESS", "PARTIAL", "NO_DATA"}:
-        item.last_successful_sync = fetched_at or _now()
+        item.last_http_success_at = fetched_at or _now()
         item.last_fetch_at = fetched_at or _now()
+    if status == "SUCCESS":
+        item.last_successful_sync = fetched_at or _now()
+        item.last_fully_successful_sync = fetched_at or _now()
+    if status in {"SUCCESS", "PARTIAL"} and records > 0:
+        item.last_usable_data_at = fetched_at or _now()
     if status == "FAILED":
         item.staleness_state = "ERROR"
     elif status == "NO_DATA":
@@ -480,9 +519,7 @@ def seed_score_version(db: Session) -> None:
     elif current.manifest_hash not in {None, FORMULA_HASH}:
         raise RuntimeError("score version manifest mismatch; deploy a new score version before starting")
     elif current.manifest_hash is None:
-        current.config = SCORE_MANIFEST
-        current.manifest_hash = FORMULA_HASH
-        db.commit()
+        raise RuntimeError("score version manifest provenance is missing; create an explicit new score version")
 
 
 async def catch_up(db: Session, client: FinMindClient, end_date: date | None = None) -> dict[str, Any]:
@@ -538,6 +575,7 @@ async def catch_up(db: Session, client: FinMindClient, end_date: date | None = N
             if status != "SUCCESS":
                 result["status"] = "PARTIAL"
             if coverage.get("fatal_code"):
+                result["fatal_code"] = coverage["fatal_code"]
                 break
         except Exception as exc:
             db.rollback()
@@ -546,6 +584,13 @@ async def catch_up(db: Session, client: FinMindClient, end_date: date | None = N
             _mark_sync(db, dataset, "FAILED", accepted, None, code, str(exc), fetched_at=_now(), expected_latest=_expected_latest_source_date(dataset, end), rows_received=received, rows_accepted=accepted, rows_rejected=max(0, received - accepted), stored_total=_stored_rows_total(db, dataset))
             result["datasets"][dataset] = {"status": "FAILED", "error_code": code}
             result["status"] = "PARTIAL"
+            if code in {"AUTHENTICATION_FAILED", "ACCESS_DENIED", "QUOTA_EXHAUSTED", "SCHEMA_MISMATCH"}:
+                result["fatal_code"] = code
+                break
+    fatal_code = result.get("fatal_code")
+    if fatal_code:
+        result["provider_work_deferred"] = {"reason": "global provider failure; later source and broker requests were not launched", "error_code": fatal_code}
+        return result
     broker_start = expected_trading_sessions(end, 20)[0]
     broker_job = _job_start(db, "TaiwanStockTradingDailyReport", broker_start, end, stocks_attempted=len(stock_ids))
     broker_metrics: dict[str, Any] = {}

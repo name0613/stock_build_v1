@@ -46,6 +46,18 @@ def _completed_source_end_date() -> object:
     return expected_trading_sessions(candidate, 1)[-1]
 
 
+def _next_scheduled_run_at(now: datetime | None = None) -> str:
+    """Return the next scheduled run for the worker health contract."""
+    current = now or datetime.now(timezone.utc)
+    local = current.astimezone(ZoneInfo(settings.timezone))
+    candidate = local.replace(hour=21, minute=30, second=0, microsecond=0)
+    if candidate <= local:
+        candidate += timedelta(days=1)
+    while candidate.weekday() >= 5:
+        candidate += timedelta(days=1)
+    return candidate.astimezone(timezone.utc).isoformat()
+
+
 def _reconcile_interrupted_jobs(db: object) -> None:
     for job in db.query(JobRun).filter(JobRun.status == "RUNNING").all():
         job.status = "PARTIAL"
@@ -66,21 +78,23 @@ def _heartbeat_pulse() -> None:
 
 def run_catch_up() -> None:
     started = datetime.now(timezone.utc).isoformat()
-    _heartbeat(status="running", ready=True, last_job_started_at=started, last_error_code=None)
+    _heartbeat(status="running", ready=True, scheduler_ready=False, last_scheduler_heartbeat_at=started, last_job_started_at=started, last_error_code=None)
     db = SessionLocal()
     try:
         result = asyncio.run(catch_up(db, FinMindClient(settings), end_date=_completed_source_end_date()))
         logger.info("catch-up completed status=%s datasets=%s", result.get("status"), result.get("datasets"))
-        _heartbeat(status="idle", ready=True, last_job_finished_at=datetime.now(timezone.utc).isoformat(), last_job_status=result.get("status"), last_error_code=None)
+        finished = datetime.now(timezone.utc).isoformat()
+        _heartbeat(status="idle", ready=True, scheduler_ready=True, last_scheduler_heartbeat_at=finished, last_job_finished_at=finished, last_job_status=result.get("status"), last_error_code=result.get("fatal_code"))
     except Exception as exc:
         logger.error("catch-up failed code=%s", getattr(exc, "code", "UNEXPECTED"))
-        _heartbeat(status="idle", ready=True, last_job_finished_at=datetime.now(timezone.utc).isoformat(), last_job_status="FAILED", last_error_code=getattr(exc, "code", "UNEXPECTED"))
+        finished = datetime.now(timezone.utc).isoformat()
+        _heartbeat(status="idle", ready=True, scheduler_ready=True, last_scheduler_heartbeat_at=finished, last_job_finished_at=finished, last_job_status="FAILED", last_error_code=getattr(exc, "code", "UNEXPECTED"))
     finally:
         db.close()
 
 
 def main() -> None:
-    _heartbeat(status="starting", ready=False, scheduler_started_at=None)
+    _heartbeat(status="starting", ready=False, scheduler_ready=False, scheduler_started_at=None)
     start_health_server(Path(settings.worker_heartbeat_file))
     Thread(target=_heartbeat_pulse, daemon=True, name="worker-heartbeat-pulse").start()
     init_db()
@@ -93,7 +107,8 @@ def main() -> None:
     scheduler.add_job(run_catch_up, CronTrigger(day_of_week="mon-fri", hour=21, minute=30, timezone=settings.timezone), id="main-sync", replace_existing=True)
     scheduler.add_job(run_catch_up, CronTrigger(day_of_week="mon-fri", hour=23, minute=0, timezone=settings.timezone), id="retry-sync", replace_existing=True)
     logger.info("worker scheduled timezone=%s", settings.timezone)
-    _heartbeat(status="idle", ready=True, scheduler_started_at=datetime.now(timezone.utc).isoformat())
+    scheduler_started = datetime.now(timezone.utc).isoformat()
+    _heartbeat(status="idle", ready=True, scheduler_ready=True, scheduler_started_at=scheduler_started, last_scheduler_heartbeat_at=scheduler_started, next_expected_run_at=_next_scheduled_run_at())
     try:
         scheduler.start()
     except (KeyboardInterrupt, SystemExit):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread
@@ -14,6 +15,36 @@ def _read_heartbeat(path: Path) -> dict[str, Any]:
         return {"status": "missing", "ready": False}
 
 
+def evaluate_health(payload: dict[str, Any], now: datetime | None = None) -> dict[str, Any]:
+    """Evaluate process and scheduler progress separately for Docker/API health."""
+    now = now or datetime.now(timezone.utc)
+    try:
+        heartbeat_at = datetime.fromisoformat(str(payload["last_heartbeat_at"]))
+        scheduler_at = datetime.fromisoformat(str(payload["last_scheduler_heartbeat_at"]))
+        heartbeat_age = max(0, int((now - heartbeat_at).total_seconds()))
+        scheduler_age = max(0, int((now - scheduler_at).total_seconds()))
+    except (KeyError, TypeError, ValueError):
+        return {"status": "degraded", "ready": False, "reason": "heartbeat_or_scheduler_progress_missing"}
+    process_ready = bool(payload.get("ready")) and payload.get("status") in {"running", "idle"}
+    scheduler_ready = bool(payload.get("scheduler_ready"))
+    stale = heartbeat_age > 90 or scheduler_age > 180
+    scheduler_contract_missing = False
+    if scheduler_ready:
+        try:
+            datetime.fromisoformat(str(payload["scheduler_started_at"]))
+            datetime.fromisoformat(str(payload["next_expected_run_at"]))
+        except (KeyError, TypeError, ValueError):
+            scheduler_contract_missing = True
+    prolonged = False
+    if payload.get("status") == "running" and payload.get("last_job_started_at"):
+        try:
+            prolonged = (now - datetime.fromisoformat(str(payload["last_job_started_at"]))).total_seconds() > 6 * 60 * 60
+        except ValueError:
+            prolonged = True
+    ready = process_ready and scheduler_ready and not stale and not prolonged and not scheduler_contract_missing
+    return {"status": "ok" if ready else "degraded", "ready": ready, "heartbeat_age_seconds": heartbeat_age, "scheduler_age_seconds": scheduler_age, "stale": stale, "prolonged_job": prolonged, "scheduler_ready": scheduler_ready, "scheduler_contract_missing": scheduler_contract_missing, "heartbeat": payload}
+
+
 def start_health_server(path: Path, port: int = 8001) -> ThreadingHTTPServer:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802
@@ -22,9 +53,9 @@ def start_health_server(path: Path, port: int = 8001) -> ThreadingHTTPServer:
                 self.end_headers()
                 return
             payload = _read_heartbeat(path)
-            ready = bool(payload.get("ready")) and payload.get("status") in {"running", "idle"}
-            body = json.dumps({"status": "ok" if ready else "degraded", "service": "worker", "heartbeat": payload}, ensure_ascii=False).encode()
-            self.send_response(200 if ready else 503)
+            result = evaluate_health(payload)
+            body = json.dumps({"service": "worker", **result}, ensure_ascii=False).encode()
+            self.send_response(200 if result["ready"] else 503)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
