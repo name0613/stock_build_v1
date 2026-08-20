@@ -23,6 +23,11 @@ from .config import Settings, get_settings
 from .scoring import parse_holding_level
 
 logger = logging.getLogger(__name__)
+# httpx's INFO request logger includes the complete URL.  FinMind carries the
+# token as a query parameter for compatibility, so request URLs must never be
+# emitted by application or worker logs.
+for _http_logger_name in ("httpx", "httpcore"):
+    logging.getLogger(_http_logger_name).setLevel(logging.WARNING)
 
 ALLOWED_S_DATASETS = {
     "TaiwanStockInstitutionalInvestorsBuySellWide",
