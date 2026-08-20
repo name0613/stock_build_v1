@@ -111,7 +111,9 @@ class AccumulationFeature(Base):
     coverage: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     latest_source_date: Mapped[str | None] = mapped_column(String(32), nullable=True)
     calculated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    __table_args__ = (UniqueConstraint("stock_id", "source_date", name="uq_features_stock_date"),)
+    knowledge_cutoff: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    input_snapshot_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    __table_args__ = (UniqueConstraint("stock_id", "source_date", "knowledge_cutoff", name="uq_features_stock_date_cutoff"),)
 
 
 class AccumulationScore(Base):
@@ -126,7 +128,11 @@ class AccumulationScore(Base):
     explanation: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
     coverage: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     calculated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    __table_args__ = (UniqueConstraint("stock_id", "source_date", "score_version", name="uq_score_stock_date_version"),)
+    knowledge_cutoff: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    input_snapshot_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    input_source_hashes: Mapped[list[str]] = mapped_column(JSON, default=list)
+    formula_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    __table_args__ = (UniqueConstraint("stock_id", "source_date", "score_version", "knowledge_cutoff", name="uq_score_stock_date_version_cutoff"),)
 
 
 class DataSyncStatus(Base):
@@ -138,6 +144,11 @@ class DataSyncStatus(Base):
     last_error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     records: Mapped[int] = mapped_column(Integer, default=0)
+    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_fetch_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    usable_records: Mapped[int] = mapped_column(Integer, default=0)
+    stored_records: Mapped[int] = mapped_column(Integer, default=0)
+    staleness_state: Mapped[str | None] = mapped_column(String(32), nullable=True)
     metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 
@@ -146,13 +157,20 @@ class JobRun(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     dataset: Mapped[str] = mapped_column(String(100), index=True)
     requested_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    requested_start_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    requested_end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     status: Mapped[str] = mapped_column(String(32), index=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     records: Mapped[int] = mapped_column(Integer, default=0)
     duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    stocks_attempted: Mapped[int] = mapped_column(Integer, default=0)
+    stocks_completed: Mapped[int] = mapped_column(Integer, default=0)
+    stocks_failed: Mapped[int] = mapped_column(Integer, default=0)
+    checkpoint_state: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 
 class ScoreVersion(Base):
@@ -160,7 +178,23 @@ class ScoreVersion(Base):
     version: Mapped[str] = mapped_column(String(64), primary_key=True)
     config: Mapped[dict[str, Any]] = mapped_column(JSON)
     explanation: Mapped[str] = mapped_column(Text)
+    manifest_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class SourceRevision(Base):
+    """Append-only normalized source snapshot used for point-in-time calculations."""
+
+    __tablename__ = "source_revisions"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    dataset: Mapped[str] = mapped_column(String(100), index=True)
+    stock_id: Mapped[str | None] = mapped_column(ForeignKey("stocks.stock_id"), nullable=True, index=True)
+    source_date: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
+    natural_key: Mapped[str] = mapped_column(String(255), index=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+    content_hash: Mapped[str] = mapped_column(String(64), index=True)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    __table_args__ = (UniqueConstraint("dataset", "natural_key", "content_hash", name="uq_source_revision_content"),)
 
 
 class MajorShareholderDisclosure(Base):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from datetime import date, timedelta
 from typing import Any
 
 from .scoring import one_day_spike_ratio, parse_holding_level, positive_day_ratio, rolling_sum, slope
@@ -49,7 +50,13 @@ def _difference(values: list[float | None], window: int) -> float | None:
 
 
 def holding_distribution_features(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    """Aggregate by parsed lower-bound threshold; does not rely on API row order."""
+    """Aggregate mutually-exclusive FinMind buckets by lower-bound threshold.
+
+    FinMind's level buckets cannot isolate the exact boundary row, so the
+    public metric is ``>400``/``>1000 lots`` (all buckets whose lower bound is
+    at least the threshold).  Weekly deltas require a real observation near
+    the expected publication date; an arbitrary older row is never substituted.
+    """
     by_date: dict[str, dict[int, dict[str, Any]]] = defaultdict(dict)
     for row in rows:
         threshold = row.get("holding_shares_threshold") or parse_holding_level(row.get("holding_shares_level"))
@@ -75,9 +82,45 @@ def holding_distribution_features(rows: list[dict[str, Any]]) -> dict[str, Any]:
         out[f"LargeHolder{label}LotsShares"] = shares[-1] if shares else None
         out[f"LargeHolder{label}LotsPeople"] = people[-1] if people else None
         for weeks in (1, 2, 4, 8):
-            out[f"LargeHolder{label}Change{weeks}W"] = _difference(percent, weeks * 1) if len(percent) >= weeks + 1 else None
+            out[f"LargeHolder{label}Change{weeks}W"] = _weekly_difference(percent, ordered_dates, weeks)
     out["HoldingDistributionLatestDate"] = ordered_dates[-1] if ordered_dates else None
+    out["HoldingBoundarySemantics"] = {"400": ">400 lots", "1000": ">1000 lots"}
+    out["HoldingDistributionCoverage"] = _holding_coverage(ordered_dates)
     return out
+
+
+def _weekly_difference(values: list[float | None], dates: list[str], weeks: int) -> float | None:
+    if not dates or not values or values[-1] is None:
+        return None
+    latest = _parse_date(dates[-1])
+    if latest is None:
+        return None
+    target = latest - timedelta(days=7 * weeks)
+    candidates = [(abs((_parse_date(day) - target).days), value) for day, value in zip(dates, values) if _parse_date(day) is not None and value is not None]
+    if not candidates:
+        return None
+    distance, previous = min(candidates, key=lambda item: item[0])
+    # Weekly reports may move a few days around holidays, but a large gap is
+    # missing publication data rather than a valid weekly delta.
+    return float(values[-1] - previous) if distance <= 4 else None
+
+
+def _parse_date(value: str) -> date | None:
+    try:
+        return date.fromisoformat(value[:10])
+    except (TypeError, ValueError):
+        return None
+
+
+def _holding_coverage(dates: list[str]) -> dict[str, Any]:
+    if not dates:
+        return {"available": False, "missing_weeks": []}
+    parsed = [_parse_date(value) for value in dates]
+    missing_weeks: list[int] = []
+    for weeks in (1, 2, 4, 8):
+        if parsed[-1] is None or not any(day is not None and abs((day - (parsed[-1] - timedelta(days=7 * weeks))).days) <= 4 for day in parsed[:-1]):
+            missing_weeks.append(weeks)
+    return {"available": True, "missing_weeks": missing_weeks}
 
 
 def broker_features(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -103,26 +146,33 @@ def broker_features(rows: list[dict[str, Any]]) -> dict[str, Any]:
     last_dates = dates[-20:]
     positive_brokers = []
     for broker, daily in broker_daily.items():
-        positive_days = sum(1 for day in last_dates if daily.get(day, 0) > 0)
-        total = sum(daily.get(day, 0) for day in last_dates)
+        positive_days = sum(1 for day in last_dates if daily.get(day) is not None and daily.get(day, 0) > 0)
+        total = sum(daily.get(day, 0) for day in last_dates if daily.get(day) is not None)
         if positive_days >= 5 and total > 0:
             positive_brokers.append((broker, positive_days, total))
     total_abs = sum(abs(daily_totals[day]) for day in last_dates)
     spike = max((abs(daily_totals[day]) for day in last_dates), default=0) / total_abs if total_abs else 0.0
     persistent_count = len(positive_brokers)
-    score = min(100.0, (min(persistent_count, 10) / 10) * 60 + (sum(x[1] for x in positive_brokers) / max(persistent_count * 20, 1)) * 40)
+    true_20_score = (min(persistent_count, 10) / 10) * 50 + (sum(x[1] for x in positive_brokers) / max(persistent_count * 20, 1)) * 30
     ranked = sorted(positive_brokers, key=lambda x: x[2], reverse=True)
-    net20 = sum(daily_totals[day] for day in last_dates)
+    gross_positive20 = sum(max(daily_totals[day], 0.0) for day in last_dates)
+    concentration = _concentration(ranked, 3, gross_positive20)
+    score = min(100.0, true_20_score + (concentration or 0.0) * 20)
+    true_window_counts: dict[int, int | None] = {}
+    for window in (5, 10, 20):
+        window_dates = last_dates[-window:]
+        true_window_counts[window] = sum(1 for _, daily in broker_daily.items() if all(day in daily for day in window_dates) and sum(daily.get(day, 0.0) for day in window_dates) > 0 and sum(1 for day in window_dates if daily.get(day, 0.0) > 0) >= max(1, window // 2))
     return {
         "TopBrokerNetBuy20D": ranked[0][2] if ranked else None,
         "Top3BrokerNet20D": sum(x[2] for x in ranked[:3]),
         "Top5BrokerNet20D": sum(x[2] for x in ranked[:5]),
         "Top10BrokerNet20D": sum(x[2] for x in ranked[:10]),
-        "Top3BrokerConcentration20D": _concentration(ranked, 3, net20),
-        "Top5BrokerConcentration20D": _concentration(ranked, 5, net20),
-        "PersistentBuyerCount5D": sum(1 for _, days, _ in positive_brokers if days >= 5),
-        "PersistentBuyerCount10D": sum(1 for _, days, _ in positive_brokers if days >= 10),
-        "PersistentBuyerCount20D": sum(1 for _, days, _ in positive_brokers if days >= 15),
+        "Top3BrokerConcentration20D": concentration,
+        "Top5BrokerConcentration20D": _concentration(ranked, 5, gross_positive20),
+        "BrokerConcentrationDenominator20D": gross_positive20,
+        "PersistentBuyerCount5D": true_window_counts[5],
+        "PersistentBuyerCount10D": true_window_counts[10],
+        "PersistentBuyerCount20D": true_window_counts[20],
         "TopBrokerPositiveDays20D": ranked[0][1] if ranked else None,
         "BrokerPersistenceScore": score,
         "BrokerOneDaySpikeRatio20D": spike,
@@ -130,9 +180,9 @@ def broker_features(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _concentration(ranked: list[tuple[str, int, float]], count: int, total: float) -> float | None:
-    if total == 0:
-        return 0.0
-    return sum(x[2] for x in ranked[:count]) / total
+    if total <= 0:
+        return None
+    return max(0.0, min(1.0, sum(max(x[2], 0.0) for x in ranked[:count]) / total))
 
 
 def price_features(rows: list[dict[str, Any]]) -> dict[str, Any]:

@@ -9,7 +9,7 @@ import time
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import httpx
 try:
@@ -26,7 +26,6 @@ logger = logging.getLogger(__name__)
 
 ALLOWED_S_DATASETS = {
     "TaiwanStockInstitutionalInvestorsBuySellWide",
-    "TaiwanStockInstitutionalInvestorsBuySell",
     "TaiwanStockShareholding",
     "TaiwanStockHoldingSharesPer",
     "TaiwanStockTradingDailyReport",
@@ -42,10 +41,11 @@ FORBIDDEN_DATASETS = {
 
 
 class FinMindError(RuntimeError):
-    def __init__(self, code: str, message: str, status_code: int | None = None):
+    def __init__(self, code: str, message: str, status_code: int | None = None, retry_after: float | None = None):
         super().__init__(message)
         self.code = code
         self.status_code = status_code
+        self.retry_after = retry_after
 
 
 class SchemaMismatch(FinMindError):
@@ -156,14 +156,16 @@ class FinMindClient:
                     raise FinMindError("AUTHENTICATION_FAILED", "FinMind authentication failed", 401)
                 if response.status_code == 403:
                     raise FinMindError("ACCESS_DENIED", "FinMind plan permission denied", 403)
+                if response.status_code == 402:
+                    raise FinMindError("QUOTA_EXHAUSTED", "FinMind quota exhausted; request deferred", 402)
                 if response.status_code == 429:
                     retry_after = response.headers.get("retry-after")
-                    delay = float(retry_after) if retry_after and retry_after.replace('.', '', 1).isdigit() else 2 ** attempt
-                    raise FinMindError("RATE_LIMITED", f"FinMind rate limit; retry after {delay:.1f}s", 429)
+                    delay = _parse_retry_after(retry_after)
+                    raise FinMindError("RATE_LIMITED", "FinMind rate limit; Retry-After will be honored", 429, delay)
                 if response.status_code >= 500:
                     raise FinMindError("UPSTREAM_5XX", "FinMind upstream server error", response.status_code)
                 if response.status_code >= 400:
-                    raise FinMindError("BAD_REQUEST", "FinMind rejected the sanitized request", response.status_code)
+                    raise FinMindError("NON_RETRYABLE_4XX", "FinMind rejected the sanitized request", response.status_code)
                 try:
                     payload = response.json()
                 except ValueError as exc:
@@ -171,6 +173,8 @@ class FinMindClient:
                 records = payload.get("data") if isinstance(payload, dict) else None
                 if not isinstance(records, list):
                     raise SchemaMismatch("SCHEMA_MISMATCH", "FinMind response data field is not a list", response.status_code)
+                if isinstance(payload.get("msg"), str) and any(term in payload["msg"].lower() for term in ("quota", "rate limit", "limit exceeded")):
+                    raise FinMindError("QUOTA_EXHAUSTED", "FinMind quota exhausted; request deferred", response.status_code)
                 normalized = [self._normalize_record(dataset, record) for record in records]
                 source_date = self._latest_date(normalized)
                 evidence = self.store.write(dataset, normalized, safe_params, source_date) if persist_raw else {"records": len(normalized)}
@@ -179,10 +183,11 @@ class FinMindClient:
                 last_error = FinMindError("TIMEOUT" if isinstance(exc, httpx.TimeoutException) else "NETWORK_ERROR", "FinMind network request failed")
             except FinMindError as exc:
                 last_error = exc
-                if exc.code in {"AUTHENTICATION_FAILED", "ACCESS_DENIED", "SCHEMA_MISMATCH"}:
+                if exc.code in {"AUTHENTICATION_FAILED", "ACCESS_DENIED", "QUOTA_EXHAUSTED", "SCHEMA_MISMATCH", "NON_RETRYABLE_4XX"}:
                     raise
             if attempt < self.settings.broker_max_retries:
-                time.sleep(min(30, 2 ** attempt + random.random()))
+                delay = last_error.retry_after if last_error and last_error.retry_after is not None else min(30, 2 ** attempt + random.random())
+                time.sleep(max(0.0, min(60.0, delay)))
         assert last_error is not None
         raise last_error
 
@@ -215,17 +220,18 @@ class FinMindClient:
         dates = [str(row.get("date") or row.get("Date") or row.get("source_date")) for row in records if row.get("date") or row.get("Date") or row.get("source_date")]
         return max(dates) if dates else None
 
-    async def fetch_broker_stocks(self, stock_ids: list[str], start_date: str, end_date: str, dataset: str = "TaiwanStockTradingDailyReport") -> dict[str, Any]:
+    async def fetch_broker_stocks(self, stock_ids: list[str], start_date: str, end_date: str, dataset: str = "TaiwanStockTradingDailyReport", *, record_sink: Callable[[list[dict[str, Any]]], int] | None = None) -> dict[str, Any]:
         """Bounded async Sponsor-compatible path with checkpoint/resume semantics."""
         checkpoint_dir = self.settings.raw_root / "checkpoints"
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
         checkpoint_file = checkpoint_dir / f"{dataset}-{start_date}-{end_date}.json"
-        checkpoint = json.loads(checkpoint_file.read_text(encoding="utf-8")) if checkpoint_file.exists() else {"completed": [], "failed": []}
+        checkpoint = json.loads(checkpoint_file.read_text(encoding="utf-8")) if checkpoint_file.exists() else {"completed": [], "failed": [], "permanent_failed": []}
         completed = set(checkpoint.get("completed", []))
+        failed_keys = {item.get("key") for item in checkpoint.get("failed", [])}
         limiter = RateLimiter(self.settings.broker_rate_per_second)
         semaphore = asyncio.Semaphore(self.settings.broker_concurrency)
         checkpoint_lock = asyncio.Lock()
-        metrics = {"requested": len(stock_ids), "skipped_checkpoint": len(completed), "success": 0, "failed": 0, "rows": 0}
+        metrics = {"requested": len(stock_ids), "skipped_checkpoint": len(completed), "success": 0, "failed": 0, "rows": 0, "retries": 0, "_records": []}
 
         days = [(start_date if start_date == end_date else start_date)]
         if dataset == "TaiwanStockTradingDailyReport":
@@ -233,9 +239,16 @@ class FinMindClient:
             end = date.fromisoformat(end_date)
             days = [(start + timedelta(days=offset)).isoformat() for offset in range((end - start).days + 1)]
 
+        async def persist() -> None:
+            temporary = checkpoint_file.with_suffix(".tmp")
+            temporary.write_text(json.dumps(checkpoint, ensure_ascii=False, indent=2), encoding="utf-8")
+            temporary.replace(checkpoint_file)
+
+        queue: asyncio.Queue[tuple[str, str] | None] = asyncio.Queue(maxsize=max(1, self.settings.broker_concurrency * 2))
+
         async def one(stock_id: str, requested_date: str) -> None:
             checkpoint_key = f"{stock_id}:{requested_date}"
-            if checkpoint_key in completed:
+            if checkpoint_key in completed or checkpoint_key in failed_keys:
                 return
             async with semaphore:
                 await limiter.wait()
@@ -247,15 +260,48 @@ class FinMindClient:
                             completed.add(checkpoint_key)
                         metrics["success"] += 1
                         metrics["rows"] += len(records)
-                        checkpoint_file.write_text(json.dumps(checkpoint, ensure_ascii=False, indent=2), encoding="utf-8")
+                        metrics["_records"].extend(records)
+                        if record_sink:
+                            record_sink(records)
+                        await persist()
                 except FinMindError as exc:
                     async with checkpoint_lock:
-                        checkpoint.setdefault("failed", []).append({"stock_id": stock_id, "requested_date": requested_date, "code": exc.code})
+                        if checkpoint_key not in failed_keys:
+                            checkpoint.setdefault("failed", []).append({"key": checkpoint_key, "stock_id": stock_id, "requested_date": requested_date, "code": exc.code})
+                            failed_keys.add(checkpoint_key)
+                        if exc.code in {"AUTHENTICATION_FAILED", "ACCESS_DENIED", "QUOTA_EXHAUSTED", "SCHEMA_MISMATCH", "NON_RETRYABLE_4XX"}:
+                            checkpoint.setdefault("permanent_failed", []).append(checkpoint_key)
                         metrics["failed"] += 1
-                        checkpoint_file.write_text(json.dumps(checkpoint, ensure_ascii=False, indent=2), encoding="utf-8")
+                        await persist()
 
-        await asyncio.gather(*(one(stock_id, requested_date) for stock_id in stock_ids for requested_date in days))
+        async def worker() -> None:
+            while True:
+                item = await queue.get()
+                try:
+                    if item is None:
+                        return
+                    await one(*item)
+                finally:
+                    queue.task_done()
+
+        workers = [asyncio.create_task(worker()) for _ in range(max(1, self.settings.broker_concurrency))]
+        for stock_id in stock_ids:
+            for requested_date in days:
+                await queue.put((stock_id, requested_date))
+        await queue.join()
+        for _ in workers:
+            await queue.put(None)
+        await asyncio.gather(*workers)
         return metrics
+
+
+def _parse_retry_after(value: str | None) -> float | None:
+    if not value:
+        return None
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        return None
 
 
 def capability_evidence(client: FinMindClient) -> dict[str, Any]:

@@ -1,11 +1,25 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import hashlib
+import json
 from statistics import mean
 from typing import Any, Iterable
 
 SCORE_VERSION = "s-only-v1"
 WEIGHTS = {"institutional_persistence": 0.35, "ownership_accumulation": 0.35, "broker_persistence": 0.30}
+SCORE_MANIFEST = {
+    "version": SCORE_VERSION,
+    "policy": "S-level only; price/reference data is supporting only",
+    "weights": WEIGHTS,
+    "coverage": ["InstitutionalDataAvailable", "ForeignHoldingDataAvailable", "HoldingDistributionAvailable", "BrokerDataAvailable", "PriceDataAvailable"],
+    "windows": {"institutional": [5, 10, 20], "ownership": [5, 20], "holding": [1, 2, 4, 8], "broker": [5, 10, 20]},
+    "thresholds": {"strong": 80, "accumulation": 65, "watch": 50},
+    "spike_penalty": {"institutional": 25, "broker_cap": 0.8, "broker_weight": 0.35},
+    "low_profile_modifier": [-10, 10],
+    "holding_boundaries": {"400": ">400 lots (source bucket lower bound >= 400,000 shares)", "1000": ">1000 lots (source bucket lower bound >= 1,000,000 shares)"},
+}
+FORMULA_HASH = hashlib.sha256(json.dumps(SCORE_MANIFEST, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -60,7 +74,7 @@ def parse_holding_level(level: str | int | float | None) -> int | None:
     """Return the lower bound in shares; never relies on row ordering or loose contains."""
     if level is None:
         return None
-    text = str(level).strip().replace(",", "").replace("，", "")
+    text = str(level).strip().replace(",", "").replace("，", "").replace("股以上", " shares 以上")
     if text.lower() in {"total", "all"}:
         return None
     import re
@@ -127,12 +141,14 @@ def calculate_score(features: dict[str, Any], coverage: dict[str, bool], score_v
     broker = _bounded(broker_score * (1 - min(broker_spike, 0.8) * 0.35))
     base = institutional * WEIGHTS["institutional_persistence"] + ownership * WEIGHTS["ownership_accumulation"] + broker * WEIGHTS["broker_persistence"]
     low_profile = features.get("LowPriceImpactFactor")
-    modifier = _bounded((low_profile or 0.0) * 10, -10, 10)
+    # An unavailable supporting modifier is explicitly neutral and marked in
+    # the components; it is never presented as an observed zero.
+    modifier = _bounded(low_profile * 10, -10, 10) if low_profile is not None else 0.0
     score = round(_bounded(base + modifier), 2)
     explanation = [
         {"label": "法人持續性", "value": round(institutional, 2), "detail": f"20 日正值比例 {institutional_ratio:.0%}；單日集中度 {institutional_spike:.1%}"},
         {"label": "持股結構累積", "value": round(ownership, 2), "detail": f"外資持股比例 20D 變化 {foreign_change:.2f}；400 張級距 4W 變化 {large_change:.2f}"},
         {"label": "分點持續性", "value": round(broker, 2), "detail": f"Persistence {broker_score:.2f}；分點單日集中度 {broker_spike:.1%}"},
-        {"label": "低調修正", "value": round(modifier, 2), "detail": "價格影響僅作 -10 至 +10 modifier，不獨立產生建倉證據"},
+        {"label": "低調修正", "value": round(modifier, 2), "detail": "價格影響僅作 -10 至 +10 modifier；若 unavailable 則明確不套用"},
     ]
     return ScoreResult(score, classify_score(score), {"InstitutionalPersistence": round(institutional, 2), "OwnershipAccumulation": round(ownership, 2), "BrokerPersistence": round(broker, 2), "LowProfileModifier": round(modifier, 2)}, explanation)
