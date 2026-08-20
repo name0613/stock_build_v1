@@ -5,6 +5,7 @@ import os
 import posixpath
 import secrets
 import shlex
+import subprocess
 from pathlib import Path
 
 try:
@@ -13,6 +14,7 @@ except ImportError as exc:  # pragma: no cover
     raise SystemExit("Install paramiko before deployment: python -m pip install paramiko") from exc
 
 ROOT = Path(__file__).resolve().parents[1]
+SOURCE_REVISION = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
 HOST = os.getenv("NAS_HOST", "192.168.31.138")
 USER = os.getenv("NAS_USER")
 PASSWORD = os.getenv("NAS_PASSWORD")
@@ -131,6 +133,11 @@ def main() -> None:
             sftp.put(str(file), to_sftp_path(target, sftp_prefix))
         env_path = to_sftp_path(posixpath.join(project, ".env"), sftp_prefix)
         token_path = to_sftp_path(posixpath.join(project, "secrets/finmind_api_token"), sftp_prefix)
+        revision_path = to_sftp_path(posixpath.join(project, "DEPLOYED_SOURCE_REVISION"), sftp_prefix)
+        revision_file = sftp.file(revision_path, "w")
+        revision_file.write(SOURCE_REVISION + "\n")
+        revision_file.close()
+        sftp.chmod(revision_path, 0o600)
         if FINMIND_TOKEN:
             token_file = sftp.file(token_path, "w")
             token_file.write(FINMIND_TOKEN + "\n")
