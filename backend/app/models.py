@@ -149,6 +149,14 @@ class DataSyncStatus(Base):
     usable_records: Mapped[int] = mapped_column(Integer, default=0)
     stored_records: Mapped[int] = mapped_column(Integer, default=0)
     staleness_state: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    attempt_latest_source_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    expected_latest_source_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    source_age_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    rows_received_this_attempt: Mapped[int] = mapped_column(Integer, default=0)
+    rows_accepted_this_attempt: Mapped[int] = mapped_column(Integer, default=0)
+    rows_rejected_this_attempt: Mapped[int] = mapped_column(Integer, default=0)
+    rows_versioned_this_attempt: Mapped[int] = mapped_column(Integer, default=0)
+    stored_rows_total: Mapped[int] = mapped_column(Integer, default=0)
     metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 

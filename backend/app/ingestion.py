@@ -256,7 +256,38 @@ def sync_stock_dataset(db: Session, client: FinMindClient, dataset: str, stock_i
     return count
 
 
-def _mark_sync(db: Session, dataset: str, status: str, records: int, latest: date | None, error_code: str | None = None, error: str | None = None, *, fetched_at: datetime | None = None, metadata: dict[str, Any] | None = None) -> None:
+_DATASET_MODELS = {
+    "TaiwanStockInstitutionalInvestorsBuySellWide": InstitutionalDaily,
+    "TaiwanStockShareholding": ForeignShareholdingDaily,
+    "TaiwanStockHoldingSharesPer": HoldingDistribution,
+    "TaiwanStockTradingDailyReport": BrokerDaily,
+    "TaiwanStockTradingDailyReportSecIdAgg": BrokerDaily,
+    "TaiwanStockPrice": PriceDaily,
+    "TaiwanStockInfo": Stock,
+}
+
+
+def _stored_rows_total(db: Session, dataset: str) -> int:
+    model = _DATASET_MODELS.get(dataset)
+    if model is None:
+        return 0
+    query = select(func.count()).select_from(model)
+    if model is Stock:
+        query = query.where(Stock.is_common_stock.is_(True))
+    return int(db.scalar(query) or 0)
+
+
+def _expected_latest_source_date(dataset: str, as_of: date | None) -> date | None:
+    if as_of is None:
+        return None
+    if dataset == "TaiwanStockHoldingSharesPer":
+        # FinMind holding-distribution reports are weekly.  Friday is the
+        # observed publication boundary for the current source contract.
+        return as_of - timedelta(days=(as_of.weekday() - 4) % 7)
+    return expected_trading_sessions(as_of, 1)[-1]
+
+
+def _mark_sync(db: Session, dataset: str, status: str, records: int, latest: date | None, error_code: str | None = None, error: str | None = None, *, fetched_at: datetime | None = None, metadata: dict[str, Any] | None = None, rows_received: int | None = None, rows_accepted: int | None = None, rows_rejected: int | None = None, rows_versioned: int | None = None, stored_total: int | None = None, expected_latest: date | None = None) -> None:
     item = db.get(DataSyncStatus, dataset)
     if item is None:
         item = DataSyncStatus(dataset=dataset, status=status, records=records)
@@ -264,15 +295,31 @@ def _mark_sync(db: Session, dataset: str, status: str, records: int, latest: dat
     item.status = status
     item.records = records
     item.usable_records = records
-    item.stored_records = records
+    item.stored_records = stored_total if stored_total is not None else _stored_rows_total(db, dataset)
     item.last_attempt_at = fetched_at or _now()
-    item.latest_source_date = latest
-    if status == "SUCCESS" and records > 0:
+    item.attempt_latest_source_date = latest
+    if latest is not None and (item.latest_source_date is None or latest > item.latest_source_date):
+        item.latest_source_date = latest
+    item.expected_latest_source_date = expected_latest
+    item.source_age_days = (expected_latest - item.latest_source_date).days if expected_latest and item.latest_source_date else None
+    item.rows_received_this_attempt = rows_received if rows_received is not None else records
+    item.rows_accepted_this_attempt = rows_accepted if rows_accepted is not None else records
+    item.rows_rejected_this_attempt = rows_rejected or 0
+    item.rows_versioned_this_attempt = rows_versioned if rows_versioned is not None else records
+    item.stored_rows_total = item.stored_records
+    if status in {"SUCCESS", "PARTIAL", "NO_DATA"}:
         item.last_successful_sync = fetched_at or _now()
         item.last_fetch_at = fetched_at or _now()
+    if status == "FAILED":
+        item.staleness_state = "ERROR"
+    elif status == "NO_DATA":
+        item.staleness_state = "NO_DATA"
+    elif item.latest_source_date is None:
+        item.staleness_state = "PARTIAL"
+    elif expected_latest and item.latest_source_date < expected_latest:
+        item.staleness_state = "STALE"
+    else:
         item.staleness_state = "FRESH"
-    elif status in {"NO_DATA", "PARTIAL"}:
-        item.staleness_state = status
     item.last_error_code = error_code
     item.last_error = error[:500] if error else None
     if metadata:
@@ -392,51 +439,92 @@ def seed_score_version(db: Session) -> None:
         db.commit()
 
 
-async def catch_up(db: Session, client: FinMindClient) -> dict[str, Any]:
+async def catch_up(db: Session, client: FinMindClient, end_date: date | None = None) -> dict[str, Any]:
     """Run the complete scheduled pipeline for the dynamic common-stock universe."""
-    end = date.today()
-    start = end - timedelta(days=45)
-    result: dict[str, Any] = {"status": "SUCCESS", "datasets": {}, "scores": {}}
+    end = end_date or date.today()
+    start = expected_trading_sessions(end, 20)[0]
+    result: dict[str, Any] = {"status": "SUCCESS", "datasets": {}, "scores": {}, "source_coverage": {}}
     required = ["TaiwanStockInstitutionalInvestorsBuySellWide", "TaiwanStockShareholding", "TaiwanStockHoldingSharesPer", "TaiwanStockPrice"]
     info_job = _job_start(db, "TaiwanStockInfo", end, end)
     try:
         info_count = sync_universe(db, client)
-        _job_finish(db, info_job, "SUCCESS" if info_count else "PARTIAL", records=info_count)
+        _job_finish(db, info_job, "SUCCESS" if info_count else "PARTIAL", records=info_count, stocks_completed=info_count)
         result["datasets"]["TaiwanStockInfo"] = {"status": "SUCCESS" if info_count else "PARTIAL", "records": info_count}
     except Exception as exc:
-        _job_finish(db, info_job, "FAILED", error_code=getattr(exc, "code", "UNEXPECTED"), error=str(exc))
-        result["datasets"]["TaiwanStockInfo"] = {"status": "FAILED", "error_code": getattr(exc, "code", "UNEXPECTED")}
+        code = getattr(exc, "code", "UNEXPECTED")
+        _job_finish(db, info_job, "FAILED", error_code=code, error=str(exc))
+        result["datasets"]["TaiwanStockInfo"] = {"status": "FAILED", "error_code": code}
         result["status"] = "PARTIAL"
+    stock_ids = list(db.scalars(select(Stock.stock_id).where(Stock.is_common_stock.is_(True))).all())
     for dataset in required:
-        job = _job_start(db, dataset, start, end)
+        job = _job_start(db, dataset, start, end, stocks_attempted=len(stock_ids))
+        received = accepted = 0
+        latest_dates: list[date] = []
+        def sink(rows: list[dict[str, Any]]) -> int:
+            nonlocal accepted
+            accepted += ingest_records(db, dataset, rows)
+            return accepted
+
         try:
-            records, meta = client.fetch(dataset, start_date=start.isoformat(), end_date=end.isoformat())
-            count = ingest_records(db, dataset, records)
-            status = "SUCCESS" if count else "PARTIAL"
-            _mark_sync(db, dataset, status, count, _as_date(meta.get("source_date")), "NO_DATA" if not count else None, fetched_at=_now(), metadata={"requested_start": start.isoformat(), "requested_end": end.isoformat(), "last_usable_records": count})
-            _job_finish(db, job, status, records=count, error_code=None if count else "NO_DATA")
-            result["datasets"][dataset] = {"status": status, "records": count}
+            if hasattr(client, "fetch_stocks_dataset"):
+                metrics = await client.fetch_stocks_dataset(stock_ids, dataset, (start - timedelta(days=30)).isoformat(), end.isoformat(), record_sink=sink)
+                received = int(metrics.get("rows", 0))
+                latest_dates = [_as_date(item.get("last_source_date")) for item in metrics.get("per_stock", {}).values() if item.get("last_source_date")]
+                latest = max(latest_dates, default=None)
+                failed = int(metrics.get("failed", 0))
+                status = "FAILED" if metrics.get("fatal_code") else ("SUCCESS" if failed == 0 and metrics.get("success", 0) == len(stock_ids) and received > 0 else "PARTIAL")
+                code = metrics.get("fatal_code") or ("NO_DATA" if received == 0 else ("STOCK_PARTIAL" if failed else None))
+                coverage = {"requested": len(stock_ids), "success": metrics.get("success", 0), "failed": failed, "rows": received, "fatal_code": metrics.get("fatal_code")}
+            else:
+                records, meta = client.fetch(dataset, start_date=(start - timedelta(days=30)).isoformat(), end_date=end.isoformat())
+                received = len(records)
+                accepted = ingest_records(db, dataset, records)
+                latest = _as_date(meta.get("source_date"))
+                status = "SUCCESS" if accepted else "PARTIAL"
+                code = None if accepted else "NO_DATA"
+                coverage = {"mode": "fallback-broad", "requested": len(stock_ids), "rows": received}
+            expected = _expected_latest_source_date(dataset, end)
+            _mark_sync(db, dataset, status, accepted, latest, code, fetched_at=_now(), expected_latest=expected, rows_received=received, rows_accepted=accepted, rows_rejected=max(0, received - accepted), rows_versioned=accepted, stored_total=_stored_rows_total(db, dataset), metadata={"requested_start": (start - timedelta(days=30)).isoformat(), "requested_end": end.isoformat(), "query_mode": "per_stock_date_range" if hasattr(client, "fetch_stocks_dataset") else "fallback_broad", "coverage": coverage})
+            _job_finish(db, job, status, records=accepted, stocks_completed=coverage.get("success", 0), stocks_failed=coverage.get("failed", 0), error_code=code, checkpoint_state=coverage)
+            result["datasets"][dataset] = {"status": status, "records_received": received, "records_accepted": accepted, "stored_rows_total": _stored_rows_total(db, dataset), "coverage": coverage}
+            result["source_coverage"][dataset] = coverage
             if status != "SUCCESS":
                 result["status"] = "PARTIAL"
+            if coverage.get("fatal_code"):
+                break
         except Exception as exc:
             code = getattr(exc, "code", "UNEXPECTED")
-            _job_finish(db, job, "FAILED", error_code=code, error=str(exc))
-            _mark_sync(db, dataset, "FAILED", 0, None, code, str(exc), fetched_at=_now())
+            _job_finish(db, job, "FAILED", error_code=code, error=str(exc), stocks_failed=len(stock_ids))
+            _mark_sync(db, dataset, "FAILED", accepted, None, code, str(exc), fetched_at=_now(), expected_latest=_expected_latest_source_date(dataset, end), rows_received=received, rows_accepted=accepted, rows_rejected=max(0, received - accepted), stored_total=_stored_rows_total(db, dataset))
             result["datasets"][dataset] = {"status": "FAILED", "error_code": code}
             result["status"] = "PARTIAL"
-    stock_ids = list(db.scalars(select(Stock.stock_id).where(Stock.is_common_stock.is_(True))).all())
-    broker_job = _job_start(db, "TaiwanStockTradingDailyReport", end, end, stocks_attempted=len(stock_ids))
+    broker_start = expected_trading_sessions(end, 20)[0]
+    broker_job = _job_start(db, "TaiwanStockTradingDailyReport", broker_start, end, stocks_attempted=len(stock_ids))
     broker_metrics: dict[str, Any] = {}
+    broker_buffer: list[dict[str, Any]] = []
+    stored = 0
+
+    def broker_sink(rows: list[dict[str, Any]]) -> int:
+        nonlocal stored
+        broker_buffer.extend(rows)
+        if len(broker_buffer) >= 5000:
+            stored += ingest_records(db, "TaiwanStockTradingDailyReport", broker_buffer[:])
+            broker_buffer.clear()
+        return stored
+
     try:
-        broker_metrics = await client.fetch_broker_stocks(stock_ids, end.isoformat(), end.isoformat())
-        broker_records = broker_metrics.pop("_records", [])
-        stored = ingest_records(db, "TaiwanStockTradingDailyReport", broker_records) if broker_records else 0
-        checkpoint_complete = broker_metrics.get("skipped_checkpoint", 0) >= len(stock_ids)
-        broker_status = "SUCCESS" if broker_metrics.get("failed", 0) == 0 and (broker_metrics.get("rows", 0) > 0 or checkpoint_complete or not stock_ids) else "PARTIAL"
-        _mark_sync(db, "TaiwanStockTradingDailyReport", broker_status, stored, end if stored else None, None if broker_status == "SUCCESS" else "BROKER_PARTIAL", fetched_at=_now(), metadata=broker_metrics)
-        _job_finish(db, broker_job, broker_status, records=stored, retry_count=broker_metrics.get("retries", 0), stocks_completed=broker_metrics.get("success", 0), stocks_failed=broker_metrics.get("failed", 0), checkpoint_state=broker_metrics)
-        result["datasets"]["TaiwanStockTradingDailyReport"] = {**broker_metrics, "stored_records": stored}
-        if broker_status != "SUCCESS":
+        broker_metrics = await client.fetch_broker_stocks(stock_ids, broker_start.isoformat(), end.isoformat(), record_sink=broker_sink)
+        if broker_buffer:
+            stored += ingest_records(db, "TaiwanStockTradingDailyReport", broker_buffer)
+            broker_buffer.clear()
+        checkpoint_complete = broker_metrics.get("skipped_checkpoint", 0) >= len(stock_ids) * 20
+        no_work_reused = checkpoint_complete and broker_metrics.get("success", 0) == 0 and broker_metrics.get("rows", 0) == 0 and broker_metrics.get("failed", 0) == 0
+        broker_status = "REUSED" if no_work_reused else ("SUCCESS" if broker_metrics.get("failed", 0) == 0 and (broker_metrics.get("rows", 0) > 0 or not stock_ids) else "PARTIAL")
+        broker_error = None if broker_status in {"SUCCESS", "REUSED"} else (broker_metrics.get("fatal_code") or "BROKER_PARTIAL")
+        _mark_sync(db, "TaiwanStockTradingDailyReport", broker_status, stored, end if stored else None, broker_error, fetched_at=_now(), expected_latest=_expected_latest_source_date("TaiwanStockTradingDailyReport", end), rows_received=broker_metrics.get("rows", 0), rows_accepted=stored, rows_rejected=max(0, broker_metrics.get("rows", 0) - stored), rows_versioned=stored, stored_total=_stored_rows_total(db, "TaiwanStockTradingDailyReport"), metadata={"query_mode": "per_stock_per_session", **broker_metrics})
+        _job_finish(db, broker_job, broker_status, records=stored, retry_count=broker_metrics.get("retries", 0), stocks_completed=broker_metrics.get("success", 0), stocks_failed=broker_metrics.get("failed", 0), error_code=broker_error, checkpoint_state=broker_metrics)
+        result["datasets"]["TaiwanStockTradingDailyReport"] = {**broker_metrics, "stored_records": stored, "status": broker_status}
+        if broker_status not in {"SUCCESS", "REUSED"}:
             result["status"] = "PARTIAL"
     except Exception as exc:
         code = getattr(exc, "code", "UNEXPECTED")
@@ -445,10 +533,10 @@ async def catch_up(db: Session, client: FinMindClient) -> dict[str, Any]:
         result["status"] = "PARTIAL"
     existing_scores = db.scalars(select(AccumulationScore).where(AccumulationScore.source_date == end, AccumulationScore.score_version == SCORE_VERSION, AccumulationScore.knowledge_cutoff.is_not(None))).all()
     reuse_ready = len(existing_scores) >= len(stock_ids) and all(len(score.input_source_hashes or []) >= 20 for score in existing_scores)
-    if broker_metrics.get("skipped_checkpoint", 0) >= len(stock_ids) and reuse_ready:
+    if broker_metrics.get("skipped_checkpoint", 0) >= len(stock_ids) * 20 and reuse_ready:
         score_job = _job_start(db, "score", end, end, stocks_attempted=len(stock_ids))
-        _job_finish(db, score_job, "SUCCESS", stocks_completed=len(stock_ids), checkpoint_state={"reused_existing_scores": True})
-        result["scores"] = {status: count for status, count in db.execute(select(AccumulationScore.status, func.count()).where(AccumulationScore.source_date == end, AccumulationScore.score_version == SCORE_VERSION).group_by(AccumulationScore.status)).all()}
+        _job_finish(db, score_job, "REUSED", stocks_completed=len(stock_ids), checkpoint_state={"reused_existing_scores": True})
+        result["scores"] = {status: count for status, count in db.execute(select(AccumulationScore.status, func.count()).where(AccumulationScore.source_date == end, AccumulationScore.score_version == SCORE_VERSION, AccumulationScore.knowledge_cutoff.is_not(None)).group_by(AccumulationScore.status)).all()}
         return result
     score_job = _job_start(db, "score", end, end, stocks_attempted=len(stock_ids))
     for stock_id in stock_ids:
@@ -458,7 +546,8 @@ async def catch_up(db: Session, client: FinMindClient) -> dict[str, Any]:
         except Exception:
             result["status"] = "PARTIAL"
             result["scores"]["FAILED"] = result["scores"].get("FAILED", 0) + 1
-    _job_finish(db, score_job, "SUCCESS" if result["scores"].get("FAILED", 0) == 0 else "PARTIAL", stocks_completed=len(stock_ids) - result["scores"].get("FAILED", 0), stocks_failed=result["scores"].get("FAILED", 0))
+    failures = result["scores"].get("FAILED", 0)
+    _job_finish(db, score_job, "SUCCESS" if failures == 0 else "PARTIAL", stocks_completed=len(stock_ids) - failures, stocks_failed=failures, checkpoint_state={"scores": result["scores"]})
     return result
 
 

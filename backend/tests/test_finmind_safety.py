@@ -107,7 +107,9 @@ def test_finmind_retry_after_is_honored_and_schema_fails_fast(monkeypatch: pytes
     client = FinMindClient(Settings(raw_root=tmp_path, broker_max_retries=1))
     records, _ = client.fetch("TaiwanStockPrice", data_id="2330", persist_raw=False)
     assert records == []
-    assert delays == [0.0]
+    assert len(delays) == 2
+    assert delays[0] == 0.0
+    assert delays[1] >= 0.0
     bad = _Client([_Response(200, ValueError("invalid json"))])
     monkeypatch.setattr(httpx, "Client", lambda **_: bad)
     with pytest.raises(FinMindError) as exc:

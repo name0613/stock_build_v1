@@ -20,8 +20,12 @@ class Settings(BaseSettings):
     timezone: str = "Asia/Taipei"
     score_version: str = "s-only-v1"
     broker_concurrency: int = 4
-    broker_rate_per_second: float = 2.0
+    broker_rate_per_second: float = 4.0
     broker_max_retries: int = 4
+    source_concurrency: int = 6
+    source_rate_per_second: float = 4.0
+    source_batch_size: int = 500
+    worker_heartbeat_file: Path = Path("/data/raw/worker-heartbeat.json")
     allow_demo_data: bool = False
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")

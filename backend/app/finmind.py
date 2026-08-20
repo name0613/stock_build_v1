@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import random
+import threading
 import time
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -128,6 +129,18 @@ class FinMindClient:
         self.settings = settings or get_settings()
         self.store = RawEvidenceStore(self.settings.raw_root)
         self.timeout = httpx.Timeout(30.0, connect=10.0)
+        self._request_lock = threading.Lock()
+        self._next_request_at = 0.0
+        self._request_interval = 1 / max(self.settings.source_rate_per_second, self.settings.broker_rate_per_second, 0.1)
+
+    def _wait_for_http_attempt(self) -> None:
+        """Apply one process-wide budget to every physical HTTP attempt."""
+        with self._request_lock:
+            now = time.monotonic()
+            delay = self._next_request_at - now
+            if delay > 0:
+                time.sleep(delay)
+            self._next_request_at = time.monotonic() + self._request_interval
 
     def _request_spec(self, dataset: str, data_id: str | None, start_date: str | None, end_date: str | None, securities_trader_id: str | None = None) -> tuple[str, dict[str, str]]:
         if dataset == "TaiwanStockTradingDailyReport":
@@ -159,6 +172,7 @@ class FinMindClient:
         last_error: FinMindError | None = None
         for attempt in range(self.settings.broker_max_retries + 1):
             try:
+                self._wait_for_http_attempt()
                 with httpx.Client(base_url=self.settings.finmind_base_url, timeout=self.timeout, follow_redirects=True) as client:
                     response = client.get(endpoint, params=params)
                 if response.status_code == 401:
@@ -179,11 +193,10 @@ class FinMindClient:
                     payload = response.json()
                 except ValueError as exc:
                     raise SchemaMismatch("SCHEMA_MISMATCH", "FinMind response was not valid JSON", response.status_code) from exc
+                self._validate_application_response(payload, response.status_code)
                 records = payload.get("data") if isinstance(payload, dict) else None
                 if not isinstance(records, list):
                     raise SchemaMismatch("SCHEMA_MISMATCH", "FinMind response data field is not a list", response.status_code)
-                if isinstance(payload.get("msg"), str) and any(term in payload["msg"].lower() for term in ("quota", "rate limit", "limit exceeded")):
-                    raise FinMindError("QUOTA_EXHAUSTED", "FinMind quota exhausted; request deferred", response.status_code)
                 normalized = [self._normalize_record(dataset, record) for record in records]
                 source_date = self._latest_date(normalized)
                 evidence = self.store.write(dataset, normalized, safe_params, source_date) if persist_raw else {"records": len(normalized)}
@@ -199,6 +212,26 @@ class FinMindClient:
                 time.sleep(max(0.0, min(60.0, delay)))
         assert last_error is not None
         raise last_error
+
+    @staticmethod
+    def _validate_application_response(payload: Any, status_code: int) -> None:
+        if not isinstance(payload, dict):
+            raise SchemaMismatch("SCHEMA_MISMATCH", "FinMind response root was not an object", status_code)
+        status = payload.get("status", payload.get("code"))
+        message = str(payload.get("msg") or payload.get("message") or "")
+        status_text = str(status).lower() if status is not None else ""
+        message_text = message.lower()
+        if status_text not in {"", "200", "ok", "success", "true"}:
+            if any(term in f"{status_text} {message_text}" for term in ("quota", "limit", "402")):
+                raise FinMindError("QUOTA_EXHAUSTED", "FinMind application quota failure", status_code)
+            if any(term in f"{status_text} {message_text}" for term in ("permission", "forbidden", "access", "403")):
+                raise FinMindError("ACCESS_DENIED", "FinMind application permission failure", status_code)
+            if any(term in f"{status_text} {message_text}" for term in ("auth", "token", "401", "unauthorized")):
+                raise FinMindError("AUTHENTICATION_FAILED", "FinMind application authentication failure", status_code)
+            raise SchemaMismatch("SCHEMA_MISMATCH", "FinMind application returned an unsupported status", status_code)
+        if any(term in message_text for term in ("quota exhausted", "rate limit", "limit exceeded", "permission denied")):
+            code = "QUOTA_EXHAUSTED" if "quota" in message_text or "limit" in message_text else "ACCESS_DENIED"
+            raise FinMindError(code, "FinMind application error", status_code)
 
     def probe(self, dataset: str) -> CapabilityResult:
         try:
@@ -237,17 +270,16 @@ class FinMindClient:
         checkpoint_file = checkpoint_dir / f"{dataset}-{start_date}-{end_date}.json"
         checkpoint = json.loads(checkpoint_file.read_text(encoding="utf-8")) if checkpoint_file.exists() else {"completed": [], "failed": [], "permanent_failed": []}
         completed = set(checkpoint.get("completed", []))
-        failed_keys = {item.get("key") for item in checkpoint.get("failed", [])}
-        limiter = RateLimiter(self.settings.broker_rate_per_second)
+        permanent_failed = set(checkpoint.get("permanent_failed", []))
         semaphore = asyncio.Semaphore(self.settings.broker_concurrency)
         checkpoint_lock = asyncio.Lock()
-        metrics = {"requested": len(stock_ids), "skipped_checkpoint": len(completed), "success": 0, "failed": 0, "rows": 0, "retries": 0, "_records": []}
+        fatal_event = asyncio.Event()
+        metrics = {"requested": len(stock_ids), "skipped_checkpoint": len(completed), "success": 0, "failed": 0, "retryable_failed": 0, "permanent_failed": len(permanent_failed), "rows": 0, "retries": 0, "fatal_code": None}
 
         days = [(start_date if start_date == end_date else start_date)]
         if dataset == "TaiwanStockTradingDailyReport":
-            start = date.fromisoformat(start_date)
-            end = date.fromisoformat(end_date)
-            days = [(start + timedelta(days=offset)).isoformat() for offset in range((end - start).days + 1)]
+            from .calendar import expected_trading_sessions
+            days = [day.isoformat() for day in expected_trading_sessions(date.fromisoformat(end_date), 20) if date.fromisoformat(start_date) <= day <= date.fromisoformat(end_date)]
 
         async def persist() -> None:
             temporary = checkpoint_file.with_suffix(".tmp")
@@ -258,29 +290,35 @@ class FinMindClient:
 
         async def one(stock_id: str, requested_date: str) -> None:
             checkpoint_key = f"{stock_id}:{requested_date}"
-            if checkpoint_key in completed or checkpoint_key in failed_keys:
+            if checkpoint_key in completed or checkpoint_key in permanent_failed or fatal_event.is_set():
                 return
             async with semaphore:
-                await limiter.wait()
                 try:
                     records, _ = await asyncio.to_thread(self.fetch, dataset, stock_id, requested_date, requested_date)
                     async with checkpoint_lock:
                         if checkpoint_key not in completed:
                             checkpoint["completed"].append(checkpoint_key)
-                            completed.add(checkpoint_key)
+                        completed.add(checkpoint_key)
                         metrics["success"] += 1
                         metrics["rows"] += len(records)
-                        metrics["_records"].extend(records)
                         if record_sink:
                             record_sink(records)
                         await persist()
                 except FinMindError as exc:
                     async with checkpoint_lock:
-                        if checkpoint_key not in failed_keys:
-                            checkpoint.setdefault("failed", []).append({"key": checkpoint_key, "stock_id": stock_id, "requested_date": requested_date, "code": exc.code})
-                            failed_keys.add(checkpoint_key)
-                        if exc.code in {"AUTHENTICATION_FAILED", "ACCESS_DENIED", "QUOTA_EXHAUSTED", "SCHEMA_MISMATCH", "NON_RETRYABLE_4XX"}:
+                        global_fatal = exc.code in {"AUTHENTICATION_FAILED", "ACCESS_DENIED", "QUOTA_EXHAUSTED", "SCHEMA_MISMATCH"}
+                        permanent = exc.code in {"NON_RETRYABLE_4XX"}
+                        failure = {"key": checkpoint_key, "stock_id": stock_id, "requested_date": requested_date, "code": exc.code, "retryable": not (global_fatal or permanent), "last_attempt_at": datetime.now(timezone.utc).isoformat()}
+                        checkpoint.setdefault("failed", []).append(failure)
+                        if permanent:
                             checkpoint.setdefault("permanent_failed", []).append(checkpoint_key)
+                            permanent_failed.add(checkpoint_key)
+                            metrics["permanent_failed"] += 1
+                        elif not global_fatal:
+                            metrics["retryable_failed"] += 1
+                        else:
+                            metrics["fatal_code"] = exc.code
+                            fatal_event.set()
                         metrics["failed"] += 1
                         await persist()
 
@@ -302,6 +340,56 @@ class FinMindClient:
         for _ in workers:
             await queue.put(None)
         await asyncio.gather(*workers)
+        return metrics
+
+    async def fetch_stocks_dataset(self, stock_ids: list[str], dataset: str, start_date: str, end_date: str, *, record_sink: Callable[[list[dict[str, Any]]], int] | None = None) -> dict[str, Any]:
+        """Fetch a date-range dataset per stock with bounded queue and batches."""
+        semaphore = asyncio.Semaphore(self.settings.source_concurrency)
+        queue: asyncio.Queue[str | None] = asyncio.Queue(maxsize=max(1, self.settings.source_concurrency * 2))
+        fatal_event = asyncio.Event()
+        metrics: dict[str, Any] = {"requested": len(stock_ids), "success": 0, "failed": 0, "rows": 0, "fatal_code": None, "per_stock": {}}
+        batch: list[dict[str, Any]] = []
+
+        async def one(stock_id: str) -> None:
+            if fatal_event.is_set():
+                return
+            async with semaphore:
+                try:
+                    records, _ = await asyncio.to_thread(self.fetch, dataset, stock_id, start_date, end_date)
+                    dates = sorted({str(row.get("date") or row.get("source_date") or "")[:10] for row in records if row.get("date") or row.get("source_date")})
+                    metrics["success"] += 1
+                    metrics["rows"] += len(records)
+                    metrics["per_stock"][stock_id] = {"rows": len(records), "first_source_date": dates[0] if dates else None, "last_source_date": dates[-1] if dates else None}
+                    batch.extend(records)
+                    if record_sink and len(batch) >= self.settings.source_batch_size:
+                        record_sink(batch.copy())
+                        batch.clear()
+                except FinMindError as exc:
+                    metrics["failed"] += 1
+                    metrics["per_stock"][stock_id] = {"rows": 0, "error_code": exc.code}
+                    if exc.code in {"AUTHENTICATION_FAILED", "ACCESS_DENIED", "QUOTA_EXHAUSTED", "SCHEMA_MISMATCH"}:
+                        metrics["fatal_code"] = exc.code
+                        fatal_event.set()
+
+        async def worker() -> None:
+            while True:
+                stock_id = await queue.get()
+                try:
+                    if stock_id is None:
+                        return
+                    await one(stock_id)
+                finally:
+                    queue.task_done()
+
+        workers = [asyncio.create_task(worker()) for _ in range(max(1, self.settings.source_concurrency))]
+        for stock_id in stock_ids:
+            await queue.put(stock_id)
+        await queue.join()
+        for _ in workers:
+            await queue.put(None)
+        await asyncio.gather(*workers)
+        if record_sink and batch:
+            record_sink(batch)
         return metrics
 
 
