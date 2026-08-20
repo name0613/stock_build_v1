@@ -14,6 +14,7 @@ PATTERNS = {
     "bearer_value": re.compile(r"(?i)authorization\s*[:=]\s*bearer\s+[A-Za-z0-9._-]{12,}"),
     "private_key": re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
     "database_url_credential": re.compile(r"(?i)(?:postgres(?:ql)?|mysql)://[^\s:@]+:[^\s@]+@"),
+    "high_entropy_credential_context": re.compile(r"(?i)(?:token|password|secret|api[_-]?key)[^\n]{0,24}[=:][ \t]*(?!(?:os\.|self\.|None|REMOVED|REDACTED)\b)[\"']?[A-Za-z0-9._-]{24,}"),
 }
 EXCLUDE_PARTS = {".git", ".venv", "node_modules", "data", "postgres"}
 
@@ -71,6 +72,15 @@ def scan(extra_paths: list[Path] | None = None) -> dict[str, object]:
 
 
 if __name__ == "__main__":
-    result = scan([Path(value) for value in sys.argv[1:] if not value.startswith("-")])
+    arguments = [value for value in sys.argv[1:] if not value.startswith("-")]
+    output_path = None
+    if "--output" in sys.argv:
+        position = sys.argv.index("--output")
+        output_path = Path(sys.argv[position + 1])
+        arguments = [value for value in arguments if value != str(output_path)]
+    result = scan([Path(value) for value in arguments])
+    if output_path:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(result, ensure_ascii=False, indent=2))
     raise SystemExit(0 if result["status"] == "PASS" else 1)
