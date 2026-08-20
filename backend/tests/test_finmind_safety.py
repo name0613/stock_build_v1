@@ -116,3 +116,54 @@ def test_finmind_retry_after_is_honored_and_schema_fails_fast(monkeypatch: pytes
         client.fetch("TaiwanStockPrice", data_id="2330", persist_raw=False)
     assert exc.value.code == "SCHEMA_MISMATCH"
     assert bad.calls == 1
+
+
+@pytest.mark.parametrize("payload,code", [({"status": 402, "msg": "quota exhausted", "data": []}, "QUOTA_EXHAUSTED"), ({"status": 403, "msg": "permission denied", "data": []}, "ACCESS_DENIED"), ({"status": 500, "msg": "unexpected", "data": []}, "SCHEMA_MISMATCH"), ({"status": 200, "data": {"not": "a list"}}, "SCHEMA_MISMATCH")])
+def test_http_200_application_errors_and_schema_drift_fail_closed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, payload: dict, code: str) -> None:
+    fake = _Client([_Response(200, payload)])
+    monkeypatch.setattr(httpx, "Client", lambda **_: fake)
+    client = FinMindClient(Settings(raw_root=tmp_path, broker_max_retries=3))
+    with pytest.raises(FinMindError) as exc:
+        client.fetch("TaiwanStockPrice", data_id="2330", persist_raw=False)
+    assert exc.value.code == code
+    assert fake.calls == 1
+
+
+def test_global_request_budget_covers_retry_attempts(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    fake = _Client([httpx.TimeoutException("timeout"), _Response(200, {"data": []})])
+    monkeypatch.setattr(httpx, "Client", lambda **_: fake)
+    waits: list[int] = []
+    monkeypatch.setattr("app.finmind.time.sleep", lambda _delay: None)
+    client = FinMindClient(Settings(raw_root=tmp_path, broker_max_retries=1))
+    monkeypatch.setattr(client, "_wait_for_http_attempt", lambda: waits.append(1))
+    client.fetch("TaiwanStockPrice", data_id="2330", persist_raw=False)
+    assert len(waits) == 2
+    assert fake.calls == 2
+
+
+def test_broker_checkpoint_retains_retryable_failure_and_resumes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import asyncio
+    client = FinMindClient(Settings(raw_root=tmp_path, broker_max_retries=0, broker_concurrency=1))
+    monkeypatch.setattr(client, "fetch", lambda *_args, **_kwargs: (_ for _ in ()).throw(FinMindError("TIMEOUT", "temporary")))
+    failed = asyncio.run(client.fetch_broker_stocks(["2330"], "2026-08-20", "2026-08-20"))
+    assert failed["retryable_failed"] == 1
+    checkpoint = next((tmp_path / "checkpoints").glob("*.json"))
+    failure = __import__("json").loads(checkpoint.read_text(encoding="utf-8"))["failed"][0]
+    assert failure["classification"] == "retryable_failed"
+    monkeypatch.setattr(client, "fetch", lambda *_args, **_kwargs: ([{"stock_id": "2330", "date": "2026-08-20", "securities_trader_id": "A", "buy": 10, "sell": 1}], {"attempt": 1}))
+    resumed = asyncio.run(client.fetch_broker_stocks(["2330"], "2026-08-20", "2026-08-20"))
+    assert resumed["success"] == 1
+    assert resumed["fatal_code"] is None
+
+
+def test_global_broker_fatal_stops_queue_promptly(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import asyncio
+    calls: list[str] = []
+    client = FinMindClient(Settings(raw_root=tmp_path, broker_max_retries=0, broker_concurrency=1))
+    def denied(stock_id: str, *_args, **_kwargs):
+        calls.append(stock_id)
+        raise FinMindError("ACCESS_DENIED", "permission denied")
+    monkeypatch.setattr(client, "fetch", denied)
+    result = asyncio.run(client.fetch_broker_stocks([str(index) for index in range(100)], "2026-08-20", "2026-08-20"))
+    assert result["fatal_code"] == "ACCESS_DENIED"
+    assert len(calls) == 1

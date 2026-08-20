@@ -285,7 +285,7 @@ class FinMindClient:
         semaphore = asyncio.Semaphore(self.settings.broker_concurrency)
         checkpoint_lock = asyncio.Lock()
         fatal_event = asyncio.Event()
-        metrics = {"requested": len(stock_ids), "skipped_checkpoint": len(completed), "success": 0, "stocks_completed": 0, "stocks_failed": 0, "retryable_failed": 0, "permanent_failed": len(permanent_failed), "rows": 0, "retries": 0, "fatal_code": None}
+        metrics = {"requested": len(stock_ids), "skipped_checkpoint": len(completed), "success": 0, "failed": 0, "stocks_completed": 0, "stocks_failed": 0, "retryable_failed": 0, "permanent_failed": len(permanent_failed), "rows": 0, "retries": 0, "fatal_code": None}
         completed_stocks: set[str] = set()
         failed_stocks: set[str] = set()
 
