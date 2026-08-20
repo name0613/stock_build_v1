@@ -388,7 +388,7 @@ async def catch_up(db: Session, client: FinMindClient) -> dict[str, Any]:
         broker_metrics = await client.fetch_broker_stocks(stock_ids, end.isoformat(), end.isoformat())
         broker_records = broker_metrics.pop("_records", [])
         stored = ingest_records(db, "TaiwanStockTradingDailyReport", broker_records) if broker_records else 0
-        broker_status = "SUCCESS" if broker_metrics.get("failed", 0) == 0 else "PARTIAL"
+        broker_status = "SUCCESS" if broker_metrics.get("failed", 0) == 0 and (broker_metrics.get("rows", 0) > 0 or not stock_ids) else "PARTIAL"
         _mark_sync(db, "TaiwanStockTradingDailyReport", broker_status, stored, end if stored else None, None if broker_status == "SUCCESS" else "BROKER_PARTIAL", fetched_at=_now(), metadata=broker_metrics)
         _job_finish(db, broker_job, broker_status, records=stored, retry_count=broker_metrics.get("retries", 0), stocks_completed=broker_metrics.get("success", 0), stocks_failed=broker_metrics.get("failed", 0), checkpoint_state=broker_metrics)
         result["datasets"]["TaiwanStockTradingDailyReport"] = {**broker_metrics, "stored_records": stored}
@@ -423,7 +423,8 @@ def _job_finish(db: Session, job: JobRun, status: str, *, records: int = 0, retr
     finished = _now()
     job.status = status
     job.finished_at = finished
-    job.duration_ms = max(0, int((finished - job.started_at).total_seconds() * 1000))
+    started = job.started_at if job.started_at.tzinfo else job.started_at.replace(tzinfo=timezone.utc)
+    job.duration_ms = max(0, int((finished - started).total_seconds() * 1000))
     job.records = records
     job.retry_count = retry_count
     job.stocks_completed = stocks_completed

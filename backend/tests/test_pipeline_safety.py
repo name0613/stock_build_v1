@@ -84,3 +84,42 @@ def test_source_revision_and_historical_score_are_point_in_time() -> None:
     later = calculate_stock_features_and_score(db, "2330", end, datetime.now(timezone.utc) + timedelta(seconds=1))
     assert later.id != original.id
     assert db.scalar(select(AccumulationScore.id).where(AccumulationScore.stock_id == "2330")) is not None
+
+
+def test_scheduled_catch_up_runs_all_phases_for_dynamic_multi_stock_universe() -> None:
+    import asyncio
+
+    from app.ingestion import catch_up
+    from app.models import JobRun
+
+    db, _ = _db()
+    end = date(2026, 8, 20)
+    sessions = expected_trading_sessions(end, 20)
+
+    class FakeClient:
+        def fetch(self, dataset: str, data_id: str | None = None, start_date: str | None = None, end_date: str | None = None, **_: object):
+            if dataset == "TaiwanStockInfo":
+                return ([{"stock_id": "2330", "stock_name": "Test A", "type": "twse", "security_type": "股票", "industry_category": "半導體業", "date": end}, {"stock_id": "2317", "stock_name": "Test B", "type": "twse", "security_type": "股票", "industry_category": "電子", "date": end}], {"source_date": end.isoformat()})
+            stock_ids = ["2330", "2317"]
+            rows: list[dict[str, object]] = []
+            for stock_id in stock_ids:
+                for day in sessions:
+                    if dataset == "TaiwanStockInstitutionalInvestorsBuySellWide":
+                        rows.append({"stock_id": stock_id, "date": day, "Foreign_Investor_buy": 10, "Foreign_Investor_sell": 1, "Foreign_Dealer_Self_buy": 2, "Foreign_Dealer_Self_sell": 1, "Investment_Trust_Buy": 3, "Investment_Trust_Sell": 1, "Dealer_Buy": 2, "Dealer_Sell": 1, "Dealer_self_Buy": 1, "Dealer_self_Sell": 0, "Dealer_Hedging_Buy": 1, "Dealer_Hedging_Sell": 0})
+                    elif dataset == "TaiwanStockShareholding":
+                        rows.append({"stock_id": stock_id, "date": day, "ForeignInvestmentShares": 100, "ForeignInvestmentSharesRatio": 10.0})
+                    elif dataset == "TaiwanStockPrice":
+                        rows.append({"stock_id": stock_id, "date": day, "close": 100, "TradingVolume": 1000})
+                    elif dataset == "TaiwanStockHoldingSharesPer" and day in (end - timedelta(days=28), end - timedelta(days=21), end - timedelta(days=14), end - timedelta(days=7), end):
+                        rows.append({"stock_id": stock_id, "date": day, "HoldingSharesLevel": "400,001-600,000", "percent": 10, "people": 1})
+            return rows, {"source_date": end.isoformat()}
+
+        async def fetch_broker_stocks(self, stock_ids: list[str], start_date: str, end_date: str):
+            return {"requested": len(stock_ids), "skipped_checkpoint": 0, "success": len(stock_ids), "failed": 0, "rows": len(stock_ids), "retries": 0, "_records": [{"stock_id": stock_id, "date": end, "securities_trader_id": "A", "buy_volume": 100, "sell_volume": 10} for stock_id in stock_ids]}
+
+    result = asyncio.run(catch_up(db, FakeClient()))
+    assert result["status"] in {"SUCCESS", "PARTIAL"}
+    assert set(result["datasets"]) >= {"TaiwanStockInfo", "TaiwanStockInstitutionalInvestorsBuySellWide", "TaiwanStockShareholding", "TaiwanStockHoldingSharesPer", "TaiwanStockPrice", "TaiwanStockTradingDailyReport"}
+    assert db.scalar(select(Stock.stock_id).where(Stock.is_common_stock.is_(True))) == "2330"
+    jobs = db.scalars(select(JobRun)).all()
+    assert {job.dataset for job in jobs} >= {"TaiwanStockInfo", "score", "TaiwanStockTradingDailyReport"}
