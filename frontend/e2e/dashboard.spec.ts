@@ -26,6 +26,7 @@ test("NAS detail exposes S-level charts, provenance and missing-data gaps", asyn
 });
 
 test("filters, rankings, freshness and score hash are exposed", async ({ page }) => {
+  await page.goto("/");
   const summary = await page.request.get("/api/summary");
   expect(summary.ok()).toBeTruthy();
   const summaryJson = await summary.json();

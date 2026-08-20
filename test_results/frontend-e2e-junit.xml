@@ -1,0 +1,59 @@
+<testsuites id="" name="" tests="4" failures="1" skipped="0" errors="0" time="9.854849">
+<testsuite name="dashboard.spec.ts" timestamp="2026-08-20T17:05:28.053Z" hostname="" tests="4" failures="1" skipped="0" time="9.19" errors="0">
+<testcase name="dashboard loads and exposes evidence controls" classname="dashboard.spec.ts" time="0.252">
+</testcase>
+<testcase name="search and insufficient-data state are visible" classname="dashboard.spec.ts" time="0.223">
+</testcase>
+<testcase name="NAS detail exposes S-level charts, provenance and missing-data gaps" classname="dashboard.spec.ts" time="2.031">
+</testcase>
+<testcase name="filters, rankings, freshness and score hash are exposed" classname="dashboard.spec.ts" time="6.684">
+<system-out>
+<![CDATA[
+[[ATTACHMENT|test-results\dashboard-filters-rankings-48909--and-score-hash-are-exposed\test-failed-1.png]]
+
+[[ATTACHMENT|test-results\dashboard-filters-rankings-48909--and-score-hash-are-exposed\error-context.md]]
+
+[[ATTACHMENT|test-results\dashboard-filters-rankings-48909--and-score-hash-are-exposed\trace.zip]]
+]]>
+</system-out>
+<failure message="expect(locator).toBeVisible() failed" type="expect.toBeVisible">
+<![CDATA[  dashboard.spec.ts:28:1 › filters, rankings, freshness and score hash are exposed ─────────────────
+
+    Error: expect(locator).toBeVisible() failed
+
+    Locator: locator('tbody tr.clickable').first()
+    Expected: visible
+    Timeout: 5000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeVisible" with timeout 5000ms
+      - waiting for locator('tbody tr.clickable').first()
+
+
+      39 |   await page.getByLabel("市場").selectOption("上市");
+      40 |   await page.getByLabel("狀態").selectOption("DATA_INSUFFICIENT");
+    > 41 |   await expect(page.locator("tbody tr.clickable").first()).toBeVisible();
+         |                                                            ^
+      42 | });
+      43 |
+        at D:\大戶緩慢建倉\frontend\e2e\dashboard.spec.ts:41:60
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    ..\test-results\dashboard-filters-rankings-48909--and-score-hash-are-exposed\test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: ..\test-results\dashboard-filters-rankings-48909--and-score-hash-are-exposed\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    ..\test-results\dashboard-filters-rankings-48909--and-score-hash-are-exposed\trace.zip
+    Usage:
+
+        npx playwright show-trace ..\test-results\dashboard-filters-rankings-48909--and-score-hash-are-exposed\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+]]>
+</failure>
+</testcase>
+</testsuite>
+</testsuites>
