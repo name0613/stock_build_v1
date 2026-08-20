@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 import json
+from datetime import datetime, timezone
+from pathlib import Path
 from datetime import date
 from typing import Any
 
@@ -44,6 +46,19 @@ def health(db: Session = Depends(get_db)) -> dict[str, Any]:
 @app.get("/api/score-spec")
 def score_spec() -> dict[str, Any]:
     return {"score_version": SCORE_VERSION, "formula_hash": FORMULA_HASH, "calendar_version": CALENDAR_VERSION, "spec": SCORE_MANIFEST}
+
+
+@app.get("/api/worker-health")
+def worker_health() -> dict[str, Any]:
+    path = Path(settings.worker_heartbeat_file)
+    try:
+        heartbeat = json.loads(path.read_text(encoding="utf-8"))
+        last = datetime.fromisoformat(str(heartbeat["last_heartbeat_at"]))
+        age_seconds = max(0, int((datetime.now(timezone.utc) - last).total_seconds()))
+    except (OSError, KeyError, TypeError, ValueError):
+        return {"status": "degraded", "ready": False, "reason": "heartbeat_missing"}
+    overdue = age_seconds > 90
+    return {"status": "degraded" if overdue or not heartbeat.get("ready") else "ok", "ready": bool(heartbeat.get("ready")) and not overdue, "age_seconds": age_seconds, "overdue": overdue, "heartbeat": heartbeat}
 
 
 @app.get("/api/summary")

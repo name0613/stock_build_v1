@@ -3,8 +3,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from threading import Thread
 from zoneinfo import ZoneInfo
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -53,6 +55,15 @@ def _reconcile_interrupted_jobs(db: object) -> None:
     db.commit()
 
 
+def _heartbeat_pulse() -> None:
+    while True:
+        time.sleep(30)
+        try:
+            _heartbeat()
+        except OSError:
+            logger.warning("worker heartbeat write failed")
+
+
 def run_catch_up() -> None:
     started = datetime.now(timezone.utc).isoformat()
     _heartbeat(status="running", ready=True, last_job_started_at=started, last_error_code=None)
@@ -71,6 +82,7 @@ def run_catch_up() -> None:
 def main() -> None:
     _heartbeat(status="starting", ready=False, scheduler_started_at=None)
     start_health_server(Path(settings.worker_heartbeat_file))
+    Thread(target=_heartbeat_pulse, daemon=True, name="worker-heartbeat-pulse").start()
     init_db()
     db = SessionLocal()
     _reconcile_interrupted_jobs(db)

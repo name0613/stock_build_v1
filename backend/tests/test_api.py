@@ -39,3 +39,11 @@ def test_api_contract_exposes_score_hash_filters_rankings_and_sync_counters() ->
     assert data_status.status_code == 200
     for row in data_status.json()["datasets"]:
         assert {"rows_received_this_attempt", "rows_accepted_this_attempt", "rows_rejected_this_attempt", "stored_rows_total"} <= set(row)
+
+
+def test_worker_health_contract_is_sanitized() -> None:
+    with TestClient(app) as client:
+        response = client.get("/api/worker-health")
+    assert response.status_code == 200
+    assert "token" not in response.text.lower()
+    assert "password" not in response.text.lower()
