@@ -190,7 +190,9 @@ def ingest_records(db: Session, dataset: str, records: list[dict[str, Any]]) -> 
                     raise SchemaMismatch("SCHEMA_MISMATCH", "holding source returned an unknown relevant bucket")
             stock = str(_v(row, "stock_id", "證券代號") or "")
             source_day = str(_v(row, "date", "source_date") or "")[:10]
-            bucket = str(level or "").strip()
+            from .scoring import parse_holding_level
+            parsed_threshold = _v(row, "holding_shares_threshold") or parse_holding_level(level)
+            bucket = f"threshold:{parsed_threshold}" if parsed_threshold is not None else str(level or "").strip().lower()
             key = (stock, source_day, bucket)
             if bucket and key in seen_buckets:
                 raise SchemaMismatch("SCHEMA_MISMATCH", "holding source returned a duplicate bucket for a stock/date")
