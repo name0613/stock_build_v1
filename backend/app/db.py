@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Generator
 from pathlib import Path
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from .config import get_settings
@@ -22,6 +22,8 @@ def init_db() -> None:
     Base.metadata.create_all(bind=engine)
     if engine.dialect.name == "postgresql":
         _apply_versioned_migrations()
+    elif engine.dialect.name == "sqlite":
+        _apply_sqlite_compatibility_migrations()
 
 
 def _apply_versioned_migrations() -> None:
@@ -44,6 +46,24 @@ def _apply_versioned_migrations() -> None:
                 continue
             connection.execute(text(path.read_text(encoding="utf-8")))
             connection.execute(text("INSERT INTO schema_migrations(version) VALUES (:version)"), {"version": version})
+
+
+def _apply_sqlite_compatibility_migrations() -> None:
+    """Keep the local test/development SQLite schema aligned with PostgreSQL."""
+    additions = {
+        "accumulation_features": {"knowledge_cutoff": "DATETIME", "input_snapshot_hash": "VARCHAR(64)"},
+        "accumulation_scores": {"knowledge_cutoff": "DATETIME", "input_snapshot_hash": "VARCHAR(64)", "input_source_hashes": "JSON", "formula_hash": "VARCHAR(64)"},
+        "data_sync_status": {"last_attempt_at": "DATETIME", "last_fetch_at": "DATETIME", "usable_records": "INTEGER DEFAULT 0", "stored_records": "INTEGER DEFAULT 0", "staleness_state": "VARCHAR(32)", "attempt_latest_source_date": "DATE", "expected_latest_source_date": "DATE", "source_age_days": "INTEGER", "rows_received_this_attempt": "INTEGER DEFAULT 0", "rows_accepted_this_attempt": "INTEGER DEFAULT 0", "rows_rejected_this_attempt": "INTEGER DEFAULT 0", "rows_versioned_this_attempt": "INTEGER DEFAULT 0", "stored_rows_total": "INTEGER DEFAULT 0"},
+        "job_runs": {"requested_start_date": "DATE", "requested_end_date": "DATE", "error_code": "VARCHAR(64)", "stocks_attempted": "INTEGER DEFAULT 0", "stocks_completed": "INTEGER DEFAULT 0", "stocks_failed": "INTEGER DEFAULT 0", "checkpoint_state": "JSON"},
+        "score_versions": {"manifest_hash": "VARCHAR(64)"},
+    }
+    inspector = inspect(engine)
+    with engine.begin() as connection:
+        for table, columns in additions.items():
+            existing = {column["name"] for column in inspector.get_columns(table)}
+            for name, sql_type in columns.items():
+                if name not in existing:
+                    connection.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {sql_type}"))
 
 
 def get_db() -> Generator[Session, None, None]:
