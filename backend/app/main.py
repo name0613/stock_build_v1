@@ -205,23 +205,31 @@ def _broker_summary(db: Session, stock_id: str) -> list[dict[str, Any]]:
     ).all()
     by_broker: dict[str, dict[str, Any]] = {}
     for row in rows:
-        item = by_broker.setdefault(row.securities_trader_id, {"securities_trader_id": row.securities_trader_id, "securities_trader_name": row.securities_trader_name, "buy_volume": None, "sell_volume": None, "net_volume": None, "positive_days": 0, "negative_days": 0, "missing_days": 0})
-        item["buy_volume"] = _nullable_add(item["buy_volume"], row.buy_volume)
-        item["sell_volume"] = _nullable_add(item["sell_volume"], row.sell_volume)
-        item["net_volume"] = _nullable_add(item["net_volume"], row.net_volume)
+        item = by_broker.setdefault(row.securities_trader_id, {"securities_trader_id": row.securities_trader_id, "securities_trader_name": row.securities_trader_name, "buy_volume": 0.0, "sell_volume": 0.0, "net_volume": 0.0, "_buy_missing": False, "_sell_missing": False, "_net_missing": False, "positive_days": 0, "negative_days": 0, "missing_days": 0})
+        _accumulate_nullable(item, "buy_volume", row.buy_volume)
+        _accumulate_nullable(item, "sell_volume", row.sell_volume)
+        _accumulate_nullable(item, "net_volume", row.net_volume)
         if row.net_volume is None:
             item["missing_days"] += 1
         elif row.net_volume > 0:
             item["positive_days"] += 1
         elif row.net_volume < 0:
             item["negative_days"] += 1
-    return sorted(by_broker.values(), key=lambda item: item["net_volume"] if item["net_volume"] is not None else float("-inf"), reverse=True)[:20]
+    output = []
+    for item in by_broker.values():
+        item = {key: value for key, value in item.items() if not key.startswith("_")}
+        output.append(item)
+    return sorted(output, key=lambda item: item["net_volume"] if item["net_volume"] is not None else float("-inf"), reverse=True)[:20]
 
 
-def _nullable_add(left: float | None, right: float | None) -> float | None:
-    if left is None or right is None:
-        return None
-    return left + right
+def _accumulate_nullable(item: dict[str, Any], field: str, value: float | None) -> None:
+    missing_key = f"_{field.removesuffix('_volume')}_missing"
+    if value is None:
+        item[missing_key] = True
+    elif not item[missing_key]:
+        item[field] += value
+    if item[missing_key]:
+        item[field] = None
 
 
 def _score_history(db: Session, stock_id: str, limit: int) -> list[dict[str, Any]]:
