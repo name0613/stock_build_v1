@@ -81,7 +81,7 @@ def run_catch_up() -> None:
     _heartbeat(status="running", ready=True, scheduler_ready=False, last_scheduler_heartbeat_at=started, last_job_started_at=started, last_error_code=None)
     db = SessionLocal()
     try:
-        result = asyncio.run(catch_up(db, FinMindClient(settings), end_date=_completed_source_end_date()))
+        result = asyncio.run(catch_up(db, FinMindClient(settings), end_date=_completed_source_end_date(), progress_callback=lambda phase: _heartbeat(last_job_progress_at=datetime.now(timezone.utc).isoformat(), job_phase=phase)))
         logger.info("catch-up completed status=%s datasets=%s", result.get("status"), result.get("datasets"))
         finished = datetime.now(timezone.utc).isoformat()
         _heartbeat(status="idle", ready=True, scheduler_ready=True, last_scheduler_heartbeat_at=finished, last_job_finished_at=finished, last_job_status=result.get("status"), last_error_code=result.get("fatal_code"))

@@ -26,3 +26,13 @@ def test_health_fails_stale_scheduler_and_prolonged_job() -> None:
     prolonged.update({"status": "running", "last_job_started_at": (now - timedelta(hours=7)).isoformat()})
     assert evaluate_health(prolonged, now)["prolonged_job"] is True
     assert evaluate_health(prolonged, now)["ready"] is False
+
+
+def test_running_job_requires_actual_phase_progress_not_only_process_pulse() -> None:
+    now = datetime.now(timezone.utc)
+    running = _payload(now)
+    running.update({"status": "running", "scheduler_ready": False, "last_job_started_at": (now - timedelta(minutes=16)).isoformat(), "last_job_progress_at": (now - timedelta(minutes=16)).isoformat()})
+    assert evaluate_health(running, now)["ready"] is False
+    assert evaluate_health(running, now)["stale"] is True
+    running["last_job_progress_at"] = (now - timedelta(seconds=30)).isoformat()
+    assert evaluate_health(running, now)["ready"] is True

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 import hashlib
 import json
-from typing import Any
+from typing import Any, Callable
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -526,12 +526,17 @@ def seed_score_version(db: Session) -> None:
         raise RuntimeError("score version manifest provenance is missing; create an explicit new score version")
 
 
-async def catch_up(db: Session, client: FinMindClient, end_date: date | None = None) -> dict[str, Any]:
+async def catch_up(db: Session, client: FinMindClient, end_date: date | None = None, progress_callback: Callable[[str], None] | None = None) -> dict[str, Any]:
     """Run the complete scheduled pipeline for the dynamic common-stock universe."""
+    def progress(phase: str) -> None:
+        if progress_callback:
+            progress_callback(phase)
+
     end = end_date or date.today()
     start = expected_trading_sessions(end, 20)[0]
     result: dict[str, Any] = {"status": "SUCCESS", "datasets": {}, "scores": {}, "source_coverage": {}}
     required = ["TaiwanStockInstitutionalInvestorsBuySellWide", "TaiwanStockShareholding", "TaiwanStockHoldingSharesPer", "TaiwanStockPrice"]
+    progress("TaiwanStockInfo")
     info_job = _job_start(db, "TaiwanStockInfo", end, end)
     try:
         info_count = sync_universe(db, client)
@@ -544,6 +549,7 @@ async def catch_up(db: Session, client: FinMindClient, end_date: date | None = N
         result["status"] = "PARTIAL"
     stock_ids = list(db.scalars(select(Stock.stock_id).where(Stock.is_common_stock.is_(True))).all())
     for dataset in required:
+        progress(dataset)
         job = _job_start(db, dataset, start, end, stocks_attempted=len(stock_ids))
         received = accepted = 0
         latest_dates: list[date] = []
@@ -596,6 +602,7 @@ async def catch_up(db: Session, client: FinMindClient, end_date: date | None = N
         result["provider_work_deferred"] = {"reason": "global provider failure; later source and broker requests were not launched", "error_code": fatal_code}
         return result
     broker_start = expected_trading_sessions(end, 20)[0]
+    progress("TaiwanStockTradingDailyReport")
     broker_job = _job_start(db, "TaiwanStockTradingDailyReport", broker_start, end, stocks_attempted=len(stock_ids))
     broker_metrics: dict[str, Any] = {}
     broker_buffer: list[dict[str, Any]] = []
@@ -639,6 +646,7 @@ async def catch_up(db: Session, client: FinMindClient, end_date: date | None = N
         result["scores"] = {status: count for status, count in db.execute(select(AccumulationScore.status, func.count()).where(AccumulationScore.source_date == end, AccumulationScore.score_version == SCORE_VERSION, AccumulationScore.knowledge_cutoff.is_not(None)).group_by(AccumulationScore.status)).all()}
         return result
     score_job = _job_start(db, "score", end, end, stocks_attempted=len(stock_ids))
+    progress("score")
     for stock_id in stock_ids:
         try:
             score = calculate_stock_features_and_score(db, stock_id, end)

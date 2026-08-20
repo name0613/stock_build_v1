@@ -27,7 +27,21 @@ def evaluate_health(payload: dict[str, Any], now: datetime | None = None) -> dic
         return {"status": "degraded", "ready": False, "reason": "heartbeat_or_scheduler_progress_missing"}
     process_ready = bool(payload.get("ready")) and payload.get("status") in {"running", "idle"}
     scheduler_ready = bool(payload.get("scheduler_ready"))
-    stale = heartbeat_age > 90 or scheduler_age > 180
+    progress_age = scheduler_age
+    progress_deadline = 180
+    job_progress_active = False
+    if payload.get("status") == "running":
+        try:
+            progress_at = datetime.fromisoformat(str(payload.get("last_job_progress_at")))
+            progress_age = max(0, int((now - progress_at).total_seconds()))
+            job_progress_active = progress_age <= 900
+        except (TypeError, ValueError):
+            progress_age = scheduler_age
+        # A provider window can legitimately run for several minutes.  The
+        # phase timestamp is written by catch_up itself; pulse-only updates do
+        # not satisfy this contract.
+        progress_deadline = 900
+    stale = heartbeat_age > 90 or (progress_age > progress_deadline)
     scheduler_contract_missing = False
     if scheduler_ready:
         try:
@@ -41,8 +55,9 @@ def evaluate_health(payload: dict[str, Any], now: datetime | None = None) -> dic
             prolonged = (now - datetime.fromisoformat(str(payload["last_job_started_at"]))).total_seconds() > 6 * 60 * 60
         except ValueError:
             prolonged = True
-    ready = process_ready and scheduler_ready and not stale and not prolonged and not scheduler_contract_missing
-    return {"status": "ok" if ready else "degraded", "ready": ready, "heartbeat_age_seconds": heartbeat_age, "scheduler_age_seconds": scheduler_age, "stale": stale, "prolonged_job": prolonged, "scheduler_ready": scheduler_ready, "scheduler_contract_missing": scheduler_contract_missing, "heartbeat": payload}
+    scheduler_operational = scheduler_ready or job_progress_active
+    ready = process_ready and scheduler_operational and not stale and not prolonged and not scheduler_contract_missing
+    return {"status": "ok" if ready else "degraded", "ready": ready, "heartbeat_age_seconds": heartbeat_age, "scheduler_age_seconds": scheduler_age, "progress_age_seconds": progress_age, "progress_deadline_seconds": progress_deadline, "stale": stale, "prolonged_job": prolonged, "scheduler_ready": scheduler_ready, "job_progress_active": job_progress_active, "scheduler_contract_missing": scheduler_contract_missing, "heartbeat": payload}
 
 
 def start_health_server(path: Path, port: int = 8001) -> ThreadingHTTPServer:
