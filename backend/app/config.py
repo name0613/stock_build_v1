@@ -19,9 +19,10 @@ class Settings(BaseSettings):
     finmind_base_url: str = "https://api.finmindtrade.com/api/v4"
     raw_root: Path = Path("data/raw")
     timezone: str = "Asia/Taipei"
-    score_version: str = "s-only-v2"
+    score_version: str = "s-only-v3"
     broker_concurrency: int = 4
     broker_rate_per_second: float = 4.0
+    provider_rate_per_second: float = 4.0
     broker_max_retries: int = 4
     source_concurrency: int = 6
     source_rate_per_second: float = 4.0

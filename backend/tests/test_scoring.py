@@ -104,3 +104,15 @@ def test_score_golden_vector_and_complete_spec_hash() -> None:
     mutated["formulas"] = {**SCORE_MANIFEST["formulas"], "final": {**SCORE_MANIFEST["formulas"]["final"], "rounding": "round(score, 3)"}}
     mutated_hash = hashlib.sha256(json.dumps(mutated, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     assert mutated_hash != FORMULA_HASH
+
+
+def test_calendar_manifest_is_content_bound_and_provenance_visible() -> None:
+    import hashlib
+    import json
+
+    from app.calendar import CALENDAR_HASH, CALENDAR_MANIFEST, calendar_snapshot
+    canonical = json.dumps(CALENDAR_MANIFEST, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    assert hashlib.sha256(canonical).hexdigest() == CALENDAR_HASH
+    assert calendar_snapshot()["calendar_hash"] == CALENDAR_HASH
+    mutated = {**CALENDAR_MANIFEST, "holidays": [*CALENDAR_MANIFEST["holidays"], "2026-11-11"]}
+    assert hashlib.sha256(json.dumps(mutated, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest() != CALENDAR_HASH

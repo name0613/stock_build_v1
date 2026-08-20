@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
+import hashlib
+import json
 
 CALENDAR_VERSION = "tw-exchange-2026-v1"
 CALENDAR_COVERAGE_START = date(2026, 1, 1)
@@ -20,6 +22,8 @@ TW_HOLIDAYS = {
     date(2026, 4, 6), date(2026, 5, 1), date(2026, 6, 19), date(2026, 9, 25),
     date(2026, 10, 9), date(2026, 10, 26), date(2026, 12, 25),
 }
+CALENDAR_MANIFEST = {"version": CALENDAR_VERSION, "coverage_start": CALENDAR_COVERAGE_START.isoformat(), "coverage_end": CALENDAR_COVERAGE_END.isoformat(), "holidays": sorted(day.isoformat() for day in TW_HOLIDAYS)}
+CALENDAR_HASH = hashlib.sha256(json.dumps(CALENDAR_MANIFEST, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 def is_trading_session(day: date, holidays: set[date] | None = None) -> bool:
@@ -41,7 +45,7 @@ def expected_trading_sessions(end: date, count: int, holidays: set[date] | None 
 
 
 def calendar_snapshot() -> dict[str, object]:
-    return {"version": CALENDAR_VERSION, "coverage_start": CALENDAR_COVERAGE_START.isoformat(), "coverage_end": CALENDAR_COVERAGE_END.isoformat(), "holiday_count": len(TW_HOLIDAYS)}
+    return {**CALENDAR_MANIFEST, "holiday_count": len(TW_HOLIDAYS), "calendar_hash": CALENDAR_HASH}
 
 
 def missing_sessions(observed: list[date], end: date, count: int) -> list[str]:
