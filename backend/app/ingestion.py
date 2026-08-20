@@ -5,7 +5,7 @@ import hashlib
 import json
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .calendar import expected_trading_sessions, missing_sessions
@@ -384,6 +384,7 @@ async def catch_up(db: Session, client: FinMindClient) -> dict[str, Any]:
             result["status"] = "PARTIAL"
     stock_ids = list(db.scalars(select(Stock.stock_id).where(Stock.is_common_stock.is_(True))).all())
     broker_job = _job_start(db, "TaiwanStockTradingDailyReport", end, end, stocks_attempted=len(stock_ids))
+    broker_metrics: dict[str, Any] = {}
     try:
         broker_metrics = await client.fetch_broker_stocks(stock_ids, end.isoformat(), end.isoformat())
         broker_records = broker_metrics.pop("_records", [])
@@ -400,6 +401,12 @@ async def catch_up(db: Session, client: FinMindClient) -> dict[str, Any]:
         _job_finish(db, broker_job, "FAILED", error_code=code, error=str(exc), stocks_failed=len(stock_ids))
         result["datasets"]["TaiwanStockTradingDailyReport"] = {"status": "FAILED", "error_code": code}
         result["status"] = "PARTIAL"
+    existing_score_count = db.scalar(select(func.count()).select_from(AccumulationScore).where(AccumulationScore.source_date == end, AccumulationScore.score_version == SCORE_VERSION)) or 0
+    if broker_metrics.get("skipped_checkpoint", 0) >= len(stock_ids) and existing_score_count >= len(stock_ids):
+        score_job = _job_start(db, "score", end, end, stocks_attempted=len(stock_ids))
+        _job_finish(db, score_job, "SUCCESS", stocks_completed=len(stock_ids), checkpoint_state={"reused_existing_scores": True})
+        result["scores"] = {status: count for status, count in db.execute(select(AccumulationScore.status, func.count()).where(AccumulationScore.source_date == end, AccumulationScore.score_version == SCORE_VERSION).group_by(AccumulationScore.status)).all()}
+        return result
     score_job = _job_start(db, "score", end, end, stocks_attempted=len(stock_ids))
     for stock_id in stock_ids:
         try:
