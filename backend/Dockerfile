@@ -17,6 +17,7 @@ RUN pip install --no-cache-dir -r requirements.lock \
 COPY backend/app ./app
 COPY backend/tests ./tests
 COPY migrations ./migrations
+COPY scripts ./scripts
 RUN addgroup --gid 1000 app && adduser --uid 1000 --gid 1000 --disabled-password --gecos "" app \
     && mkdir -p /data/raw && chown -R app:app /app /data/raw
 USER app
