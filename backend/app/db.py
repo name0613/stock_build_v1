@@ -19,11 +19,13 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False
 
 def init_db() -> None:
     Base.metadata.create_all(bind=engine)
+    timestamp_type = "TIMESTAMPTZ" if engine.dialect.name == "postgresql" else "DATETIME"
+    json_type = "JSONB" if engine.dialect.name == "postgresql" else "JSON"
     additive_columns = {
-        "accumulation_features": {"knowledge_cutoff": "DATETIME", "input_snapshot_hash": "VARCHAR(64)"},
-        "accumulation_scores": {"knowledge_cutoff": "DATETIME", "input_snapshot_hash": "VARCHAR(64)", "input_source_hashes": "JSON", "formula_hash": "VARCHAR(64)"},
-        "data_sync_status": {"last_attempt_at": "DATETIME", "last_fetch_at": "DATETIME", "usable_records": "INTEGER DEFAULT 0", "stored_records": "INTEGER DEFAULT 0", "staleness_state": "VARCHAR(32)"},
-        "job_runs": {"requested_start_date": "DATE", "requested_end_date": "DATE", "error_code": "VARCHAR(64)", "stocks_attempted": "INTEGER DEFAULT 0", "stocks_completed": "INTEGER DEFAULT 0", "stocks_failed": "INTEGER DEFAULT 0", "checkpoint_state": "JSON"},
+        "accumulation_features": {"knowledge_cutoff": timestamp_type, "input_snapshot_hash": "VARCHAR(64)"},
+        "accumulation_scores": {"knowledge_cutoff": timestamp_type, "input_snapshot_hash": "VARCHAR(64)", "input_source_hashes": json_type, "formula_hash": "VARCHAR(64)"},
+        "data_sync_status": {"last_attempt_at": timestamp_type, "last_fetch_at": timestamp_type, "usable_records": "INTEGER DEFAULT 0", "stored_records": "INTEGER DEFAULT 0", "staleness_state": "VARCHAR(32)"},
+        "job_runs": {"requested_start_date": "DATE", "requested_end_date": "DATE", "error_code": "VARCHAR(64)", "stocks_attempted": "INTEGER DEFAULT 0", "stocks_completed": "INTEGER DEFAULT 0", "stocks_failed": "INTEGER DEFAULT 0", "checkpoint_state": json_type},
         "score_versions": {"manifest_hash": "VARCHAR(64)"},
     }
     inspector = inspect(engine)
