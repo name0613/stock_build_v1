@@ -24,6 +24,12 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+      args:
+        SOURCE_REVISION: ${SOURCE_REVISION:-unknown}
+        BACKEND_LOCK_SHA256: ${BACKEND_LOCK_SHA256:-unknown}
+        SCORE_SPEC_HASH: ${SCORE_SPEC_HASH:-unknown}
+        CALENDAR_HASH: ${CALENDAR_HASH:-unknown}
+        BUILD_TIMESTAMP: ${BUILD_TIMESTAMP:-unknown}
     environment:
       DATABASE_PASSWORD_FILE: /run/secrets/postgres_password
       FINMIND_API_TOKEN_FILE: /run/secrets/finmind_api_token
@@ -55,6 +61,12 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+      args:
+        SOURCE_REVISION: ${SOURCE_REVISION:-unknown}
+        BACKEND_LOCK_SHA256: ${BACKEND_LOCK_SHA256:-unknown}
+        SCORE_SPEC_HASH: ${SCORE_SPEC_HASH:-unknown}
+        CALENDAR_HASH: ${CALENDAR_HASH:-unknown}
+        BUILD_TIMESTAMP: ${BUILD_TIMESTAMP:-unknown}
     command: ["python", "-m", "app.worker"]
     environment:
       DATABASE_PASSWORD_FILE: /run/secrets/postgres_password
@@ -87,6 +99,10 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        SOURCE_REVISION: ${SOURCE_REVISION:-unknown}
+        FRONTEND_LOCK_SHA256: ${FRONTEND_LOCK_SHA256:-unknown}
+        BUILD_TIMESTAMP: ${BUILD_TIMESTAMP:-unknown}
     depends_on:
       api: {condition: service_healthy}
     networks: [internal]

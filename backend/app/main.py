@@ -48,6 +48,16 @@ def score_spec() -> dict[str, Any]:
     return {"score_version": SCORE_VERSION, "formula_hash": FORMULA_HASH, "calendar_version": CALENDAR_VERSION, "spec": SCORE_MANIFEST}
 
 
+@app.get("/api/build-metadata")
+def build_metadata() -> dict[str, Any]:
+    path = Path("/app/build-metadata.json")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, TypeError, ValueError):
+        payload = {"source_revision": "development", "build_metadata_available": False}
+    return {**payload, "build_metadata_available": True}
+
+
 @app.get("/api/worker-health")
 def worker_health() -> dict[str, Any]:
     path = Path(settings.worker_heartbeat_file)

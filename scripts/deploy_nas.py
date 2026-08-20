@@ -6,6 +6,9 @@ import posixpath
 import secrets
 import shlex
 import subprocess
+import hashlib
+from datetime import datetime, timezone
+import sys
 from pathlib import Path
 
 try:
@@ -15,6 +18,12 @@ except ImportError as exc:  # pragma: no cover
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE_REVISION = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+BACKEND_LOCK_SHA256 = hashlib.sha256((ROOT / "backend/requirements.lock").read_bytes()).hexdigest()
+FRONTEND_LOCK_SHA256 = hashlib.sha256((ROOT / "frontend/package-lock.json").read_bytes()).hexdigest()
+sys.path.insert(0, str(ROOT))
+from backend.app.calendar import CALENDAR_HASH  # noqa: E402
+from backend.app.scoring import FORMULA_HASH  # noqa: E402
+BUILD_TIMESTAMP = datetime.now(timezone.utc).isoformat()
 HOST = os.getenv("NAS_HOST", "192.168.31.138")
 USER = os.getenv("NAS_USER")
 PASSWORD = os.getenv("NAS_PASSWORD")
@@ -145,6 +154,7 @@ def main() -> None:
             sftp.chmod(token_path, 0o600)
             env_file = sftp.file(env_path, "w")
             env_file.write("# Production credentials are mounted as Compose secrets.\n")
+            env_file.write(f"SOURCE_REVISION={SOURCE_REVISION}\nBACKEND_LOCK_SHA256={BACKEND_LOCK_SHA256}\nFRONTEND_LOCK_SHA256={FRONTEND_LOCK_SHA256}\nSCORE_SPEC_HASH={FORMULA_HASH}\nCALENDAR_HASH={CALENDAR_HASH}\nBUILD_TIMESTAMP={BUILD_TIMESTAMP}\n")
             env_file.close()
             sftp.chmod(env_path, 0o600)
         else:
@@ -152,6 +162,11 @@ def main() -> None:
                 sftp.stat(token_path)
             except OSError as exc:
                 raise RuntimeError("FINMIND_API_TOKEN is required for the first NAS deployment") from exc
+            env_file = sftp.file(env_path, "w")
+            env_file.write("# Production credentials are mounted as Compose secrets.\n")
+            env_file.write(f"SOURCE_REVISION={SOURCE_REVISION}\nBACKEND_LOCK_SHA256={BACKEND_LOCK_SHA256}\nFRONTEND_LOCK_SHA256={FRONTEND_LOCK_SHA256}\nSCORE_SPEC_HASH={FORMULA_HASH}\nCALENDAR_HASH={CALENDAR_HASH}\nBUILD_TIMESTAMP={BUILD_TIMESTAMP}\n")
+            env_file.close()
+            sftp.chmod(env_path, 0o600)
         secret_path = to_sftp_path(posixpath.join(project, "secrets/postgres_password"), sftp_prefix)
         try:
             sftp.stat(secret_path)
