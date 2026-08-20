@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime
-
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
 
@@ -46,4 +44,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

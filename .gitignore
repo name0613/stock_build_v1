@@ -16,6 +16,6 @@ review_bundle_*.zip
 review_bundle_*/
 screenshots/
 *.log
+*.db
 secrets/
 .DS_Store
-

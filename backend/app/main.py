@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timezone
+from datetime import date
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query
@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from .config import get_settings
 from .db import get_db, init_db
 from .ingestion import seed_score_version
-from .models import AccumulationFeature, AccumulationScore, BrokerDaily, DataSyncStatus, ForeignShareholdingDaily, HoldingDistribution, InstitutionalDaily, JobRun, PriceDaily, ScoreVersion, Stock
+from .models import AccumulationFeature, AccumulationScore, BrokerDaily, DataSyncStatus, ForeignShareholdingDaily, HoldingDistribution, InstitutionalDaily, JobRun, PriceDaily, Stock
 from .schemas import PaginatedStocks, StockListItem
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -177,4 +177,3 @@ def _source_status(db: Session, stock_id: str) -> dict[str, Any]:
     for name, model in mapping.items():
         result[name] = {"dataset": getattr(model, "__tablename__", name), "latest_source_date": db.scalar(select(func.max(model.source_date)).where(model.stock_id == stock_id)), "row_count": db.scalar(select(func.count()).select_from(model).where(model.stock_id == stock_id)) or 0}
     return result
-

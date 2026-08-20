@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import date
 from typing import Any
 
 from .scoring import one_day_spike_ratio, parse_holding_level, positive_day_ratio, rolling_sum, slope
@@ -159,6 +158,12 @@ def price_features(rows: list[dict[str, Any]]) -> dict[str, Any]:
     return out
 
 
+def _return(values: list[float | None], window: int) -> float | None:
+    if len(values) < window + 1 or values[-1] is None or values[-window - 1] in (None, 0):
+        return None
+    return float(values[-1] / values[-window - 1] - 1)
+
+
 def build_features(institutional: list[dict[str, Any]], foreign: list[dict[str, Any]], holdings: list[dict[str, Any]], brokers: list[dict[str, Any]], prices: list[dict[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     result.update(institutional_features(institutional))
@@ -177,4 +182,3 @@ def build_features(institutional: list[dict[str, Any]], foreign: list[dict[str, 
     result.update(broker_features(brokers))
     result.update(price_features(price_rows))
     return result
-

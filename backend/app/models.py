@@ -63,6 +63,7 @@ class HoldingDistribution(Base):
     holding_shares_threshold: Mapped[int | None] = mapped_column(Integer, nullable=True)
     people: Mapped[float | None] = mapped_column(Float, nullable=True)
     percent: Mapped[float | None] = mapped_column(Float, nullable=True)
+    shares: Mapped[float | None] = mapped_column(Float, nullable=True)
     unit: Mapped[str | None] = mapped_column(String(32), nullable=True)
     source_dataset: Mapped[str] = mapped_column(String(100))
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
@@ -173,4 +174,3 @@ class MajorShareholderDisclosure(Base):
     change: Mapped[float | None] = mapped_column(Float, nullable=True)
     source: Mapped[str] = mapped_column(String(255))
     __table_args__ = (UniqueConstraint("stock_id", "holder", "declare_date", name="uq_major_holder_date"),)
-

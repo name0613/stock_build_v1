@@ -1,20 +1,18 @@
 from __future__ import annotations
 
-import asyncio
 from datetime import date, datetime, timezone
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .config import get_settings
 from .features import build_features
 from .finmind import FinMindClient
 from .models import (
     AccumulationFeature, AccumulationScore, BrokerDaily, DataSyncStatus, ForeignShareholdingDaily,
-    HoldingDistribution, InstitutionalDaily, JobRun, PriceDaily, ScoreVersion, Stock,
+    HoldingDistribution, InstitutionalDaily, PriceDaily, ScoreVersion, Stock,
 )
-from .scoring import SCORE_VERSION, WEIGHTS, calculate_score, classify_score
+from .scoring import SCORE_VERSION, WEIGHTS, calculate_score
 
 
 def _v(row: dict[str, Any], *keys: str) -> Any:
@@ -97,7 +95,7 @@ def normalize_holding(row: dict[str, Any], fetched_at: datetime | None = None) -
         return None
     people = _num(_v(row, "people", "People"))
     percent = _num(_v(row, "percent", "Percent"))
-    return {"stock_id": stock_id, "source_date": source_date, "holding_shares_level": str(level), "holding_shares_threshold": threshold, "people": people, "percent": percent, "unit": _v(row, "unit", "Unit"), "source_dataset": "TaiwanStockHoldingSharesPer", "fetched_at": fetched_at or _now()}
+    return {"stock_id": stock_id, "source_date": source_date, "holding_shares_level": str(level), "holding_shares_threshold": threshold, "people": people, "percent": percent, "shares": _num(_v(row, "shares", "Shares", "HoldingShares")), "unit": _v(row, "unit", "Unit"), "source_dataset": "TaiwanStockHoldingSharesPer", "fetched_at": fetched_at or _now()}
 
 
 def normalize_broker(row: dict[str, Any], fetched_at: datetime | None = None, dataset: str = "TaiwanStockTradingDailyReport") -> dict[str, Any] | None:
@@ -203,7 +201,8 @@ def calculate_stock_features_and_score(db: Session, stock_id: str, as_of: date |
     holding_rows = db.scalars(select(HoldingDistribution).where(HoldingDistribution.stock_id == stock_id, HoldingDistribution.source_date <= as_of).order_by(HoldingDistribution.source_date.desc()).limit(100)).all()
     broker_rows = db.scalars(select(BrokerDaily).where(BrokerDaily.stock_id == stock_id, BrokerDaily.source_date <= as_of).order_by(BrokerDaily.source_date.desc()).limit(10000)).all()
     price_rows = db.scalars(select(PriceDaily).where(PriceDaily.stock_id == stock_id, PriceDaily.source_date <= as_of).order_by(PriceDaily.source_date.desc()).limit(21)).all()
-    to_dict = lambda row: {k: getattr(row, k) for k in row.__table__.columns.keys()}
+    def to_dict(row: Any) -> dict[str, Any]:
+        return {k: getattr(row, k) for k in row.__table__.columns.keys()}
     inst = [to_dict(r) for r in reversed(inst_rows)]
     foreign = [to_dict(r) for r in reversed(foreign_rows)]
     holdings = [to_dict(r) for r in reversed(holding_rows)]

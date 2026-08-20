@@ -1,9 +1,5 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
-
-import pytest
-
 from app.features import broker_features, holding_distribution_features, institutional_features
 from app.scoring import classify_score, calculate_score, one_day_spike_ratio, parse_holding_level, positive_day_ratio, rolling_sum
 
@@ -93,4 +89,3 @@ def test_historical_score_does_not_change_when_future_row_arrives() -> None:
     day21_score = calculate_score(future, full_coverage())
     assert day20.score == future_score_as_day20.score
     assert day21_score.score != day20.score
-
