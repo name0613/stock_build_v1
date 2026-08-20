@@ -9,6 +9,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+COPY_IGNORE = shutil.ignore_patterns(
+    ".env", "*.db", "*.pyc", "__pycache__", ".pytest_cache", ".ruff_cache",
+    "node_modules", ".venv", "dist", "raw", "postgres",
+)
 
 
 def sha256(path: Path) -> str:
@@ -25,7 +29,7 @@ def copy_tree(relative: str, target: Path) -> None:
         return
     destination = target / relative
     if source.is_dir():
-        shutil.copytree(source, destination, dirs_exist_ok=True, ignore=shutil.ignore_patterns(".env", "*.db", "node_modules", ".venv", "dist", "raw", "postgres"))
+        shutil.copytree(source, destination, dirs_exist_ok=True, ignore=COPY_IGNORE)
     else:
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, destination)
@@ -48,7 +52,7 @@ def create_bundle() -> tuple[Path, str]:
         source = ROOT / folder
         destination = bundle_dir / folder
         if source.is_dir():
-            shutil.copytree(source, destination, dirs_exist_ok=True, ignore=shutil.ignore_patterns(".env", "*.db", "node_modules", ".venv", "dist", "raw", "postgres"))
+            shutil.copytree(source, destination, dirs_exist_ok=True, ignore=COPY_IGNORE)
         else:
             destination.mkdir(exist_ok=True)
     manifest = []
