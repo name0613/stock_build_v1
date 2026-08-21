@@ -169,6 +169,22 @@ def test_global_broker_fatal_stops_queue_promptly(monkeypatch: pytest.MonkeyPatc
     assert len(calls) == 1
 
 
+def test_unverified_empty_broker_response_stops_queue_promptly(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import asyncio
+
+    calls: list[str] = []
+    client = FinMindClient(Settings(raw_root=tmp_path, broker_max_retries=0, broker_concurrency=1))
+
+    def empty(stock_id: str, *_args, **_kwargs):
+        calls.append(stock_id)
+        return [], {"attempt": 1}
+
+    monkeypatch.setattr(client, "fetch", empty)
+    result = asyncio.run(client.fetch_broker_stocks([str(index) for index in range(100)], "2026-08-20", "2026-08-20"))
+    assert result["fatal_code"] == "EMPTY_RESPONSE_UNVERIFIED"
+    assert len(calls) == 1
+
+
 def test_source_checkpoint_resumes_finite_quota_without_repeating_completed_stock(tmp_path: Path) -> None:
     import asyncio
 

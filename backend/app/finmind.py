@@ -28,6 +28,13 @@ CHECKPOINT_SCHEMA_VERSION = "2026-08-21-v2"
 INCREMENTAL_CHECKPOINT_VERSION = "2026-08-21-incremental-v3"
 NORMALIZATION_POLICY_VERSION = "s-only-normalization-v3"
 REQUEST_POLICY_VERSION = "finmind-request-policy-v3"
+GLOBAL_PROVIDER_FAILURE_CODES = frozenset({
+    "AUTHENTICATION_FAILED",
+    "ACCESS_DENIED",
+    "QUOTA_EXHAUSTED",
+    "SCHEMA_MISMATCH",
+    "EMPTY_RESPONSE_UNVERIFIED",
+})
 
 
 def _date_range(start: date, end: date) -> list[date]:
@@ -380,7 +387,7 @@ class FinMindClient:
                         await persist()
                 except FinMindError as exc:
                     async with checkpoint_lock:
-                        global_fatal = exc.code in {"AUTHENTICATION_FAILED", "ACCESS_DENIED", "QUOTA_EXHAUSTED", "SCHEMA_MISMATCH"}
+                        global_fatal = exc.code in GLOBAL_PROVIDER_FAILURE_CODES
                         permanent = exc.code in {"NON_RETRYABLE_4XX"}
                         retryable = not (global_fatal or permanent)
                         failed_by_key = {item.get("key"): item for item in checkpoint.setdefault("failed", [])}
@@ -507,7 +514,7 @@ class FinMindClient:
                 try:
                     records, meta = await asyncio.to_thread(self.fetch, dataset, stock_id, request_start, request_end)
                 except FinMindError as exc:
-                    global_fatal = exc.code in {"AUTHENTICATION_FAILED", "ACCESS_DENIED", "QUOTA_EXHAUSTED", "SCHEMA_MISMATCH"}
+                    global_fatal = exc.code in GLOBAL_PROVIDER_FAILURE_CODES
                     await mark_failure(stock_id, exc.code, "global_fatal" if global_fatal else ("permanent_failed" if exc.code == "NON_RETRYABLE_4XX" else "retryable_failed"), global_fatal=global_fatal)
                     return
                 try:

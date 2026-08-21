@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from .calendar import CALENDAR_VERSION, expected_trading_sessions, missing_sessions
 from .features import build_features
-from .finmind import FinMindClient, SchemaMismatch
+from .finmind import GLOBAL_PROVIDER_FAILURE_CODES, FinMindClient, SchemaMismatch
 from .models import (
     AccumulationFeature, AccumulationScore, BrokerDaily, DataSyncStatus, ForeignShareholdingDaily,
     HoldingDistribution, InstitutionalDaily, JobRun, PriceDaily, ScoreVersion, SourceRevision, Stock,
@@ -606,7 +606,7 @@ async def catch_up(db: Session, client: FinMindClient, end_date: date | None = N
             _mark_sync(db, dataset, "FAILED", accepted, None, code, str(exc), fetched_at=_now(), expected_latest=_expected_latest_source_date(dataset, end), rows_received=received, rows_accepted=accepted, rows_rejected=max(0, received - accepted), stored_total=_stored_rows_total(db, dataset))
             result["datasets"][dataset] = {"status": "FAILED", "error_code": code}
             result["status"] = "PARTIAL"
-            if code in {"AUTHENTICATION_FAILED", "ACCESS_DENIED", "QUOTA_EXHAUSTED", "SCHEMA_MISMATCH"}:
+            if code in GLOBAL_PROVIDER_FAILURE_CODES:
                 result["fatal_code"] = code
                 break
     fatal_code = result.get("fatal_code")
@@ -644,6 +644,13 @@ async def catch_up(db: Session, client: FinMindClient, end_date: date | None = N
         result["datasets"]["TaiwanStockTradingDailyReport"] = {**broker_metrics, "stored_records": stored, "status": broker_status}
         if broker_status not in {"SUCCESS", "REUSED"}:
             result["status"] = "PARTIAL"
+        if broker_metrics.get("fatal_code"):
+            result["fatal_code"] = broker_metrics["fatal_code"]
+            result["provider_work_deferred"] = {
+                "reason": "global provider failure; scoring was not launched after broker work stopped",
+                "error_code": broker_metrics["fatal_code"],
+            }
+            return result
     except Exception as exc:
         db.rollback()
         code = getattr(exc, "code", "UNEXPECTED")
