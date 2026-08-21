@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import shutil
 import stat
 import zipfile
@@ -35,6 +36,18 @@ def copy_tree(relative: str, target: Path) -> None:
         shutil.copy2(source, destination)
 
 
+def docker_copy_inputs(dockerfile: Path) -> list[str]:
+    """Return source paths referenced by COPY instructions in a Dockerfile."""
+    inputs: list[str] = []
+    for line in dockerfile.read_text(encoding="utf-8").splitlines():
+        match = re.match(r"\s*COPY\s+(?:--[^ ]+\s+)*(.+?)\s+[^ ]+\s*$", line)
+        if not match:
+            continue
+        sources = match.group(1).split()
+        inputs.extend(source for source in sources if not source.startswith("--"))
+    return inputs
+
+
 def create_bundle() -> tuple[Path, str]:
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     bundle_dir = ROOT / f"review_bundle_{timestamp}"
@@ -44,17 +57,24 @@ def create_bundle() -> tuple[Path, str]:
         "backend/requirements.lock",
         "frontend/src", "frontend/e2e", "frontend/Dockerfile", "frontend/package.json",
         "frontend/package-lock.json", "frontend/playwright.config.ts", "frontend/vite.config.ts",
-        "frontend/tsconfig.json", "frontend/index.html", "migrations", "nginx", "scripts",
+        "frontend/tsconfig.json", "frontend/index.html", "fixtures", "migrations", "nginx", "scripts",
         "README.md", "ARCHITECTURE.md", "DATA_SOURCES.md", "SCORING.md", "DEPLOYMENT.md",
         "OPERATIONS.md", "SECURITY.md", "REVIEW_INSTRUCTIONS.md", "docker-compose.yml", ".env.example",
     ]
     required_build_inputs = [
         "backend/Dockerfile", "backend/requirements.lock", "frontend/Dockerfile",
-        "frontend/package-lock.json", "docker-compose.yml",
+        "frontend/package-lock.json", "docker-compose.yml", "fixtures",
     ]
     missing = [relative for relative in required_build_inputs if not (ROOT / relative).exists()]
     if missing:
         raise RuntimeError(f"required reviewer build inputs are missing: {', '.join(missing)}")
+    docker_inputs = docker_copy_inputs(ROOT / "backend/Dockerfile")
+    missing_docker_inputs = [relative for relative in docker_inputs if not (ROOT / relative).exists()]
+    if missing_docker_inputs:
+        raise RuntimeError(f"backend Dockerfile COPY inputs are missing: {', '.join(missing_docker_inputs)}")
+    fixture_test = ROOT / "backend/tests/test_contract_fixtures.py"
+    if not (ROOT / "fixtures").is_dir() or not fixture_test.exists():
+        raise RuntimeError("reviewer bundle must include fixtures/ and its contract-fixture test")
     for relative in ("ARCHITECTURE.md", "SCORING.md", "OPERATIONS.md"):
         content = (ROOT / relative).read_text(encoding="utf-8")
         if "s-only-v2" in content:
