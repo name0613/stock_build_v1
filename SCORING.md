@@ -1,6 +1,6 @@
 # Scoring
 
-`score_version = s-only-v3`; the backend publishes the complete machine-readable formula specification at `/api/score-spec` and hashes every constant, transform, cap, threshold, window and missing-data rule into SHA-256 `formula_hash`. A material formula or source-policy change requires a new score version.
+`score_version = s-only-v4`; the backend publishes the complete machine-readable formula specification at `/api/score-spec` and hashes every constant, transform, cap, threshold, window and missing-data rule into SHA-256 `formula_hash`. A material formula or source-policy change requires a new score version. v4 makes explicit null broker rows unavailable and adds the authoritative current-provider gate; prior v3 scores remain historical and provenance-bound.
 
 The base score is a weighted blend:
 

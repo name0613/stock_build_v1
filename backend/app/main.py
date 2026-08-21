@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from .config import get_settings
 from .db import get_db, init_db
+from .finmind import GLOBAL_PROVIDER_FAILURE_CODES
 from .ingestion import seed_score_version
 from .models import AccumulationFeature, AccumulationScore, BrokerDaily, DataSyncStatus, ForeignShareholdingDaily, HoldingDistribution, InstitutionalDaily, JobRun, PriceDaily, Stock
 from .schemas import PaginatedStocks, StockListItem
@@ -25,6 +26,15 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 app = FastAPI(title=settings.app_name, version="0.1.0", docs_url="/api/docs", redoc_url=None)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["GET"], allow_headers=["*"])
+
+CURRENT_SCORE_DATASETS = (
+    "TaiwanStockInfo",
+    "TaiwanStockInstitutionalInvestorsBuySellWide",
+    "TaiwanStockShareholding",
+    "TaiwanStockHoldingSharesPer",
+    "TaiwanStockTradingDailyReport",
+    "TaiwanStockPrice",
+)
 
 
 @app.on_event("startup")
@@ -73,11 +83,19 @@ def worker_health() -> dict[str, Any]:
 
 @app.get("/api/summary")
 def summary(db: Session = Depends(get_db)) -> dict[str, Any]:
-    total, status_map = _canonical_statuses(db)
-    counts = {status: sum(1 for value in status_map.values() if value == status) for status in ("STRONG_ACCUMULATION", "ACCUMULATION", "WATCH", "DATA_INSUFFICIENT", "NO_STRONG_EVIDENCE")}
     sync = db.scalars(select(DataSyncStatus).order_by(DataSyncStatus.dataset)).all()
+    provider_state = _provider_state(sync)
+    historical_latest = _latest_score_date(db)
+    total = db.scalar(select(func.count()).select_from(Stock).where(Stock.is_common_stock.is_(True))) or 0
+    if provider_state["numeric_scores_allowed"]:
+        _, status_map = _canonical_statuses(db)
+        counts = {status: sum(1 for value in status_map.values() if value == status) for status in ("STRONG_ACCUMULATION", "ACCUMULATION", "WATCH", "DATA_INSUFFICIENT", "NO_STRONG_EVIDENCE")}
+        current_latest = historical_latest
+    else:
+        counts = {"STRONG_ACCUMULATION": 0, "ACCUMULATION": 0, "WATCH": 0, "DATA_INSUFFICIENT": total, "NO_STRONG_EVIDENCE": 0}
+        current_latest = None
     last_updates = [s.last_fetch_at or s.last_successful_sync for s in sync if s.last_fetch_at or s.last_successful_sync]
-    return {"stock_count": total, "strong_count": counts["STRONG_ACCUMULATION"], "accumulation_count": counts["ACCUMULATION"], "watch_count": counts["WATCH"], "data_insufficient_count": counts["DATA_INSUFFICIENT"], "no_strong_evidence_count": counts["NO_STRONG_EVIDENCE"], "status_invariant": sum(counts.values()) == total, "latest_score_date": _latest_score_date(db), "score_version": SCORE_VERSION, "formula_hash": FORMULA_HASH, "last_data_update": max(last_updates, default=None), "provider_state": _provider_state(sync), "sync_status": [_sync_dict(s) for s in sync]}
+    return {"stock_count": total, "strong_count": counts["STRONG_ACCUMULATION"], "accumulation_count": counts["ACCUMULATION"], "watch_count": counts["WATCH"], "data_insufficient_count": counts["DATA_INSUFFICIENT"], "no_strong_evidence_count": counts["NO_STRONG_EVIDENCE"], "status_invariant": sum(counts.values()) == total, "latest_score_date": current_latest, "historical_latest_score_date": historical_latest, "score_version": SCORE_VERSION, "formula_hash": FORMULA_HASH, "last_data_update": max(last_updates, default=None), "provider_state": provider_state, "sync_status": [_sync_dict(s) for s in sync]}
 
 
 @app.get("/api/stocks", response_model=PaginatedStocks)
@@ -85,7 +103,8 @@ def stocks(
     page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=200), search: str | None = Query(None, max_length=64), market: str | None = Query(None), industry: str | None = Query(None), status: str | None = Query(None), min_score: float | None = Query(None, ge=0, le=100), sort: str = Query("score"), order: str = Query("desc"),
     db: Session = Depends(get_db),
 ) -> PaginatedStocks:
-    latest = _latest_score_date(db)
+    provider_state = _provider_state(db.scalars(select(DataSyncStatus).order_by(DataSyncStatus.dataset)).all())
+    latest = _current_score_date(db, provider_state)
     score_value, score_status, score_version, score_coverage = _score_subqueries(latest)
     price_value, price_change = _price_subqueries()
     feature_values, feature_date = _feature_subqueries(latest)
@@ -117,13 +136,14 @@ def stocks(
 
 @app.get("/api/rankings")
 def rankings(kind: str = Query("top"), limit: int = Query(50, ge=1, le=200), db: Session = Depends(get_db)) -> dict[str, Any]:
-    latest = _latest_score_date(db)
+    provider_state = _provider_state(db.scalars(select(DataSyncStatus).order_by(DataSyncStatus.dataset)).all())
+    latest = _current_score_date(db, provider_state)
     if latest is None:
-        return {"source_date": None, "score_version": SCORE_VERSION, "items": []}
+        return {"source_date": None, "score_version": SCORE_VERSION, "provider_state": provider_state, "items": []}
     score_value, score_status, _, score_components = _score_subqueries(latest, components=True)
     query = select(Stock, score_value, score_status, score_components).where(Stock.is_common_stock.is_(True), score_value.is_not(None)).order_by(desc(score_value), asc(Stock.stock_id)).limit(limit)
     rows = db.execute(query).all()
-    return {"source_date": latest, "kind": kind, "score_version": SCORE_VERSION, "items": [{"stock_id": row[0].stock_id, "stock_name": row[0].stock_name, "market": row[0].market, "score": row[1], "status": row[2], "components": row[3]} for row in rows]}
+    return {"source_date": latest, "kind": kind, "score_version": SCORE_VERSION, "provider_state": provider_state, "items": [{"stock_id": row[0].stock_id, "stock_name": row[0].stock_name, "market": row[0].market, "score": row[1], "status": row[2], "components": row[3]} for row in rows]}
 
 
 @app.get("/api/stocks/{stock_id}")
@@ -131,7 +151,8 @@ def stock_detail(stock_id: str, limit: int = Query(365, ge=1, le=1000), db: Sess
     stock = db.get(Stock, stock_id)
     if stock is None:
         raise HTTPException(status_code=404, detail="stock not found")
-    latest = _latest_score_date(db)
+    provider_state = _provider_state(db.scalars(select(DataSyncStatus).order_by(DataSyncStatus.dataset)).all())
+    latest = _current_score_date(db, provider_state)
     return {"stock": {"stock_id": stock.stock_id, "stock_name": stock.stock_name, "market": stock.market, "industry": stock.industry}, "score": _score_dict(db, stock_id, latest), "sources": _source_status(db, stock_id), "institutional": _rows(db, InstitutionalDaily, stock_id, min(limit, 365)), "foreign_holding": _rows(db, ForeignShareholdingDaily, stock_id, min(limit, 365)), "holding_distribution": _rows(db, HoldingDistribution, stock_id, min(limit, 200)), "holding_series": _holding_chart_series(db, stock_id, min(limit, 200)), "brokers": _broker_summary(db, stock_id), "prices": _rows(db, PriceDaily, stock_id, min(limit, 365)), "score_history": _score_history(db, stock_id, min(limit, 365)), "calendar_version": CALENDAR_VERSION}
 
 
@@ -169,6 +190,13 @@ def data_status(db: Session = Depends(get_db)) -> dict[str, Any]:
 
 def _latest_score_date(db: Session) -> date | None:
     return db.scalar(select(func.max(AccumulationScore.source_date)).where(AccumulationScore.score_version == SCORE_VERSION, AccumulationScore.knowledge_cutoff.is_not(None)))
+
+
+def _current_score_date(db: Session, provider_state: dict[str, Any]) -> date | None:
+    """Return a score date only when current provider state authorizes it."""
+    if provider_state.get("numeric_scores_allowed") is not True:
+        return None
+    return _latest_score_date(db)
 
 
 def _canonical_statuses(db: Session) -> tuple[int, dict[str, str]]:
@@ -317,13 +345,38 @@ def _sync_dict(row: DataSyncStatus) -> dict[str, Any]:
 
 
 def _provider_state(sync: list[DataSyncStatus]) -> dict[str, Any]:
-    """Expose provider availability without turning incomplete data into a score."""
-    errors = [row.last_error_code for row in sync if row.last_error_code]
-    if "QUOTA_EXHAUSTED" in errors:
-        return {"status": "PROVIDER_UNAVAILABLE", "reason_code": "QUOTA_EXHAUSTED", "provider": "FinMind", "score_policy": "FAIL_CLOSED", "numeric_scores_allowed": False}
-    fatal = next((code for code in errors if code in {"AUTHENTICATION_FAILED", "ACCESS_DENIED", "SCHEMA_MISMATCH"}), None)
+    """Authoritatively gate every current score surface.
+
+    An absent or incomplete sync-status set is unknown, never available.  The
+    latest stored score remains queryable through the explicit score-history
+    endpoint, but it cannot become a current score without this gate.
+    """
+    by_dataset = {row.dataset: row for row in sync}
+    if not sync:
+        return {"status": "DATA_INSUFFICIENT", "reason_code": "NO_AUTHORITATIVE_SYNC_STATUS", "provider": "FinMind", "score_policy": "FAIL_CLOSED", "numeric_scores_allowed": False}
+
+    def failure_code(row: DataSyncStatus) -> str | None:
+        if row.last_error_code in GLOBAL_PROVIDER_FAILURE_CODES:
+            return row.last_error_code
+        metadata = row.metadata_json or {}
+        coverage = metadata.get("coverage") if isinstance(metadata, dict) else None
+        candidate = coverage.get("fatal_code") if isinstance(coverage, dict) else None
+        return candidate if candidate in GLOBAL_PROVIDER_FAILURE_CODES else None
+
+    fatal = next((code for code in (failure_code(row) for row in sync) if code), None)
     if fatal:
         return {"status": "PROVIDER_UNAVAILABLE", "reason_code": fatal, "provider": "FinMind", "score_policy": "FAIL_CLOSED", "numeric_scores_allowed": False}
-    if any(row.status in {"FAILED", "PARTIAL"} or row.staleness_state in {"ERROR", "PARTIAL"} for row in sync):
-        return {"status": "DATA_INSUFFICIENT", "reason_code": "INCOMPLETE_PROVIDER_COVERAGE", "provider": "FinMind", "score_policy": "FAIL_CLOSED", "numeric_scores_allowed": False}
-    return {"status": "AVAILABLE", "reason_code": None, "provider": "FinMind", "score_policy": "S_ONLY_V3", "numeric_scores_allowed": True}
+
+    missing = [dataset for dataset in CURRENT_SCORE_DATASETS if dataset not in by_dataset]
+    if missing:
+        return {"status": "DATA_INSUFFICIENT", "reason_code": "MISSING_REQUIRED_DATA_SYNC_STATUS", "missing_datasets": missing, "provider": "FinMind", "score_policy": "FAIL_CLOSED", "numeric_scores_allowed": False}
+
+    for dataset in CURRENT_SCORE_DATASETS:
+        row = by_dataset[dataset]
+        if row.status not in {"SUCCESS", "REUSED"}:
+            return {"status": "DATA_INSUFFICIENT", "reason_code": "INCOMPLETE_PROVIDER_COVERAGE", "provider": "FinMind", "score_policy": "FAIL_CLOSED", "numeric_scores_allowed": False}
+        if row.expected_latest_source_date is None or row.latest_source_date is None:
+            return {"status": "DATA_INSUFFICIENT", "reason_code": "NO_AUTHORITATIVE_CURRENT_SOURCE_DATE", "provider": "FinMind", "score_policy": "FAIL_CLOSED", "numeric_scores_allowed": False}
+        if row.staleness_state != "FRESH":
+            return {"status": "DATA_INSUFFICIENT", "reason_code": "STALE_PROVIDER_COVERAGE", "provider": "FinMind", "score_policy": "FAIL_CLOSED", "numeric_scores_allowed": False}
+    return {"status": "AVAILABLE", "reason_code": None, "provider": "FinMind", "score_policy": "S_ONLY_V4", "numeric_scores_allowed": True}

@@ -57,18 +57,27 @@ test("filters, rankings, freshness and score hash are exposed", async ({ page })
   const rankingJson = await rankings.json();
   expect(rankingJson.score_version).toBe(summaryJson.score_version);
   expect(Array.isArray(rankingJson.items)).toBeTruthy();
-  const numericScores = rankingJson.items.filter((item: { score: number | null }) => item.score !== null);
-  if (numericScores.length > 0) {
+  const currentStocks = await page.request.get("/api/stocks?page=1&page_size=50&sort=score");
+  expect(currentStocks.ok()).toBeTruthy();
+  const currentStocksJson = await currentStocks.json();
+  if (summaryJson.provider_state.numeric_scores_allowed === false) {
+    expect(rankingJson.items.every((item: { score: number | null }) => item.score === null)).toBeTruthy();
+    expect(currentStocksJson.items.every((item: { score: number | null; status: string }) => item.score === null && item.status === "DATA_INSUFFICIENT")).toBeTruthy();
+    const blockedDetail = await page.request.get("/api/stocks/2330?limit=20");
+    expect(blockedDetail.ok()).toBeTruthy();
+    const blockedDetailJson = await blockedDetail.json();
+    expect(blockedDetailJson.score.score).toBeNull();
+    expect(blockedDetailJson.score.status).toBe("DATA_INSUFFICIENT");
+    expect(summaryJson.data_insufficient_count).toBe(summaryJson.stock_count);
+  } else {
     expect(summaryJson.provider_state.status).toBe("AVAILABLE");
     expect(summaryJson.provider_state.numeric_scores_allowed).toBeTruthy();
+    for (const item of currentStocksJson.items) {
+      expect(item.score === null || typeof item.score === "number").toBeTruthy();
+    }
     for (let i = 1; i < rankingJson.items.length; i += 1) {
       expect(rankingJson.items[i - 1].score).toBeGreaterThanOrEqual(rankingJson.items[i].score);
     }
-  } else {
-    expect(["PROVIDER_UNAVAILABLE", "DATA_INSUFFICIENT"]).toContain(summaryJson.provider_state.status);
-    expect(summaryJson.provider_state.reason_code).toBeTruthy();
-    expect(summaryJson.provider_state.numeric_scores_allowed).toBeFalsy();
-    expect(summaryJson.data_insufficient_count).toBe(summaryJson.stock_count);
   }
   await page.getByLabel("股票代碼或名稱搜尋").fill("2330");
   await page.getByLabel("市場").selectOption("上市");

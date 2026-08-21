@@ -65,6 +65,53 @@ def test_universe_accepts_provider_stock_security_type_but_excludes_instruments(
     assert normalize_stock({"stock_id": "0050", "stock_name": "ETF", "type": "twse", "security_type": "ETF", "industry_category": "ETF"}) is None
 
 
+def test_universe_refresh_failure_is_persisted_and_blocks_scoring() -> None:
+    import asyncio
+
+    from app.ingestion import catch_up
+    from app.models import JobRun
+
+    db, _ = _db()
+    db.add(Stock(stock_id="2330", stock_name="Existing", market="上市", security_type="股票", is_common_stock=True))
+    db.commit()
+
+    class FailingUniverseClient:
+        def fetch(self, dataset: str, *_args: object, **_kwargs: object):
+            assert dataset == "TaiwanStockInfo"
+            raise FinMindError("NETWORK_ERROR", "simulated universe refresh failure")
+
+    result = asyncio.run(catch_up(db, FailingUniverseClient(), end_date=date(2026, 8, 20)))
+    sync = db.get(DataSyncStatus, "TaiwanStockInfo")
+    jobs = db.scalars(select(JobRun).where(JobRun.dataset == "TaiwanStockInfo")).all()
+    assert result["fatal_code"] == "NETWORK_ERROR"
+    assert result["provider_work_deferred"]["error_code"] == "NETWORK_ERROR"
+    assert sync is not None and sync.status == "FAILED" and sync.last_error_code == "NETWORK_ERROR"
+    assert sync.expected_latest_source_date == date(2026, 8, 20)
+    assert jobs and jobs[-1].status == "FAILED" and jobs[-1].error_code == "NETWORK_ERROR"
+    assert not db.scalars(select(JobRun).where(JobRun.dataset == "score")).all()
+
+
+def test_universe_failure_does_not_mutate_previous_active_universe() -> None:
+    db, _ = _db()
+    db.add_all([
+        Stock(stock_id="2330", stock_name="Existing", market="上市", security_type="股票", is_common_stock=True),
+        Stock(stock_id="2317", stock_name="Inactive", market="上市", security_type="股票", is_common_stock=False),
+    ])
+    db.commit()
+
+    class FailingUniverseClient:
+        def fetch(self, dataset: str, *_args: object, **_kwargs: object):
+            raise FinMindError("TIMEOUT", "simulated timeout")
+
+    with pytest.raises(FinMindError) as exc:
+        sync_universe(db, FailingUniverseClient(), as_of=date(2026, 8, 20))
+    assert exc.value.code == "TIMEOUT"
+    assert db.get(Stock, "2330").is_common_stock is True
+    assert db.get(Stock, "2317").is_common_stock is False
+    sync = db.get(DataSyncStatus, "TaiwanStockInfo")
+    assert sync is not None and sync.status == "FAILED" and sync.expected_latest_source_date == date(2026, 8, 20)
+
+
 def test_holding_schema_unknown_duplicate_and_null_are_explicit() -> None:
     db, _ = _db()
     db.add(Stock(stock_id="2330", stock_name="Test", market="上市", security_type="股票", is_common_stock=True))
@@ -107,6 +154,29 @@ def test_broker_unproven_omission_does_not_become_zero() -> None:
     from app.features import broker_features
     rows = [{"source_date": day, "securities_trader_id": "A", "net_volume": 10} for day in expected_trading_sessions(date(2026, 8, 20), 20)]
     assert broker_features(rows)["BrokerPersistenceScore"] is None
+
+
+def test_broker_explicit_null_net_fails_closed_even_with_valid_same_session_row() -> None:
+    from app.features import broker_features
+
+    rows = []
+    for day in expected_trading_sessions(date(2026, 8, 20), 20):
+        rows.append({"source_date": day, "securities_trader_id": "VALID", "net_volume": 100, "provider_report_complete": True})
+        rows.append({"source_date": day, "securities_trader_id": "NULL", "net_volume": None, "buy_volume": None, "sell_volume": None, "provider_report_complete": True})
+
+    result = broker_features(rows)
+    assert result["BrokerDataContract"] == {"available": False, "reason": "null_or_invalid_broker_net"}
+    assert result["BrokerPersistenceScore"] is None
+    assert result["BrokerOneDaySpikeRatio20D"] is None
+
+
+def test_broker_omitted_branch_under_complete_report_retains_zero_absence_semantics() -> None:
+    from app.features import broker_features
+
+    rows = [{"source_date": day, "securities_trader_id": "VALID", "net_volume": 100, "provider_report_complete": True} for day in expected_trading_sessions(date(2026, 8, 20), 20)]
+    result = broker_features(rows)
+    assert result["BrokerDataContract"] == {"available": True, "reason": None}
+    assert result["BrokerPersistenceScore"] is not None
 
 
 def test_broker_concentration_is_bounded_with_offsetting_sellers() -> None:

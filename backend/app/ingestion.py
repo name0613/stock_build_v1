@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from .calendar import CALENDAR_VERSION, expected_trading_sessions, missing_sessions
 from .features import build_features
-from .finmind import GLOBAL_PROVIDER_FAILURE_CODES, FinMindClient, SchemaMismatch
+from .finmind import GLOBAL_PROVIDER_FAILURE_CODES, FinMindClient, FinMindError, SchemaMismatch
 from .models import (
     AccumulationFeature, AccumulationScore, BrokerDaily, DataSyncStatus, ForeignShareholdingDaily,
     HoldingDistribution, InstitutionalDaily, JobRun, PriceDaily, ScoreVersion, SourceRevision, Stock,
@@ -288,41 +288,61 @@ def ingest_records(db: Session, dataset: str, records: list[dict[str, Any]]) -> 
     return count
 
 
-def sync_universe(db: Session, client: FinMindClient) -> int:
-    records, meta = client.fetch("TaiwanStockInfo")
-    ingest_records(db, "TaiwanStockInfo", records)
-    rejection_counts: dict[str, int] = {}
-    market_counts: dict[str, int] = {}
-    groups: dict[str, list[dict[str, Any]]] = {}
-    for index, row in enumerate(records):
-        raw_id = str(_v(row, "stock_id", "股票代號", "證券代號") or "").strip()
-        groups.setdefault(raw_id or f"__missing_{index}", []).append(row)
-    duplicate_count = sum(max(0, len(rows) - 1) for key, rows in groups.items() if not key.startswith("__missing_"))
-    accepted_ids: set[str] = set()
-    for key, rows in groups.items():
-        normalized_rows = [normalize_stock(row) for row in rows]
-        normalized_rows = [row for row in normalized_rows if row is not None]
-        if normalized_rows:
-            normalized = max(normalized_rows, key=lambda row: row.get("source_date") or date.min)
-            accepted_ids.add(normalized["stock_id"])
-            market_counts[normalized["market"]] = market_counts.get(normalized["market"], 0) + 1
-        else:
-            category = classify_stock_rejection(rows[-1])
-            rejection_counts[category] = rejection_counts.get(category, 0) + 1
-    # Keep this derived value explicit so the evidence cannot silently use a
-    # pre-dedup count from the provider response.
-    count = len(accepted_ids)
-    active_ids = accepted_ids
-    for existing in db.scalars(select(Stock).where(Stock.is_common_stock.is_(True))).all():
-        if existing.stock_id not in active_ids:
-            existing.is_common_stock = False
-    db.commit()
-    info_dates = [_as_date(_v(row, "date", "source_date")) for row in records]
-    latest = max((value for value in info_dates if value is not None), default=None)
-    rejected_unique = sum(rejection_counts.values())
-    reconciliation = {"raw_count": len(records), "duplicate_count": duplicate_count, "rejected_unique_count": rejected_unique, "accepted_common_count": count, "reconciles": len(records) == duplicate_count + rejected_unique + count}
-    _mark_sync(db, "TaiwanStockInfo", "SUCCESS" if count else "PARTIAL", count, latest or _as_date(meta.get("source_date")), fetched_at=_now(), rows_received=len(records), rows_accepted=count, rows_rejected=duplicate_count + rejected_unique, stored_total=_stored_rows_total(db, "TaiwanStockInfo"), metadata={"universe": {"candidate_raw_count": len(records), "accepted_common_count": count, "rejection_counts": rejection_counts, "duplicate_stock_ids": duplicate_count, "market_counts": market_counts, "pagination_complete": True, "latest_source_date": (latest or _as_date(meta.get("source_date"))), "reconciliation": reconciliation}})
-    return count
+def sync_universe(db: Session, client: FinMindClient, as_of: date | None = None) -> int:
+    """Refresh the dynamic universe without ever activating a failed snapshot."""
+    records: list[dict[str, Any]] = []
+    try:
+        records, meta = client.fetch("TaiwanStockInfo")
+        source_date = _as_date(meta.get("source_date"))
+        expected = _expected_latest_source_date("TaiwanStockInfo", as_of or source_date or date.today())
+        if not records:
+            raise FinMindError("EMPTY_RESPONSE_UNVERIFIED", "TaiwanStockInfo returned no rows; universe authority is unproven")
+        if meta.get("pagination_complete") is False:
+            raise FinMindError("INCOMPLETE_PROVIDER_COVERAGE", "TaiwanStockInfo pagination was not complete; universe authority is unproven")
+
+        rejection_counts: dict[str, int] = {}
+        market_counts: dict[str, int] = {}
+        groups: dict[str, list[dict[str, Any]]] = {}
+        for index, row in enumerate(records):
+            raw_id = str(_v(row, "stock_id", "股票代號", "證券代號") or "").strip()
+            groups.setdefault(raw_id or f"__missing_{index}", []).append(row)
+        duplicate_count = sum(max(0, len(rows) - 1) for key, rows in groups.items() if not key.startswith("__missing_"))
+        accepted_ids: set[str] = set()
+        for key, rows in groups.items():
+            normalized_rows = [normalize_stock(row) for row in rows]
+            normalized_rows = [row for row in normalized_rows if row is not None]
+            if normalized_rows:
+                normalized = max(normalized_rows, key=lambda row: row.get("source_date") or date.min)
+                accepted_ids.add(normalized["stock_id"])
+                market_counts[normalized["market"]] = market_counts.get(normalized["market"], 0) + 1
+            else:
+                category = classify_stock_rejection(rows[-1])
+                rejection_counts[category] = rejection_counts.get(category, 0) + 1
+
+        count = len(accepted_ids)
+        rejected_unique = sum(rejection_counts.values())
+        reconciliation = {"raw_count": len(records), "duplicate_count": duplicate_count, "rejected_unique_count": rejected_unique, "accepted_common_count": count, "reconciles": len(records) == duplicate_count + rejected_unique + count}
+        if count == 0 or not reconciliation["reconciles"]:
+            raise FinMindError("SCHEMA_MISMATCH", "TaiwanStockInfo did not produce a non-empty reconciled common-stock universe")
+
+        # Ingest and deactivate only after the full response has passed all
+        # authority checks.  A failed/partial response therefore preserves the
+        # previous active universe exactly as-is.
+        ingest_records(db, "TaiwanStockInfo", records)
+        for existing in db.scalars(select(Stock).where(Stock.is_common_stock.is_(True))).all():
+            if existing.stock_id not in accepted_ids:
+                existing.is_common_stock = False
+        db.commit()
+        info_dates = [_as_date(_v(row, "date", "source_date")) for row in records]
+        latest = max((value for value in info_dates if value is not None), default=source_date)
+        _mark_sync(db, "TaiwanStockInfo", "SUCCESS", count, latest, fetched_at=_now(), expected_latest=expected, rows_received=len(records), rows_accepted=count, rows_rejected=duplicate_count + rejected_unique, stored_total=_stored_rows_total(db, "TaiwanStockInfo"), metadata={"universe": {"candidate_raw_count": len(records), "accepted_common_count": count, "rejection_counts": rejection_counts, "duplicate_stock_ids": duplicate_count, "market_counts": market_counts, "pagination_complete": True, "latest_source_date": latest, "reconciliation": reconciliation}})
+        return count
+    except Exception as exc:
+        db.rollback()
+        code = getattr(exc, "code", "UNEXPECTED")
+        expected = _expected_latest_source_date("TaiwanStockInfo", as_of or date.today())
+        _mark_sync(db, "TaiwanStockInfo", "FAILED", 0, None, code, str(exc), fetched_at=_now(), expected_latest=expected, rows_received=len(records), rows_accepted=0, rows_rejected=0, stored_total=_stored_rows_total(db, "TaiwanStockInfo"), metadata={"universe": {"pagination_complete": False, "authoritative": False, "attempted_rows": len(records)}})
+        raise
 
 
 def sync_stock_dataset(db: Session, client: FinMindClient, dataset: str, stock_id: str, start_date: str, end_date: str) -> int:
@@ -545,7 +565,7 @@ async def catch_up(db: Session, client: FinMindClient, end_date: date | None = N
     progress("TaiwanStockInfo")
     info_job = _job_start(db, "TaiwanStockInfo", end, end)
     try:
-        info_count = sync_universe(db, client)
+        info_count = sync_universe(db, client, as_of=end)
         _job_finish(db, info_job, "SUCCESS" if info_count else "PARTIAL", records=info_count, stocks_completed=info_count)
         result["datasets"]["TaiwanStockInfo"] = {"status": "SUCCESS" if info_count else "PARTIAL", "records": info_count}
     except Exception as exc:
@@ -553,6 +573,9 @@ async def catch_up(db: Session, client: FinMindClient, end_date: date | None = N
         _job_finish(db, info_job, "FAILED", error_code=code, error=str(exc))
         result["datasets"]["TaiwanStockInfo"] = {"status": "FAILED", "error_code": code}
         result["status"] = "PARTIAL"
+        result["fatal_code"] = code
+        result["provider_work_deferred"] = {"reason": "dynamic universe refresh failed; later provider work and scoring were not launched", "error_code": code}
+        return result
     stock_ids = list(db.scalars(select(Stock.stock_id).where(Stock.is_common_stock.is_(True))).all())
     for dataset in required:
         progress(dataset)

@@ -8,7 +8,7 @@ from typing import Any, Iterable
 
 from .calendar import CALENDAR_HASH, CALENDAR_MANIFEST
 
-SCORE_VERSION = "s-only-v3"
+SCORE_VERSION = "s-only-v4"
 WEIGHTS = {"institutional_persistence": 0.35, "ownership_accumulation": 0.35, "broker_persistence": 0.30}
 HOLDING_METADATA_LEVELS = frozenset({"total", "all", "差異數調整（說明4）"})
 SCORE_SPEC = {
@@ -44,7 +44,7 @@ SCORE_SPEC = {
     "calendar_version": "tw-exchange-2026-v1",
     "calendar_manifest": CALENDAR_MANIFEST,
     "calendar_hash": CALENDAR_HASH,
-    "semantic_versions": {"institutional_normalization": "dealer-components-v1", "broker_features": "gross-positive-flow-v2", "holding_parser": "explicit-lower-bound-v2", "missing_data": "fail-closed-v2"},
+    "semantic_versions": {"institutional_normalization": "dealer-components-v1", "broker_features": "gross-positive-flow-v3-null-row-fail-closed", "holding_parser": "explicit-lower-bound-v2", "missing_data": "fail-closed-v3-current-provider-gate"},
     "institutional_normalization": {"categories": ["foreign", "foreign_dealer_self", "investment_trust", "dealer_component"], "dealer_semantics": "Dealer_self + Dealer_Hedging are the non-overlapping dealer component when both are present; aggregate Dealer is fallback only when components are unavailable", "foreign_dealer_self_is_separate": True, "null_policy": "missing component does not become zero"},
     "broker_semantics": {"persistent_buyer": "positive_days >= 5 and positive_total > 0 within true window", "true_windows": {"5": "all five expected sessions present", "10": "all ten expected sessions present", "20": "all twenty expected sessions present"}, "absent_branch": "omitted branch is not zero unless complete stock/session report contract is proven", "concentration_denominator": "gross positive broker flow across the window", "spike": "max daily gross positive flow / total daily gross positive flow"},
     "holding_semantics": {"boundaries": {"400": "lower bound >= 400000 shares; displayed as >400 lots", "1000": "lower bound >= 1000000 shares; displayed as >1000 lots"}, "weekly_tolerance_days": 4, "metadata_levels": sorted(HOLDING_METADATA_LEVELS)},

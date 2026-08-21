@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import date, timedelta
+import math
 from typing import Any
 
 from .scoring import one_day_spike_ratio, parse_holding_level, positive_day_ratio, rolling_sum, slope
@@ -161,24 +162,24 @@ def _holding_coverage(dates: list[str]) -> dict[str, Any]:
 
 def broker_features(rows: list[dict[str, Any]]) -> dict[str, Any]:
     if not rows:
-        return {"BrokerPersistenceScore": None, "BrokerOneDaySpikeRatio20D": None}
+        return _broker_unavailable("no_broker_rows")
     if any(row.get("provider_report_complete") is not True for row in rows):
-        return {"BrokerPersistenceScore": None, "BrokerOneDaySpikeRatio20D": None, "BrokerDataContract": {"available": False, "reason": "provider_report_completeness_not_proven"}}
+        return _broker_unavailable("provider_report_completeness_not_proven")
     dates = sorted({str(row.get("date") or row.get("source_date") or "") for row in rows})
     broker_daily: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
     for row in rows:
         day = str(row.get("date") or row.get("source_date") or "")
-        net = row.get("net_volume")
+        net = _finite_number(row.get("net_volume"))
         if net is None:
-            buy = row.get("buy_volume")
-            sell = row.get("sell_volume")
+            buy = _finite_number(row.get("buy_volume"))
+            sell = _finite_number(row.get("sell_volume"))
             net = buy - sell if buy is not None and sell is not None else None
         if net is None:
-            continue
+            return _broker_unavailable("null_or_invalid_broker_net")
         broker = str(row.get("securities_trader_id") or "unknown")
         broker_daily[broker][day] += float(net)
     if len(dates) < 20 or any(day not in {d for daily in broker_daily.values() for d in daily} for day in dates[-20:]):
-        return {"BrokerPersistenceScore": None, "BrokerOneDaySpikeRatio20D": None}
+        return _broker_unavailable("incomplete_provider_sessions")
     last_dates = dates[-20:]
     positive_brokers = []
     for broker, daily in broker_daily.items():
@@ -217,7 +218,20 @@ def broker_features(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "BrokerPersistenceScore": score,
         "BrokerOneDaySpikeRatio20D": spike,
         "BrokerPositiveFlowSpikeRatio20D": spike,
+        "BrokerDataContract": {"available": True, "reason": None},
     }
+
+
+def _finite_number(value: Any) -> float | None:
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    return result if math.isfinite(result) else None
+
+
+def _broker_unavailable(reason: str) -> dict[str, Any]:
+    return {"BrokerPersistenceScore": None, "BrokerOneDaySpikeRatio20D": None, "BrokerDataContract": {"available": False, "reason": reason}}
 
 
 def _concentration(ranked: list[tuple[str, int, float]], count: int, total: float) -> float | None:
