@@ -30,6 +30,10 @@ CHECKPOINT_SCHEMA_VERSION = "2026-08-21-v5-contract-bound"
 INCREMENTAL_CHECKPOINT_VERSION = "2026-08-21-incremental-v5"
 NORMALIZATION_POLICY_VERSION = "s-only-normalization-v5-contract-bound"
 REQUEST_POLICY_VERSION = "finmind-request-policy-v5-fair-period-coverage"
+SOURCE_CHECKPOINT_SCHEMA_VERSION = "2026-08-21-v6-provider-missing"
+SOURCE_INCREMENTAL_CHECKPOINT_VERSION = "2026-08-21-incremental-v6"
+SOURCE_REQUEST_POLICY_VERSION = "finmind-request-policy-v6-fair-provider-missing"
+PROVIDER_EMPTY_RANGE_CONTRACT_VERSION = "finmind-successful-filtered-empty-data-v1"
 GLOBAL_PROVIDER_FAILURE_CODES = frozenset({
     "AUTHENTICATION_FAILED",
     "ACCESS_DENIED",
@@ -80,6 +84,7 @@ DAILY_OBSERVATION_DATASETS = frozenset({
     "TaiwanStockPrice",
 })
 WEEKLY_OBSERVATION_DATASETS = frozenset({"TaiwanStockHoldingSharesPer"})
+CHECKPOINT_OBSERVATION_DATASETS = DAILY_OBSERVATION_DATASETS | WEEKLY_OBSERVATION_DATASETS
 
 
 def expected_observation_dates(dataset: str, start: date, end: date) -> list[date]:
@@ -417,7 +422,33 @@ class FinMindClient:
                     normalized = [{**record, "provider_report_complete": False, "provider_contract_version": None, "provider_row_validated": broker_rows_validated, "provider_row_contract_version": BROKER_ROW_CONTRACT_VERSION if broker_rows_validated else None} for record in normalized]
                 source_date = self._latest_date(normalized)
                 evidence = self.store.write(dataset, normalized, safe_params, source_date) if persist_raw else {"records": len(normalized)}
-                return normalized, {"dataset": dataset, "parameters": safe_params, "source_date": source_date, "evidence": evidence, "attempt": attempt + 1, "pagination_complete": pagination_complete, "probe_only": capability_probe, "provider_report_complete": False if dataset == "TaiwanStockTradingDailyReport" else None, "provider_contract_version": None, "provider_row_validated": broker_rows_validated, "provider_row_contract_version": BROKER_ROW_CONTRACT_VERSION if broker_rows_validated else None, "provider_contract_reason": broker_contract_reason}
+                provider_missing_dates: list[str] = []
+                if not normalized and data_id and start_date and end_date and dataset in CHECKPOINT_OBSERVATION_DATASETS:
+                    provider_missing_dates = [
+                        day.isoformat()
+                        for day in expected_observation_dates(dataset, date.fromisoformat(start_date), date.fromisoformat(end_date))
+                    ]
+                return normalized, {
+                    "dataset": dataset,
+                    "parameters": safe_params,
+                    "source_date": source_date,
+                    "evidence": evidence,
+                    "attempt": attempt + 1,
+                    "pagination_complete": pagination_complete,
+                    "probe_only": capability_probe,
+                    "provider_http_status": response.status_code,
+                    "provider_application_status": payload.get("status"),
+                    "empty_is_valid": bool(provider_missing_dates),
+                    "empty_reason": "no_provider_observation" if provider_missing_dates else None,
+                    "empty_observation_dates": provider_missing_dates,
+                    "empty_contract_version": PROVIDER_EMPTY_RANGE_CONTRACT_VERSION if provider_missing_dates else None,
+                    "missing_value_semantics": "provider returned no row for the successful filtered range; remains missing and is never scored as zero" if provider_missing_dates else None,
+                    "provider_report_complete": False if dataset == "TaiwanStockTradingDailyReport" else None,
+                    "provider_contract_version": None,
+                    "provider_row_validated": broker_rows_validated,
+                    "provider_row_contract_version": BROKER_ROW_CONTRACT_VERSION if broker_rows_validated else None,
+                    "provider_contract_reason": broker_contract_reason,
+                }
             except (httpx.TimeoutException, httpx.NetworkError) as exc:
                 last_error = FinMindError("TIMEOUT" if isinstance(exc, httpx.TimeoutException) else "NETWORK_ERROR", "FinMind network request failed")
             except FinMindError as exc:
@@ -626,20 +657,25 @@ class FinMindClient:
         cadence = "weekly_publication" if dataset in WEEKLY_OBSERVATION_DATASETS else "trading_session"
         manifest = {
             "dataset": dataset,
-            "checkpoint_version": INCREMENTAL_CHECKPOINT_VERSION,
+            "checkpoint_version": SOURCE_INCREMENTAL_CHECKPOINT_VERSION,
             "query_mode": "per_stock_date_range",
-            "schema_version": CHECKPOINT_SCHEMA_VERSION,
+            "schema_version": SOURCE_CHECKPOINT_SCHEMA_VERSION,
             "normalization_version": NORMALIZATION_POLICY_VERSION,
-            "request_policy_version": REQUEST_POLICY_VERSION,
+            "request_policy_version": SOURCE_REQUEST_POLICY_VERSION,
             "observation_cadence": cadence,
             "holding_schema_version": HOLDING_SCHEMA_VERSION if dataset in WEEKLY_OBSERVATION_DATASETS else None,
             "weekly_period_version": HOLDING_WEEKLY_PERIOD_VERSION if dataset in WEEKLY_OBSERVATION_DATASETS else None,
+            "provider_missing_contract_version": PROVIDER_EMPTY_RANGE_CONTRACT_VERSION,
+            "provider_missing_semantics": "successful filtered empty data resolves ingestion work but remains missing for scoring",
         }
         manifest_hash = hashlib.sha256(json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         checkpoint_dir = self.settings.raw_root / "checkpoints"
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
-        checkpoint_file = checkpoint_dir / f"source-{dataset}-incremental-v5.json"
-        legacy_checkpoint_file = checkpoint_dir / f"source-{dataset}-incremental-v4.json"
+        checkpoint_file = checkpoint_dir / f"source-{dataset}-incremental-v6.json"
+        legacy_checkpoint_files = [
+            (checkpoint_dir / f"source-{dataset}-incremental-v5.json", "migrated_v5"),
+            (checkpoint_dir / f"source-{dataset}-incremental-v4.json", "migrated_v4"),
+        ]
         checkpoint: dict[str, Any] = {"manifest": manifest, "manifest_hash": manifest_hash, "completed": [], "no_data_but_valid": [], "failed": [], "permanent_failed": [], "global_fatal": None, "entries": {}, "last_request": {}, "fair_cursor_stock_id": stock_ids[0] if stock_ids else None}
         checkpoint_state = "new"
         if checkpoint_file.exists():
@@ -652,24 +688,32 @@ class FinMindClient:
                     checkpoint_state = "incompatible_ignored"
             except (OSError, ValueError, TypeError):
                 checkpoint_state = "corrupt_ignored"
-        elif legacy_checkpoint_file.exists():
-            try:
-                candidate = json.loads(legacy_checkpoint_file.read_text(encoding="utf-8"))
-                if candidate.get("manifest", {}).get("dataset") == dataset and isinstance(candidate.get("entries"), dict):
+        else:
+            for legacy_checkpoint_file, migration_state in legacy_checkpoint_files:
+                if not legacy_checkpoint_file.exists():
+                    continue
+                try:
+                    candidate = json.loads(legacy_checkpoint_file.read_text(encoding="utf-8"))
+                    if candidate.get("manifest", {}).get("dataset") != dataset or not isinstance(candidate.get("entries"), dict):
+                        checkpoint_state = "legacy_incompatible_ignored"
+                        continue
                     checkpoint = candidate
-                    checkpoint_state = "migrated_v4"
+                    checkpoint_state = migration_state
                     checkpoint["manifest"] = manifest
                     checkpoint["manifest_hash"] = manifest_hash
-                    checkpoint["fair_cursor_stock_id"] = stock_ids[0] if stock_ids else None
-                    if dataset in WEEKLY_OBSERVATION_DATASETS:
-                        for entry in checkpoint.get("entries", {}).values():
+                    previous_cursor = checkpoint.get("fair_cursor_stock_id")
+                    checkpoint["fair_cursor_stock_id"] = previous_cursor if previous_cursor in stock_ids else (stock_ids[0] if stock_ids else None)
+                    for entry in checkpoint.get("entries", {}).values():
+                        verified_missing = set(entry.get("verified_missing_dates", entry.get("verified_no_data_dates", [])))
+                        entry["verified_missing_dates"] = sorted(verified_missing)
+                        entry["verified_no_data_dates"] = sorted(verified_missing)
+                        if dataset in WEEKLY_OBSERVATION_DATASETS:
                             record_periods = _source_dates_to_observation_periods(dataset, set(entry.get("verified_record_dates", [])), requested_observations)
-                            empty_periods = _source_dates_to_observation_periods(dataset, set(entry.get("verified_no_data_dates", [])), requested_observations)
-                            entry["covered_dates"] = sorted(record_periods | empty_periods)
-                else:
-                    checkpoint_state = "legacy_incompatible_ignored"
-            except (OSError, ValueError, TypeError):
-                checkpoint_state = "legacy_corrupt_ignored"
+                            missing_periods = _source_dates_to_observation_periods(dataset, verified_missing, requested_observations)
+                            entry["covered_dates"] = sorted(record_periods | missing_periods)
+                    break
+                except (OSError, ValueError, TypeError):
+                    checkpoint_state = "legacy_corrupt_ignored"
 
         entries = checkpoint.setdefault("entries", {})
         cursor_start = checkpoint.get("fair_cursor_stock_id")
@@ -700,6 +744,9 @@ class FinMindClient:
             else:
                 request_ranges[stock_id] = (block[0], block[-1])
 
+        checkpoint_content_hash_before = hashlib.sha256(
+            json.dumps(checkpoint, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
         previous_global_fatal = checkpoint.get("global_fatal")
         checkpoint["last_global_fatal"] = previous_global_fatal
         checkpoint["global_fatal"] = None
@@ -722,10 +769,13 @@ class FinMindClient:
             "rows_rejected": 0,
             "rows_versioned": 0,
             "observations_reused": sum(len(set(entries.get(stock_id, {}).get("covered_dates", [])) & requested_observations) for stock_id in stock_ids),
+            "provider_missing_observations_reused": sum(len(set(entries.get(stock_id, {}).get("verified_missing_dates", entries.get(stock_id, {}).get("verified_no_data_dates", []))) & requested_observations) for stock_id in stock_ids),
             "retryable_pending": 0,
             "permanent_failed": 0,
             "checkpoint_state": checkpoint_state,
             "checkpoint_manifest_hash": manifest_hash,
+            "checkpoint_content_hash_before": checkpoint_content_hash_before,
+            "checkpoint_content_hash_after": checkpoint_content_hash_before,
             "requested_start_date": start_date,
             "requested_end_date": end_date,
             "universe_hash": universe_hash,
@@ -737,6 +787,7 @@ class FinMindClient:
             "failed": 0,
             "rows": 0,
             "fatal_code": None,
+            "missing_values_imputed_as_zero": 0,
             "previous_global_fatal": previous_global_fatal,
             "per_stock": {key: value for key, value in entries.items() if key in initial_complete},
         }
@@ -748,12 +799,21 @@ class FinMindClient:
             temporary = checkpoint_file.with_suffix(".tmp")
             temporary.write_text(json.dumps(checkpoint, ensure_ascii=False, indent=2), encoding="utf-8")
             temporary.replace(checkpoint_file)
+            metrics["checkpoint_content_hash_after"] = hashlib.sha256(
+                json.dumps(checkpoint, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest()
+
+        if checkpoint_state.startswith("migrated_"):
+            await persist()
 
         def coverage_fields(previous: dict[str, Any]) -> dict[str, Any]:
             covered = sorted(set(previous.get("covered_dates", [])) & requested_observations)
+            verified_missing = sorted(set(previous.get("verified_missing_dates", previous.get("verified_no_data_dates", []))) & requested_observations)
             unresolved = [day for day in expected_strings if day not in covered]
             return {
                 "covered_dates": covered,
+                "verified_missing_dates": verified_missing,
+                "verified_no_data_dates": verified_missing,
                 "expected_observation_count": len(expected_strings),
                 "verified_observation_count": len(covered),
                 "unresolved_dates": unresolved,
@@ -824,7 +884,7 @@ class FinMindClient:
                     return
 
                 verified_record_dates = _record_observation_dates(dataset, stock_id, records, request_expected)
-                valid_no_data_dates, empty_reason = _validated_no_data_dates(dataset, meta, request_expected)
+                provider_missing_dates, empty_reason = _validated_no_data_dates(dataset, meta, request_expected)
                 try:
                     if record_sink and records:
                         async with sink_lock:
@@ -855,7 +915,7 @@ class FinMindClient:
 
                 previous = entries.get(stock_id, {})
                 previous_covered = set(previous.get("covered_dates", [])) & requested_observations
-                newly_verified = (verified_record_dates | valid_no_data_dates) - previous_covered
+                newly_verified = (verified_record_dates | provider_missing_dates) - previous_covered
                 if not newly_verified:
                     code = "EMPTY_RESPONSE_UNVERIFIED" if not records else "PARTIAL_RESPONSE_UNVERIFIED"
                     await mark_failure(stock_id, code, "retryable_failed")
@@ -863,12 +923,19 @@ class FinMindClient:
                         progress_callback(f"{dataset} completed={metrics['newly_fetched'] + metrics['failed']}/{len(pending)}")
                     return
 
-                covered = previous_covered | verified_record_dates | valid_no_data_dates
+                covered = previous_covered | verified_record_dates | provider_missing_dates
                 unresolved = [day for day in expected_strings if day not in covered]
                 all_record_dates = set(previous.get("verified_record_dates", [])) | verified_record_dates
-                all_no_data_dates = set(previous.get("verified_no_data_dates", [])) | valid_no_data_dates
+                all_missing_dates = set(previous.get("verified_missing_dates", previous.get("verified_no_data_dates", []))) | provider_missing_dates
                 complete = not unresolved
-                classification = ("NEW_SUCCESS" if all_record_dates else "VALID_NO_DATA_FROM_PROVIDER") if complete else "PARTIAL_RETRYABLE"
+                if complete and all_record_dates and all_missing_dates:
+                    classification = "COMPLETE_WITH_ROWS_AND_PROVIDER_MISSING"
+                elif complete and all_record_dates:
+                    classification = "COMPLETE_WITH_ROWS"
+                elif complete:
+                    classification = "COMPLETE_PROVIDER_MISSING_ONLY"
+                else:
+                    classification = "PARTIAL_RETRYABLE"
                 entry = {
                     "rows": int(previous.get("rows", 0)) + len(records),
                     "first_source_date": min(all_record_dates) if all_record_dates else previous.get("first_source_date"),
@@ -877,7 +944,11 @@ class FinMindClient:
                     "request_end": request_end,
                     "covered_dates": sorted(covered),
                     "verified_record_dates": sorted(all_record_dates),
-                    "verified_no_data_dates": sorted(all_no_data_dates),
+                    "verified_missing_dates": sorted(all_missing_dates),
+                    "verified_no_data_dates": sorted(all_missing_dates),
+                    "provider_missing_contract_version": (meta.get("empty_contract_version") or previous.get("provider_missing_contract_version") or PROVIDER_EMPTY_RANGE_CONTRACT_VERSION) if all_missing_dates else None,
+                    "provider_missing_is_not_zero": bool(all_missing_dates),
+                    "missing_value_semantics": "missing source rows remain unavailable to scoring and are never imputed as zero" if all_missing_dates else None,
                     "expected_observation_count": len(expected_strings),
                     "verified_observation_count": len(covered),
                     "unresolved_dates": unresolved,
@@ -914,14 +985,15 @@ class FinMindClient:
             return requested_observations <= covered
 
         complete_stocks = {stock_id for stock_id in stock_ids if is_complete(stock_id)}
-        metrics["reused_complete"] = sum(1 for stock_id in initial_complete if entries.get(stock_id, {}).get("classification") != "VALID_NO_DATA_FROM_PROVIDER")
-        metrics["reused_valid_no_data"] = sum(1 for stock_id in initial_complete if entries.get(stock_id, {}).get("classification") == "VALID_NO_DATA_FROM_PROVIDER")
+        metrics["reused_complete"] = sum(1 for stock_id in initial_complete if entries.get(stock_id, {}).get("verified_record_dates"))
+        metrics["reused_valid_no_data"] = sum(1 for stock_id in initial_complete if not entries.get(stock_id, {}).get("verified_record_dates"))
         metrics["success"] = len(complete_stocks)
         metrics["usable_success"] = sum(1 for stock_id in complete_stocks if entries.get(stock_id, {}).get("verified_record_dates"))
         metrics["no_data"] = sum(1 for stock_id in complete_stocks if not entries.get(stock_id, {}).get("verified_record_dates"))
         metrics["permanent_failed"] = sum(1 for stock_id in stock_ids if not is_complete(stock_id) and entries.get(stock_id, {}).get("classification") == "permanent_failed")
         metrics["retryable_pending"] = sum(1 for stock_id in stock_ids if not is_complete(stock_id) and entries.get(stock_id, {}).get("classification") != "permanent_failed")
         metrics["verified_observations"] = sum(len(set(entries.get(stock_id, {}).get("covered_dates", [])) & requested_observations) for stock_id in stock_ids)
+        metrics["provider_missing_observations"] = sum(len(set(entries.get(stock_id, {}).get("verified_missing_dates", entries.get(stock_id, {}).get("verified_no_data_dates", []))) & requested_observations) for stock_id in stock_ids)
         metrics["unresolved_observations"] = len(stock_ids) * len(expected_strings) - metrics["verified_observations"]
         metrics["per_stock"] = {key: value for key, value in entries.items() if key in stock_ids}
         metrics["fair_cursor_end_stock_id"] = checkpoint.get("fair_cursor_stock_id")
@@ -972,10 +1044,15 @@ def capability_evidence(client: FinMindClient, *, source_revision: str) -> dict[
     }
     provider_policy = {
         "request_policy_version": REQUEST_POLICY_VERSION,
+        "source_request_policy_version": SOURCE_REQUEST_POLICY_VERSION,
         "normalization_policy_version": NORMALIZATION_POLICY_VERSION,
         "checkpoint_schema_version": CHECKPOINT_SCHEMA_VERSION,
         "incremental_checkpoint_version": INCREMENTAL_CHECKPOINT_VERSION,
+        "source_checkpoint_schema_version": SOURCE_CHECKPOINT_SCHEMA_VERSION,
+        "source_incremental_checkpoint_version": SOURCE_INCREMENTAL_CHECKPOINT_VERSION,
+        "provider_empty_range_contract_version": PROVIDER_EMPTY_RANGE_CONTRACT_VERSION,
         "empty_data_requires_exact_observation_dates": True,
+        "successful_filtered_empty_rows_remain_missing_not_zero": True,
         "pagination_false_fails_closed": True,
     }
     return {
@@ -983,6 +1060,7 @@ def capability_evidence(client: FinMindClient, *, source_revision: str) -> dict[
         "probe_time": datetime.now(timezone.utc).isoformat(),
         "source_revision": source_revision,
         "request_policy_version": REQUEST_POLICY_VERSION,
+        "source_request_policy_version": SOURCE_REQUEST_POLICY_VERSION,
         "normalization_policy_version": NORMALIZATION_POLICY_VERSION,
         "dataset_policy_sha256": _policy_hash(dataset_policy),
         "provider_policy_sha256": _policy_hash(provider_policy),

@@ -351,6 +351,49 @@ def test_source_checkpoint_round_robin_cursor_prevents_later_stock_starvation(tm
     assert recovered["success"] == len(stock_ids)
 
 
+def test_source_checkpoint_v5_migration_preserves_coverage_and_fair_cursor(tmp_path: Path) -> None:
+    import asyncio
+    import json
+
+    checkpoint_dir = tmp_path / "checkpoints"
+    checkpoint_dir.mkdir(parents=True)
+    dates = ["2026-08-03", "2026-08-04", "2026-08-05"]
+    legacy = {
+        "manifest": {"dataset": "TaiwanStockPrice", "checkpoint_version": "2026-08-21-incremental-v5"},
+        "manifest_hash": "legacy",
+        "completed": ["0001"],
+        "no_data_but_valid": [],
+        "failed": [],
+        "permanent_failed": [],
+        "global_fatal": None,
+        "entries": {
+            "0001": {
+                "covered_dates": dates,
+                "verified_record_dates": dates,
+                "verified_no_data_dates": [],
+                "classification": "NEW_SUCCESS",
+            }
+        },
+        "fair_cursor_stock_id": "0002",
+    }
+    (checkpoint_dir / "source-TaiwanStockPrice-incremental-v5.json").write_text(json.dumps(legacy), encoding="utf-8")
+    client = FinMindClient(Settings(raw_root=tmp_path, broker_max_retries=0, source_concurrency=1))
+    calls: list[str] = []
+
+    def fetch(_dataset: str, stock_id: str, *_args, **_kwargs):
+        calls.append(stock_id)
+        return ([{"stock_id": stock_id, "date": day} for day in dates], {"attempt": 1})
+
+    client.fetch = fetch  # type: ignore[method-assign]
+    result = asyncio.run(client.fetch_stocks_dataset(["0001", "0002"], "TaiwanStockPrice", dates[0], dates[-1]))
+    assert result["checkpoint_state"] == "migrated_v5"
+    assert result["fair_cursor_start_stock_id"] == "0002"
+    assert result["observations_reused"] == 3
+    assert calls == ["0002"]
+    assert result["success"] == 2
+    assert (checkpoint_dir / "source-TaiwanStockPrice-incremental-v6.json").exists()
+
+
 def test_source_attempt_counters_reconcile_before_later_quota_failure(tmp_path: Path) -> None:
     import asyncio
 
@@ -517,6 +560,44 @@ def test_explicit_valid_no_data_covers_only_named_observation(tmp_path: Path) ->
     assert result["per_stock"]["2330"]["covered_dates"] == ["2026-08-03"]
     assert result["per_stock"]["2330"]["verified_no_data_dates"] == ["2026-08-03"]
     assert result["per_stock"]["2330"]["unresolved_dates"] == ["2026-08-04", "2026-08-05"]
+
+
+def test_successful_filtered_empty_source_range_is_checkpointed_as_missing_never_zero(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import asyncio
+
+    fake = _Client([_Response(200, {"status": 200, "data": []})])
+    monkeypatch.setattr(httpx, "Client", lambda **_: fake)
+    client = FinMindClient(Settings(raw_root=tmp_path, broker_max_retries=0, source_concurrency=1))
+    records, meta = client.fetch("TaiwanStockPrice", "2330", "2026-08-03", "2026-08-05", persist_raw=False)
+    assert records == []
+    assert meta["provider_http_status"] == 200
+    assert meta["provider_application_status"] == 200
+    assert meta["empty_is_valid"] is True
+    assert meta["empty_reason"] == "no_provider_observation"
+    assert meta["empty_observation_dates"] == ["2026-08-03", "2026-08-04", "2026-08-05"]
+    assert "never scored as zero" in meta["missing_value_semantics"]
+
+    result = asyncio.run(client.fetch_stocks_dataset(["2330"], "TaiwanStockPrice", "2026-08-03", "2026-08-05"))
+    assert result["success"] == 1
+    assert result["retryable_pending"] == 0
+    assert result["verified_observations"] == 3
+    assert result["provider_missing_observations"] == 3
+    assert result["unresolved_observations"] == 0
+    assert result["rows_received"] == result["rows_accepted"] == result["rows_versioned"] == 0
+    assert result["missing_values_imputed_as_zero"] == 0
+    assert result["per_stock"]["2330"]["verified_missing_dates"] == ["2026-08-03", "2026-08-04", "2026-08-05"]
+    assert result["per_stock"]["2330"]["provider_missing_is_not_zero"] is True
+
+
+def test_broker_empty_response_is_not_promoted_by_filtered_empty_contract(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    fake = _Client([_Response(200, {"status": 200, "data": []})])
+    monkeypatch.setattr(httpx, "Client", lambda **_: fake)
+    client = FinMindClient(Settings(raw_root=tmp_path, broker_max_retries=0))
+    records, meta = client.fetch("TaiwanStockTradingDailyReport", "2330", "2026-08-20", "2026-08-20", persist_raw=False)
+    assert records == []
+    assert meta["empty_is_valid"] is False
+    assert meta["empty_observation_dates"] == []
+    assert meta["provider_row_validated"] is False
 
 
 def test_incomplete_pagination_cannot_create_checkpoint_coverage(tmp_path: Path) -> None:

@@ -22,8 +22,8 @@ def _runtime(*, complete: bool = True) -> dict:
             "metadata": {"coverage": {"requested": 1000, "success": 1000 if complete else 500, "physical_requests": 500, "verified_observations": 1000, "unresolved_observations": 0 if complete else 500, "selection_policy": "durable_round_robin_stock_cursor_observation_resume", "fair_cursor_start_stock_id": "1000", "fair_cursor_end_stock_id": "1500"}},
         })
     jobs = [
-        {"dataset": SOURCE_DATASETS[0], "started_at": "2026-08-21T01:00:00+00:00", "checkpoint_state": {"physical_requests": 500, "success": 400, "fair_cursor_end_stock_id": "1400", "unresolved_observations": 600, "observations_reused": 100, "checkpoint_manifest_hash": "a" * 64}},
-        {"dataset": SOURCE_DATASETS[0], "started_at": "2026-08-21T02:00:00+00:00", "checkpoint_state": {"physical_requests": 500, "success": 900, "fair_cursor_end_stock_id": "1900", "unresolved_observations": 100, "observations_reused": 400, "checkpoint_manifest_hash": "b" * 64}},
+        {"dataset": SOURCE_DATASETS[0], "started_at": "2026-08-21T01:00:00+00:00", "checkpoint_state": {"physical_requests": 500, "success": 400, "fair_cursor_end_stock_id": "1400", "unresolved_observations": 600, "observations_reused": 100, "checkpoint_manifest_hash": "a" * 64, "checkpoint_content_hash_before": "0" * 64, "checkpoint_content_hash_after": "1" * 64}},
+        {"dataset": SOURCE_DATASETS[0], "started_at": "2026-08-21T02:00:00+00:00", "checkpoint_state": {"physical_requests": 500, "success": 900, "fair_cursor_end_stock_id": "1900", "unresolved_observations": 100, "observations_reused": 400, "checkpoint_manifest_hash": "a" * 64, "checkpoint_content_hash_before": "1" * 64, "checkpoint_content_hash_after": "2" * 64}},
     ]
     return {"datasets": datasets, "jobs": jobs}
 

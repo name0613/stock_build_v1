@@ -16,9 +16,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 try:
-    from backend.app.finmind import CHECKPOINT_SCHEMA_VERSION, INCREMENTAL_CHECKPOINT_VERSION, REQUEST_POLICY_VERSION
+    from backend.app.finmind import CHECKPOINT_SCHEMA_VERSION, INCREMENTAL_CHECKPOINT_VERSION, REQUEST_POLICY_VERSION, SOURCE_CHECKPOINT_SCHEMA_VERSION, SOURCE_INCREMENTAL_CHECKPOINT_VERSION, SOURCE_REQUEST_POLICY_VERSION
 except ModuleNotFoundError:
-    from app.finmind import CHECKPOINT_SCHEMA_VERSION, INCREMENTAL_CHECKPOINT_VERSION, REQUEST_POLICY_VERSION
+    from app.finmind import CHECKPOINT_SCHEMA_VERSION, INCREMENTAL_CHECKPOINT_VERSION, REQUEST_POLICY_VERSION, SOURCE_CHECKPOINT_SCHEMA_VERSION, SOURCE_INCREMENTAL_CHECKPOINT_VERSION, SOURCE_REQUEST_POLICY_VERSION
 
 
 EXPECTED_SPONSOR_LIMIT = 6_000
@@ -79,7 +79,9 @@ def _coverage(dataset: dict[str, Any]) -> dict[str, Any]:
         "requested_stocks": int(coverage.get("requested") or 0),
         "successful_stocks": int(coverage.get("success") or 0),
         "verified_observations": int(coverage.get("verified_observations") or 0),
+        "provider_missing_observations": int(coverage.get("provider_missing_observations") or 0),
         "unresolved_observations": int(coverage.get("unresolved_observations") or 0),
+        "missing_values_imputed_as_zero": int(coverage.get("missing_values_imputed_as_zero") or 0),
         "selection_policy": coverage.get("selection_policy"),
         "fair_cursor_start_stock_id": coverage.get("fair_cursor_start_stock_id"),
         "fair_cursor_end_stock_id": coverage.get("fair_cursor_end_stock_id"),
@@ -116,9 +118,13 @@ def _renewal_history(jobs: list[dict[str, Any]]) -> dict[str, Any]:
                 continue
             left_unresolved = int(left_checkpoint.get("unresolved_observations") or 0)
             right_unresolved = int(right_checkpoint.get("unresolved_observations") or 0)
-            progress = right_unresolved < left_unresolved and right_checkpoint.get("fair_cursor_end_stock_id") != left_checkpoint.get("fair_cursor_end_stock_id") and int(right_checkpoint.get("observations_reused") or 0) > 0
+            checkpoint_continuity = bool(
+                left_checkpoint.get("checkpoint_content_hash_after")
+                and left_checkpoint.get("checkpoint_content_hash_after") == right_checkpoint.get("checkpoint_content_hash_before")
+            )
+            progress = checkpoint_continuity and right_unresolved < left_unresolved and right_checkpoint.get("fair_cursor_end_stock_id") != left_checkpoint.get("fair_cursor_end_stock_id") and int(right_checkpoint.get("observations_reused") or 0) > 0
             if progress:
-                qualifying_pairs.append({"dataset": dataset, "earlier_started_at": left.get("started_at"), "later_started_at": right.get("started_at"), "earlier_success": left_checkpoint.get("success"), "later_success": right_checkpoint.get("success"), "earlier_cursor": left_checkpoint.get("fair_cursor_end_stock_id"), "later_cursor": right_checkpoint.get("fair_cursor_end_stock_id"), "earlier_unresolved": left_unresolved, "later_unresolved": right_unresolved, "later_observations_reused": right_checkpoint.get("observations_reused"), "earlier_checkpoint_hash": left_checkpoint.get("checkpoint_manifest_hash"), "later_checkpoint_hash": right_checkpoint.get("checkpoint_manifest_hash")})
+                qualifying_pairs.append({"dataset": dataset, "earlier_started_at": left.get("started_at"), "later_started_at": right.get("started_at"), "earlier_success": left_checkpoint.get("success"), "later_success": right_checkpoint.get("success"), "earlier_cursor": left_checkpoint.get("fair_cursor_end_stock_id"), "later_cursor": right_checkpoint.get("fair_cursor_end_stock_id"), "earlier_unresolved": left_unresolved, "later_unresolved": right_unresolved, "later_observations_reused": right_checkpoint.get("observations_reused"), "checkpoint_continuity": checkpoint_continuity, "earlier_checkpoint_content_hash_after": left_checkpoint.get("checkpoint_content_hash_after"), "later_checkpoint_content_hash_before": right_checkpoint.get("checkpoint_content_hash_before"), "later_checkpoint_content_hash_after": right_checkpoint.get("checkpoint_content_hash_after"), "checkpoint_manifest_hash": right_checkpoint.get("checkpoint_manifest_hash")})
     return {"status": "PASS" if qualifying_pairs else "NOT_PROVEN", "minimum_separation_minutes": 55, "qualifying_pairs": qualifying_pairs}
 
 
@@ -154,6 +160,15 @@ def generate(summary: dict[str, Any], status: dict[str, Any], provider_evidence:
         total = sum(model.values())
         model["total_physical_requests_upper_bound"] = total
         model["minimum_quota_cycles"] = _cycles(total, usable_budget)
+    scheduled_daily_capacity = usable_budget * 2
+    steady_state = {
+        "scheduled_provider_windows_per_trading_day": 2,
+        "scheduled_usable_requests_per_trading_day": scheduled_daily_capacity,
+        "ordinary_trading_day_requests": request_models["ordinary_trading_day"]["total_physical_requests_upper_bound"],
+        "holding_publication_day_requests": request_models["holding_publication_day"]["total_physical_requests_upper_bound"],
+        "ordinary_day_within_capacity": request_models["ordinary_trading_day"]["total_physical_requests_upper_bound"] <= scheduled_daily_capacity,
+        "holding_publication_day_within_capacity": request_models["holding_publication_day"]["total_physical_requests_upper_bound"] <= scheduled_daily_capacity,
+    }
     runtime = [_coverage(dataset) for dataset in status.get("datasets", []) if dataset.get("dataset") in SOURCE_DATASETS]
     completed = len(runtime) == len(SOURCE_DATASETS) and all(item["status"] in {"SUCCESS", "REUSED"} and item["unresolved_observations"] == 0 for item in runtime)
     counters_pass = len(runtime) == len(SOURCE_DATASETS) and all(item["counter_reconciles"] for item in runtime)
@@ -175,7 +190,8 @@ def generate(summary: dict[str, Any], status: dict[str, Any], provider_evidence:
         "quota": {"expected_sponsor_limit_per_hour": EXPECTED_SPONSOR_LIMIT, "provider_reported_limit_per_hour": provider_limit, "provider_reported_used": provider_used, "effective_limit_per_hour": effective_limit, "operational_reserve": reserve, "usable_budget_per_hour": usable_budget, "direct_evidence_source_revision": provider_evidence.get("source_revision") if provider_evidence else None, "direct_evidence_type": provider_evidence.get("evidence_type") if provider_evidence else None, "direct_verification_note": "only a source-matched sanitized authenticated_provider_user_info artifact can directly verify the limit"},
         "universe_stock_count": universe,
         "request_models": request_models,
-        "checkpoint_contract": {"checkpoint_schema_version": CHECKPOINT_SCHEMA_VERSION, "incremental_checkpoint_version": INCREMENTAL_CHECKPOINT_VERSION, "request_policy_version": REQUEST_POLICY_VERSION, "non_broker_selection_policy": "durable_round_robin_stock_cursor_observation_resume", "broker_selection_policy": "date_major_round_robin"},
+        "checkpoint_contract": {"broker_checkpoint_schema_version": CHECKPOINT_SCHEMA_VERSION, "broker_incremental_checkpoint_version": INCREMENTAL_CHECKPOINT_VERSION, "broker_request_policy_version": REQUEST_POLICY_VERSION, "source_checkpoint_schema_version": SOURCE_CHECKPOINT_SCHEMA_VERSION, "source_incremental_checkpoint_version": SOURCE_INCREMENTAL_CHECKPOINT_VERSION, "source_request_policy_version": SOURCE_REQUEST_POLICY_VERSION, "non_broker_selection_policy": "durable_round_robin_stock_cursor_observation_resume", "broker_selection_policy": "date_major_round_robin", "provider_missing_semantics": "successful filtered empty rows resolve ingestion work but remain missing and never become numeric zero"},
+        "steady_state_capacity": steady_state,
         "runtime_attempts": runtime,
         "renewal_history": renewal,
         "interpretation": {"one_hour_completion_required": False, "eventual_completion_requires_checkpoint_resume": True, "full_market_viability_claimed_only_when_observed_full_market_completion_is_pass": True},
