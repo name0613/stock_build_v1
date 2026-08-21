@@ -4,7 +4,12 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 try:
     from backend.app.config import get_settings
@@ -23,7 +28,7 @@ def source_revision() -> str:
         value = json.loads(metadata_path.read_text(encoding="utf-8")).get("source_revision")
         if value:
             return str(value)
-    return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=Path(__file__).resolve().parents[1], text=True).strip()
+    return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
 
 
 if __name__ == "__main__":
