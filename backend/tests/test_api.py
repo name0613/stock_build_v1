@@ -65,7 +65,11 @@ def test_api_contract_exposes_score_hash_filters_rankings_and_sync_counters() ->
     assert all(item["status"] == "DATA_INSUFFICIENT" for item in filtered.json()["items"])
     assert data_status.status_code == 200
     for row in data_status.json()["datasets"]:
-        assert {"rows_received_this_attempt", "rows_accepted_this_attempt", "rows_rejected_this_attempt", "stored_rows_total"} <= set(row)
+        assert {"physical_requests_this_attempt", "rows_received_this_attempt", "rows_accepted_this_attempt", "rows_rejected_this_attempt", "rows_versioned_this_attempt", "observations_reused_this_attempt", "stored_rows_total", "counter_attempt_id", "counter_semantics_version", "counters_are_current_attempt", "historical_pre_v5_counters"} <= set(row)
+        if row["counters_are_current_attempt"]:
+            assert row["counter_semantics_version"] == "attempt-v5-reconciled-v1"
+            assert row["rows_received_this_attempt"] == row["rows_accepted_this_attempt"] + row["rows_rejected_this_attempt"]
+            assert row["rows_versioned_this_attempt"] <= row["rows_accepted_this_attempt"]
 
 
 def test_detail_contract_exposes_provenance_version_reasons_and_null_safe_charts() -> None:

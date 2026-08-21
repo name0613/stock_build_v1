@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 import hashlib
 import json
+import uuid
 from typing import Any, Callable
 
 from sqlalchemy import func, inspect, select, text, tuple_
@@ -356,7 +357,7 @@ def sync_universe(db: Session, client: FinMindClient, as_of: date | None = None)
         db.rollback()
         code = getattr(exc, "code", "UNEXPECTED")
         expected = _expected_latest_source_date("TaiwanStockInfo", as_of or date.today())
-        _mark_sync(db, "TaiwanStockInfo", "FAILED", 0, None, code, str(exc), fetched_at=_now(), expected_latest=expected, rows_received=len(records), rows_accepted=0, rows_rejected=0, stored_total=_stored_rows_total(db, "TaiwanStockInfo"), metadata={"universe": {"pagination_complete": False, "authoritative": False, "attempted_rows": len(records)}})
+        _mark_sync(db, "TaiwanStockInfo", "FAILED", 0, None, code, str(exc), fetched_at=_now(), expected_latest=expected, rows_received=len(records), rows_accepted=0, rows_rejected=len(records), stored_total=_stored_rows_total(db, "TaiwanStockInfo"), metadata={"universe": {"pagination_complete": False, "authoritative": False, "attempted_rows": len(records)}})
         raise
 
 
@@ -438,15 +439,18 @@ def _expected_latest_source_date(dataset: str, as_of: date | None) -> date | Non
     return expected_trading_sessions(as_of, 1)[-1]
 
 
-def _mark_sync(db: Session, dataset: str, status: str, records: int, latest: date | None, error_code: str | None = None, error: str | None = None, *, fetched_at: datetime | None = None, metadata: dict[str, Any] | None = None, rows_received: int | None = None, rows_accepted: int | None = None, rows_rejected: int | None = None, rows_versioned: int | None = None, observations_reused: int = 0, stored_total: int | None = None, expected_latest: date | None = None) -> None:
+SYNC_COUNTER_SEMANTICS_VERSION = "attempt-v5-reconciled-v1"
+
+
+def _mark_sync(db: Session, dataset: str, status: str, records: int, latest: date | None, error_code: str | None = None, error: str | None = None, *, fetched_at: datetime | None = None, metadata: dict[str, Any] | None = None, rows_received: int | None = None, rows_accepted: int | None = None, rows_rejected: int | None = None, rows_versioned: int | None = None, observations_reused: int = 0, physical_requests: int = 1, stored_total: int | None = None, expected_latest: date | None = None) -> None:
     received_count = rows_received if rows_received is not None else records
     accepted_count = rows_accepted if rows_accepted is not None else records
     rejected_count = rows_rejected or 0
     versioned_count = rows_versioned if rows_versioned is not None else accepted_count
-    if min(received_count, accepted_count, rejected_count, versioned_count, observations_reused) < 0:
+    if min(received_count, accepted_count, rejected_count, versioned_count, observations_reused, physical_requests) < 0:
         raise ValueError("sync counters cannot be negative")
-    if accepted_count + rejected_count > received_count:
-        raise ValueError("sync counters do not reconcile: accepted + rejected exceeds received")
+    if accepted_count + rejected_count != received_count:
+        raise ValueError("sync counters do not reconcile: accepted + rejected must equal received")
     if versioned_count > accepted_count:
         raise ValueError("sync counters do not reconcile: versioned exceeds accepted")
     item = db.get(DataSyncStatus, dataset)
@@ -468,7 +472,11 @@ def _mark_sync(db: Session, dataset: str, status: str, records: int, latest: dat
     item.rows_rejected_this_attempt = rejected_count
     item.rows_versioned_this_attempt = versioned_count
     item.observations_reused_this_attempt = observations_reused
+    item.physical_requests_this_attempt = physical_requests
     item.stored_rows_total = item.stored_records
+    item.counter_attempt_id = uuid.uuid4().hex
+    item.counter_semantics_version = SYNC_COUNTER_SEMANTICS_VERSION
+    item.counters_are_current_attempt = True
     if status in {"SUCCESS", "REUSED", "PARTIAL", "NO_DATA"}:
         item.last_http_success_at = fetched_at or _now()
         item.last_fetch_at = fetched_at or _now()
@@ -491,8 +499,16 @@ def _mark_sync(db: Session, dataset: str, status: str, records: int, latest: dat
         item.staleness_state = "FRESH"
     item.last_error_code = error_code
     item.last_error = error[:500] if error else None
-    if metadata:
-        item.metadata_json = {**(item.metadata_json or {}), **_jsonable(metadata)}
+    item.metadata_json = {
+        **(item.metadata_json or {}),
+        **_jsonable(metadata or {}),
+        "counter_contract": {
+            "version": SYNC_COUNTER_SEMANTICS_VERSION,
+            "attempt_id": item.counter_attempt_id,
+            "reconciliation": "rows_received = rows_accepted + rows_rejected; rows_versioned <= rows_accepted",
+            "historical_pre_v5_snapshot_preserved": bool((item.metadata_json or {}).get("legacy_pre_v5_counter_snapshot")),
+        },
+    }
     db.commit()
 
 
@@ -742,6 +758,7 @@ async def _catch_up_locked(db: Session, client: FinMindClient, end_date: date | 
         progress(dataset)
         job = _job_start(db, dataset, start, end, stocks_attempted=len(stock_ids))
         received = accepted = versioned = 0
+        metrics: dict[str, Any] = {}
         latest_dates: list[date] = []
         def sink(rows: list[dict[str, Any]]) -> dict[str, Any]:
             nonlocal accepted, versioned
@@ -793,7 +810,7 @@ async def _catch_up_locked(db: Session, client: FinMindClient, end_date: date | 
                 code = None if accepted else "NO_DATA"
                 coverage = {"mode": "fallback-broad", "requested": len(stock_ids), "rows_received": received, "rows_accepted": accepted, "rows_rejected": max(0, received - accepted), "rows_versioned": versioned, "observations_reused": 0}
             expected = _expected_latest_source_date(dataset, end)
-            _mark_sync(db, dataset, status, accepted, latest, code, fetched_at=_now(), expected_latest=expected, rows_received=received, rows_accepted=accepted, rows_rejected=int(coverage.get("rows_rejected", max(0, received - accepted))), rows_versioned=versioned, observations_reused=int(coverage.get("observations_reused", 0)), stored_total=_stored_rows_total(db, dataset), metadata={"requested_start": (start - timedelta(days=30)).isoformat(), "requested_end": end.isoformat(), "query_mode": "per_stock_date_range" if hasattr(client, "fetch_stocks_dataset") else "fallback_broad", "coverage": coverage})
+            _mark_sync(db, dataset, status, accepted, latest, code, fetched_at=_now(), expected_latest=expected, rows_received=received, rows_accepted=accepted, rows_rejected=int(coverage.get("rows_rejected", max(0, received - accepted))), rows_versioned=versioned, observations_reused=int(coverage.get("observations_reused", 0)), physical_requests=int(coverage.get("physical_requests", 1)), stored_total=_stored_rows_total(db, dataset), metadata={"requested_start": (start - timedelta(days=30)).isoformat(), "requested_end": end.isoformat(), "query_mode": "per_stock_date_range" if hasattr(client, "fetch_stocks_dataset") else "fallback_broad", "coverage": coverage})
             _job_finish(db, job, status, records=accepted, stocks_completed=coverage.get("success", 0), stocks_failed=coverage.get("failed", 0), error_code=code, checkpoint_state=coverage)
             result["datasets"][dataset] = {"status": status, "records_received": received, "records_accepted": accepted, "stored_rows_total": _stored_rows_total(db, dataset), "coverage": coverage}
             result["source_coverage"][dataset] = coverage
@@ -806,7 +823,7 @@ async def _catch_up_locked(db: Session, client: FinMindClient, end_date: date | 
             db.rollback()
             code = getattr(exc, "code", "UNEXPECTED")
             _job_finish(db, job, "FAILED", error_code=code, error=str(exc), stocks_failed=len(stock_ids))
-            _mark_sync(db, dataset, "FAILED", accepted, None, code, str(exc), fetched_at=_now(), expected_latest=_expected_latest_source_date(dataset, end), rows_received=received, rows_accepted=accepted, rows_rejected=max(0, received - accepted), rows_versioned=versioned, stored_total=_stored_rows_total(db, dataset))
+            _mark_sync(db, dataset, "FAILED", accepted, None, code, str(exc), fetched_at=_now(), expected_latest=_expected_latest_source_date(dataset, end), rows_received=received, rows_accepted=accepted, rows_rejected=max(0, received - accepted), rows_versioned=versioned, physical_requests=int(metrics.get("physical_requests", 1)), stored_total=_stored_rows_total(db, dataset))
             result["datasets"][dataset] = {"status": "FAILED", "error_code": code}
             result["status"] = "PARTIAL"
             if code in GLOBAL_PROVIDER_FAILURE_CODES:
@@ -852,7 +869,7 @@ async def _catch_up_locked(db: Session, client: FinMindClient, end_date: date | 
         if no_work_reused:
             broker_metrics["reuse_reason"] = "all requested stock-session keys already completed; no new physical requests"
         broker_error = None if broker_status in {"SUCCESS", "REUSED"} else (broker_metrics.get("fatal_code") or "BROKER_PARTIAL")
-        _mark_sync(db, "TaiwanStockTradingDailyReport", broker_status, stored, end if stored else None, broker_error, fetched_at=_now(), expected_latest=_expected_latest_source_date("TaiwanStockTradingDailyReport", end), rows_received=broker_metrics.get("rows_received", broker_metrics.get("rows", 0)), rows_accepted=stored, rows_rejected=max(0, broker_metrics.get("rows_received", broker_metrics.get("rows", 0)) - stored), rows_versioned=broker_versioned, observations_reused=int(broker_metrics.get("observations_reused", 0)), stored_total=_stored_rows_total(db, "TaiwanStockTradingDailyReport"), metadata={"query_mode": "per_stock_per_session", "rows_versioned": broker_versioned, **broker_metrics})
+        _mark_sync(db, "TaiwanStockTradingDailyReport", broker_status, stored, end if stored else None, broker_error, fetched_at=_now(), expected_latest=_expected_latest_source_date("TaiwanStockTradingDailyReport", end), rows_received=broker_metrics.get("rows_received", broker_metrics.get("rows", 0)), rows_accepted=stored, rows_rejected=max(0, broker_metrics.get("rows_received", broker_metrics.get("rows", 0)) - stored), rows_versioned=broker_versioned, observations_reused=int(broker_metrics.get("observations_reused", 0)), physical_requests=int(broker_metrics.get("physical_requests", 0)), stored_total=_stored_rows_total(db, "TaiwanStockTradingDailyReport"), metadata={"query_mode": "per_stock_per_session", "rows_versioned": broker_versioned, **broker_metrics})
         _job_finish(db, broker_job, broker_status, records=stored, retry_count=broker_metrics.get("retries", 0), stocks_completed=broker_metrics.get("stocks_completed", 0), stocks_failed=broker_metrics.get("stocks_failed", 0), error_code=broker_error, checkpoint_state=broker_metrics)
         result["datasets"]["TaiwanStockTradingDailyReport"] = {**broker_metrics, "stored_records": stored, "status": broker_status}
         if broker_status not in {"SUCCESS", "REUSED"}:

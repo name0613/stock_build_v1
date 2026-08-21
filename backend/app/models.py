@@ -167,7 +167,11 @@ class DataSyncStatus(Base):
     rows_rejected_this_attempt: Mapped[int] = mapped_column(Integer, default=0)
     rows_versioned_this_attempt: Mapped[int] = mapped_column(Integer, default=0)
     observations_reused_this_attempt: Mapped[int] = mapped_column(Integer, default=0)
+    physical_requests_this_attempt: Mapped[int] = mapped_column(Integer, default=0)
     stored_rows_total: Mapped[int] = mapped_column(Integer, default=0)
+    counter_attempt_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    counter_semantics_version: Mapped[str] = mapped_column(String(64), default="attempt-v5-reconciled-v1")
+    counters_are_current_attempt: Mapped[bool] = mapped_column(Boolean, default=False)
     metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 
