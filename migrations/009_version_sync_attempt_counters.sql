@@ -4,6 +4,14 @@ ALTER TABLE data_sync_status
   ADD COLUMN IF NOT EXISTS counter_semantics_version VARCHAR(64) NOT NULL DEFAULT 'legacy-pre-v5-unversioned',
   ADD COLUMN IF NOT EXISTS counters_are_current_attempt BOOLEAN NOT NULL DEFAULT FALSE;
 
+-- Some legacy databases were created by SQLAlchemy before 001_init was
+-- recorded and therefore have JSON rather than the intended JSONB column.
+-- Normalize the storage type before using jsonb operators; the cast preserves
+-- every existing object value.
+ALTER TABLE data_sync_status
+  ALTER COLUMN metadata_json TYPE JSONB
+  USING COALESCE(metadata_json::jsonb, '{}'::jsonb);
+
 UPDATE data_sync_status
 SET metadata_json = COALESCE(metadata_json, '{}'::jsonb) || jsonb_build_object(
       'legacy_pre_v5_counter_snapshot',

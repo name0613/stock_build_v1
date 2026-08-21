@@ -51,6 +51,8 @@ def test_current_attempt_rejects_unreconciled_rows() -> None:
 def test_postgres_migration_preserves_then_resets_unversioned_counters() -> None:
     sql = (Path(__file__).resolve().parents[2] / "migrations/009_version_sync_attempt_counters.sql").read_text(encoding="utf-8")
     assert "legacy_pre_v5_counter_snapshot" in sql
+    assert "ALTER COLUMN metadata_json TYPE JSONB" in sql
+    assert "USING COALESCE(metadata_json::jsonb, '{}'::jsonb)" in sql
     assert "rows_received_this_attempt = 0" in sql
     assert "rows_accepted_this_attempt = 0" in sql
     assert "counter_semantics_version = 'legacy-pre-v5-reset-v1'" in sql
