@@ -69,7 +69,7 @@ def run() -> dict[str, object]:
             ingest_records(db, "TaiwanStockInstitutionalInvestorsBuySellWide", [{"stock_id": "2330", "date": day, "Foreign_Investor_buy": 110, "Foreign_Investor_sell": 10, "Foreign_Dealer_Self_buy": 20, "Foreign_Dealer_Self_sell": 10, "Investment_Trust_Buy": 30, "Investment_Trust_Sell": 10, "Dealer_Buy": 15, "Dealer_Sell": 10, "Dealer_self_Buy": 5, "Dealer_self_Sell": 1, "Dealer_Hedging_Buy": 4, "Dealer_Hedging_Sell": 2}])
             ingest_records(db, "TaiwanStockShareholding", [{"stock_id": "2330", "date": day, "ForeignInvestmentShares": 1000 + day.day, "ForeignInvestmentSharesRatio": 40 + day.day / 100}])
             ingest_records(db, "TaiwanStockPrice", [{"stock_id": "2330", "date": day, "close": 100 + day.day, "TradingVolume": 100000}])
-            ingest_records(db, "TaiwanStockTradingDailyReport", [{"stock_id": "2330", "date": day, "securities_trader_id": "PIT", "buy_volume": 100, "sell_volume": 10, "provider_report_complete": True, "provider_contract_version": BROKER_REPORT_CONTRACT_VERSION}])
+            ingest_records(db, "TaiwanStockTradingDailyReport", [{"stock_id": "2330", "date": day, "securities_trader_id": "PIT", "buy_volume": 100, "sell_volume": 10, "provider_row_validated": True, "provider_row_contract_version": BROKER_REPORT_CONTRACT_VERSION}])
         for index, day in enumerate((end - timedelta(days=28), end - timedelta(days=21), end - timedelta(days=14), end - timedelta(days=7), end)):
             ingest_records(db, "TaiwanStockHoldingSharesPer", _holding_rows(day, 8 + index))
         for model in (InstitutionalDaily, ForeignShareholdingDaily, PriceDaily, BrokerDaily, HoldingDistribution, SourceRevision):
