@@ -43,7 +43,10 @@ def run() -> dict[str, object]:
             connection.execute(text("INSERT INTO holding_distribution(stock_id, source_date, holding_shares_level, source_dataset, fetched_at, percent) VALUES ('2330', '2026-08-20', '400,001-600,000', 'TaiwanStockHoldingSharesPer', :fetched_at, 10)"), {"fetched_at": fetched_at})
             connection.execute(text("INSERT INTO broker_daily(stock_id, source_date, securities_trader_id, source_dataset, fetched_at, net_volume) VALUES ('2330', '2026-08-20', 'PIT', 'TaiwanStockTradingDailyReport', :fetched_at, 100)"), {"fetched_at": fetched_at})
             connection.execute(text("INSERT INTO price_daily(stock_id, source_date, source_dataset, fetched_at, close) VALUES ('2330', '2026-08-20', 'TaiwanStockPrice', :fetched_at, 100)"), {"fetched_at": fetched_at})
-            connection.execute(text("INSERT INTO data_sync_status(dataset, status, records, metadata_json, rows_received_this_attempt, rows_accepted_this_attempt, rows_rejected_this_attempt, rows_versioned_this_attempt, observations_reused_this_attempt, stored_rows_total) VALUES ('TaiwanStockHoldingSharesPer', 'SUCCESS', 19995, '{\"legacy\":true}'::json, 0, 19995, 0, 19995, 0, 19995)"))
+            connection.execute(
+                text("INSERT INTO data_sync_status(dataset, status, records, metadata_json, rows_received_this_attempt, rows_accepted_this_attempt, rows_rejected_this_attempt, rows_versioned_this_attempt, observations_reused_this_attempt, stored_rows_total) VALUES ('TaiwanStockHoldingSharesPer', 'SUCCESS', 19995, CAST(:metadata_json AS json), 0, 19995, 0, 19995, 0, 19995)"),
+                {"metadata_json": json.dumps({"legacy": True})},
+            )
             connection.execute(text(LEGACY_MIGRATION.read_text(encoding="utf-8")))
             initial_count = connection.execute(text("SELECT count(*) FROM source_revisions")).scalar_one()
             preserved = connection.execute(text("SELECT count(*) FROM source_revisions WHERE fetched_at = :fetched_at"), {"fetched_at": fetched_at}).scalar_one()
