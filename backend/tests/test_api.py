@@ -28,6 +28,18 @@ def test_stocks_endpoint_supports_pagination_and_safe_sort() -> None:
     assert len(payload["items"]) <= 10
 
 
+def test_all_holdings_status_is_a_market_session_independent_full_universe_snapshot() -> None:
+    with TestClient(app) as client:
+        response = client.get("/api/holdings/status")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["dataset"] == "TaiwanStockHoldingSharesPer"
+    assert payload["market_session_required"] is False
+    assert payload["total"] > 0
+    assert len(payload["items"]) == payload["total"]
+    assert {"stock_id", "status", "latest_source_date", "large_holder_400_lots_percent", "large_holder_1000_lots_percent"} <= set(payload["items"][0])
+
+
 def test_stocks_filters_sort_nulls_and_pagination_return_real_ids() -> None:
     with TestClient(app) as client:
         first = client.get("/api/stocks", params={"page": 1, "page_size": 5, "sort": "score", "order": "desc"}).json()

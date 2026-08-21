@@ -9,7 +9,7 @@ from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import asc, case, desc, func, nulls_last, select
+from sqlalchemy import and_, asc, case, desc, func, nulls_last, select
 from sqlalchemy.orm import Session
 
 from .config import get_settings
@@ -40,6 +40,7 @@ CURRENT_SCORE_DATASETS = (
     "TaiwanStockTradingDailyReport",
     "TaiwanStockPrice",
 )
+HOLDING_DISTRIBUTION_DATASET = "TaiwanStockHoldingSharesPer"
 
 
 @app.on_event("startup")
@@ -185,6 +186,79 @@ def stock_detail(stock_id: str, limit: int = Query(365, ge=1, le=1000), db: Sess
     provider_state = _provider_state(sync)
     latest = _current_score_date(db, provider_state, sync)
     return {"stock": {"stock_id": stock.stock_id, "stock_name": stock.stock_name, "market": stock.market, "industry": stock.industry}, "score": _score_dict(db, stock_id, latest), "provider_state": provider_state, "sources": _source_status(db, stock_id), "institutional": _rows(db, InstitutionalDaily, stock_id, min(limit, 365), "TaiwanStockInstitutionalInvestorsBuySellWide"), "foreign_holding": _rows(db, ForeignShareholdingDaily, stock_id, min(limit, 365), "TaiwanStockShareholding"), "holding_distribution": _rows(db, HoldingDistribution, stock_id, min(limit, 200), "TaiwanStockHoldingSharesPer"), "holding_series": _holding_chart_series(db, stock_id, min(limit, 200)), "brokers": _broker_summary(db, stock_id), "prices": _rows(db, PriceDaily, stock_id, min(limit, 365), "TaiwanStockPrice"), "score_history": _score_history(db, stock_id, min(limit, 365)), "calendar_version": CALENDAR_VERSION}
+
+
+@app.get("/api/holdings/status")
+def all_holdings_status(db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Return the latest large-holder state for every common stock.
+
+    This is a read of the persisted weekly holding distribution and is
+    intentionally independent of the exchange's current trading session.
+    The page can therefore hydrate this snapshot once at startup, including
+    weekends and outside continuous trading hours.
+    """
+    stocks = db.scalars(select(Stock).where(Stock.is_common_stock.is_(True)).order_by(Stock.stock_id)).all()
+    latest_dates = (
+        select(HoldingDistribution.stock_id, func.max(HoldingDistribution.source_date).label("latest_source_date"))
+        .where(HoldingDistribution.source_dataset == HOLDING_DISTRIBUTION_DATASET)
+        .group_by(HoldingDistribution.stock_id)
+        .subquery()
+    )
+    rows = db.scalars(
+        select(HoldingDistribution)
+        .join(Stock, Stock.stock_id == HoldingDistribution.stock_id)
+        .join(
+            latest_dates,
+            and_(
+                latest_dates.c.stock_id == HoldingDistribution.stock_id,
+                latest_dates.c.latest_source_date == HoldingDistribution.source_date,
+            ),
+        )
+        .where(
+            Stock.is_common_stock.is_(True),
+            HoldingDistribution.source_dataset == HOLDING_DISTRIBUTION_DATASET,
+        )
+        .order_by(HoldingDistribution.stock_id, HoldingDistribution.holding_shares_threshold, HoldingDistribution.holding_shares_level)
+    ).all()
+    rows_by_stock: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        rows_by_stock.setdefault(row.stock_id, []).append(
+            {
+                "source_date": row.source_date,
+                "holding_shares_level": row.holding_shares_level,
+                "holding_shares_threshold": row.holding_shares_threshold,
+                "people": row.people,
+                "percent": row.percent,
+                "shares": row.shares,
+            }
+        )
+
+    items: list[dict[str, Any]] = []
+    for stock in stocks:
+        features = holding_distribution_features(rows_by_stock.get(stock.stock_id, []))
+        coverage = features.get("HoldingDistributionCoverage") or {}
+        available = coverage.get("available") is True
+        items.append(
+            {
+                "stock_id": stock.stock_id,
+                "stock_name": stock.stock_name,
+                "market": stock.market,
+                "latest_source_date": features.get("HoldingDistributionLatestDate"),
+                "status": "AVAILABLE" if available else "DATA_INSUFFICIENT",
+                "large_holder_400_lots_percent": features.get("LargeHolder400LotsPercent"),
+                "large_holder_400_lots_people": features.get("LargeHolder400LotsPeople"),
+                "large_holder_1000_lots_percent": features.get("LargeHolder1000LotsPercent"),
+                "large_holder_1000_lots_people": features.get("LargeHolder1000LotsPeople"),
+            }
+        )
+
+    return {
+        "dataset": HOLDING_DISTRIBUTION_DATASET,
+        "market_session_required": False,
+        "total": len(items),
+        "available_count": sum(1 for item in items if item["status"] == "AVAILABLE"),
+        "items": items,
+    }
 
 
 @app.get("/api/stocks/{stock_id}/institutional")

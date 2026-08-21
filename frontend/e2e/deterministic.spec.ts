@@ -91,6 +91,9 @@ async function installApiFixtures(page: Page) {
     if (url.pathname === "/api/summary") {
       return route.fulfill({ json: { stock_count: 55, strong_count: 21, accumulation_count: 15, watch_count: 15, data_insufficient_count: 3, no_strong_evidence_count: 1, status_invariant: true, score_version: "s-only-v6", formula_hash: formulaHash, latest_score_date: "2026-08-20", sync_status: [] } });
     }
+    if (url.pathname === "/api/holdings/status") {
+      return route.fulfill({ json: { dataset: "TaiwanStockHoldingSharesPer", market_session_required: false, total: stocks.length, available_count: stocks.length, items: stocks.map((stock) => ({ stock_id: stock.stock_id, stock_name: stock.stock_name, market: stock.market, status: "AVAILABLE", latest_source_date: "2026-08-20" })) } });
+    }
     if (url.pathname === "/api/stocks") {
       // Force the initial unfiltered request to finish after a rapid filter request.
       // The UI must never allow this stale response to overwrite current results.
@@ -141,6 +144,7 @@ test.beforeEach(async ({ page }) => {
 
 test("summary count invariant and deterministic ranking contract are exact", async ({ page }) => {
   await page.goto("/");
+  await expect(page.getByTestId("holding-status-load")).toContainText("55 / 55 檔已載入");
   await expect(page.getByText("55 檔 · 20D persistence weighted")).toBeVisible();
   await expect(page.getByText("21", { exact: true })).toBeVisible();
   const contract = await page.evaluate(async () => {
