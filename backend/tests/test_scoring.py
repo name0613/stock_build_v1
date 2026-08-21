@@ -1,7 +1,16 @@
 from __future__ import annotations
 
+import pytest
+
 from app.features import broker_features, holding_distribution_features, institutional_features
-from app.scoring import classify_score, calculate_score, is_holding_metadata_level, one_day_spike_ratio, parse_holding_level, positive_day_ratio, rolling_sum
+from app.scoring import BROKER_REPORT_CONTRACT_VERSION, HOLDING_CANONICAL_LEVELS, classify_score, calculate_score, holding_schema_state, is_holding_metadata_level, one_day_spike_ratio, parse_holding_level, positive_day_ratio, rolling_sum
+
+
+def _holding_rows(day: str, relevant_percent: dict[int, float]) -> list[dict[str, object]]:
+    return [
+        {"date": day, "holding_shares_level": level, "percent": relevant_percent.get(threshold, 0.0), "people": 1, "shares": threshold}
+        for level, threshold in HOLDING_CANONICAL_LEVELS
+    ]
 
 
 def test_holding_level_parser_supports_explicit_units_and_rejects_ambiguous() -> None:
@@ -15,17 +24,34 @@ def test_holding_level_parser_supports_explicit_units_and_rejects_ambiguous() ->
 
 
 def test_holding_aggregation_does_not_depend_on_row_order() -> None:
-    rows = [
-        {"date": "2026-08-14", "holding_shares_level": "1000張以上", "percent": 35.0, "people": 80, "shares": 1_000_000},
-        {"date": "2026-08-07", "holding_shares_level": "400張以上", "percent": 52.0, "people": 100, "shares": 2_000_000},
-        {"date": "2026-08-14", "holding_shares_level": "400張以上", "percent": 55.0, "people": 99, "shares": 2_100_000},
-        {"date": "2026-08-07", "holding_shares_level": "1000張以上", "percent": 33.0, "people": 81, "shares": 980_000},
-    ]
+    first = {400_001: 20.0, 600_001: 15.0, 800_001: 10.0, 1_000_001: 5.0}
+    second = {400_001: 22.0, 600_001: 16.0, 800_001: 11.0, 1_000_001: 6.0}
+    rows = list(reversed(_holding_rows("2026-08-14", second) + _holding_rows("2026-08-07", first)))
     result = holding_distribution_features(rows)
-    assert result["LargeHolder400LotsPercent"] == 90.0
-    assert result["LargeHolder400LotsPeople"] == 179
+    assert result["LargeHolder400LotsPercent"] == 55.0
+    assert result["LargeHolder400LotsPeople"] == 4
     assert result["LargeHolder400Change1W"] == 5.0
-    assert result["LargeHolder1000LotsPercent"] == 35.0
+    assert result["LargeHolder1000LotsPercent"] == 6.0
+
+
+@pytest.mark.parametrize("missing_threshold", [threshold for _, threshold in HOLDING_CANONICAL_LEVELS])
+def test_holding_schema_requires_every_canonical_bucket(missing_threshold: int) -> None:
+    rows = [row for row in _holding_rows("2026-08-14", {}) if parse_holding_level(str(row["holding_shares_level"])) != missing_threshold]
+    state = holding_schema_state(rows)
+    assert state["available"] is False
+    assert missing_threshold in state["missing_thresholds"]
+
+
+def test_holding_schema_rejects_duplicate_unknown_and_null_and_ignores_row_order() -> None:
+    rows = _holding_rows("2026-08-14", {})
+    assert holding_schema_state(list(reversed(rows)))["available"] is True
+    duplicate = rows + [dict(rows[-1])]
+    assert holding_schema_state(duplicate)["duplicate_thresholds"] == [1_000_001]
+    unknown = rows + [{"holding_shares_level": "future provider bucket", "percent": 1, "people": 1, "shares": 1}]
+    assert holding_schema_state(unknown)["unknown_levels"] == ["future provider bucket"]
+    invalid = [dict(row) for row in rows]
+    invalid[7]["people"] = None
+    assert holding_schema_state(invalid)["invalid_thresholds"] == [40_001]
 
 
 def test_institutional_net_rolling_and_persistence_metrics() -> None:
@@ -48,8 +74,8 @@ def test_broker_persistence_rewards_repeated_buying_over_single_spike() -> None:
     spiky = []
     for day in range(20):
         ds = f"2026-07-{day + 1:02d}"
-        persistent.extend([{"date": ds, "securities_trader_id": "A", "net_volume": 100, "provider_report_complete": True}, {"date": ds, "securities_trader_id": "B", "net_volume": 50, "provider_report_complete": True}])
-        spiky.extend([{"date": ds, "securities_trader_id": "A", "net_volume": 3000 if day == 19 else 0, "provider_report_complete": True}, {"date": ds, "securities_trader_id": "B", "net_volume": 0, "provider_report_complete": True}])
+        persistent.extend([{"date": ds, "securities_trader_id": "A", "net_volume": 100, "provider_report_complete": True, "provider_contract_version": BROKER_REPORT_CONTRACT_VERSION}, {"date": ds, "securities_trader_id": "B", "net_volume": 50, "provider_report_complete": True, "provider_contract_version": BROKER_REPORT_CONTRACT_VERSION}])
+        spiky.extend([{"date": ds, "securities_trader_id": "A", "net_volume": 3000 if day == 19 else 0, "provider_report_complete": True, "provider_contract_version": BROKER_REPORT_CONTRACT_VERSION}, {"date": ds, "securities_trader_id": "B", "net_volume": 0, "provider_report_complete": True, "provider_contract_version": BROKER_REPORT_CONTRACT_VERSION}])
     persistent_score = broker_features(persistent)
     spiky_score = broker_features(spiky)
     assert persistent_score["BrokerPersistenceScore"] > spiky_score["BrokerPersistenceScore"]

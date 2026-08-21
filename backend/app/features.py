@@ -5,7 +5,7 @@ from datetime import date, timedelta
 import math
 from typing import Any
 
-from .scoring import one_day_spike_ratio, parse_holding_level, positive_day_ratio, rolling_sum, slope
+from .scoring import BROKER_REPORT_CONTRACT_VERSION, HOLDING_SCHEMA_VERSION, holding_period_anchor, holding_schema_state, one_day_spike_ratio, parse_holding_level, positive_day_ratio, rolling_sum, slope
 
 
 def _ordered(rows: list[dict[str, Any]], date_key: str = "date") -> list[dict[str, Any]]:
@@ -58,27 +58,39 @@ def holding_distribution_features(rows: list[dict[str, Any]]) -> dict[str, Any]:
     at least the threshold).  Weekly deltas require a real observation near
     the expected publication date; an arbitrary older row is never substituted.
     """
-    by_date: dict[str, dict[int, list[dict[str, Any]]]] = defaultdict(lambda: defaultdict(list))
+    by_period: dict[str, dict[str, list[dict[str, Any]]]] = defaultdict(lambda: defaultdict(list))
     for row in rows:
-        threshold = row.get("holding_shares_threshold") or parse_holding_level(row.get("holding_shares_level"))
-        if threshold is None:
+        source_day = _parse_date(str(row.get("date") or row.get("source_date") or ""))
+        if source_day is None:
             continue
-        key = str(row.get("date") or row.get("source_date") or "")
-        by_date[key][threshold].append(row)
-    ordered_dates = sorted(by_date)
-    schema_by_date = {day: _holding_schema_state(buckets) for day, buckets in by_date.items()}
+        anchor = holding_period_anchor(source_day)
+        if anchor is None:
+            continue
+        by_period[anchor.isoformat()][source_day.isoformat()].append(row)
+    ordered_periods = sorted(by_period)
+    schema_by_period: dict[str, dict[str, Any]] = {}
+    selected_rows: dict[str, list[dict[str, Any]]] = {}
+    for period, candidates in by_period.items():
+        if len(candidates) != 1:
+            schema_by_period[period] = {"available": False, "schema_version": HOLDING_SCHEMA_VERSION, "candidate_source_dates": sorted(candidates), "reasons": ["multiple_observations_in_weekly_period"]}
+            selected_rows[period] = []
+            continue
+        source_date, candidate_rows = next(iter(candidates.items()))
+        schema_by_period[period] = {**holding_schema_state(candidate_rows), "source_date": source_date, "candidate_source_dates": [source_date]}
+        selected_rows[period] = candidate_rows
 
     def metric(threshold: int, field: str) -> list[float | None]:
         values: list[float | None] = []
-        for day in ordered_dates:
-            if not schema_by_date[day]["available"]:
+        for period in ordered_periods:
+            if not schema_by_period[period]["available"]:
                 values.append(None)
                 continue
-            selected = [row.get(field) for lower, bucket_rows in by_date[day].items() if lower >= threshold for row in bucket_rows]
+            selected = [row.get(field) for row in selected_rows[period] if (lower := (row.get("holding_shares_threshold") or parse_holding_level(row.get("holding_shares_level")))) is not None and lower >= threshold]
             values.append(sum(selected) if selected and all(value is not None for value in selected) else None)
         return values
 
     out: dict[str, Any] = {}
+    series: dict[str, list[dict[str, Any]]] = {"400": [], "1000": []}
     for threshold, label in ((400_000, "400"), (1_000_000, "1000")):
         percent = metric(threshold, "percent")
         shares = metric(threshold, "shares")
@@ -87,43 +99,14 @@ def holding_distribution_features(rows: list[dict[str, Any]]) -> dict[str, Any]:
         out[f"LargeHolder{label}LotsShares"] = shares[-1] if shares else None
         out[f"LargeHolder{label}LotsPeople"] = people[-1] if people else None
         for weeks in (1, 2, 4, 8):
-            out[f"LargeHolder{label}Change{weeks}W"] = _weekly_difference(percent, ordered_dates, weeks)
-    out["HoldingDistributionLatestDate"] = ordered_dates[-1] if ordered_dates else None
+            out[f"LargeHolder{label}Change{weeks}W"] = _weekly_difference(percent, ordered_periods, weeks)
+        series[label] = [{"source_date": schema_by_period[period].get("source_date") or period, "period_anchor": period, "value": value} for period, value in zip(ordered_periods, percent)]
+    latest_period = ordered_periods[-1] if ordered_periods else None
+    out["HoldingDistributionLatestDate"] = schema_by_period.get(latest_period, {}).get("source_date") if latest_period else None
     out["HoldingBoundarySemantics"] = {"400": ">400 lots", "1000": ">1000 lots"}
-    out["HoldingDistributionCoverage"] = {**_holding_coverage(ordered_dates), "schema_version": "holding-buckets-v2", "by_date": schema_by_date, "available": bool(ordered_dates and schema_by_date[ordered_dates[-1]]["available"])}
+    out["HoldingDistributionSeries"] = series
+    out["HoldingDistributionCoverage"] = {**_holding_coverage(ordered_periods), "schema_version": HOLDING_SCHEMA_VERSION, "weekly_period_version": "friday-anchor-nearest-v1", "by_period": schema_by_period, "available": bool(ordered_periods and schema_by_period[ordered_periods[-1]]["available"])}
     return out
-
-
-def _holding_schema_state(buckets: dict[int, list[dict[str, Any]]]) -> dict[str, Any]:
-    """Validate the relevant provider bucket contract before aggregation.
-
-    The public S-only metrics require both the >400 and >1000 boundaries. A
-    duplicate normalized threshold, an unknown/missing boundary, or a null
-    numeric field makes the complete date unavailable rather than silently
-    treating an omitted bucket as zero.
-    """
-    relevant = [rows for threshold, rows in buckets.items() if threshold >= 400_000]
-    duplicates = [threshold for threshold, rows in buckets.items() if threshold >= 400_000 and len(rows) != 1]
-    boundary_400 = any(400_000 <= threshold < 1_000_000 for threshold in buckets)
-    boundary_1000 = any(threshold >= 1_000_000 for threshold in buckets)
-    invalid_fields = [
-        threshold
-        for threshold, rows in buckets.items()
-        if threshold >= 400_000
-        for row in rows
-        if any(row.get(field) is None for field in ("percent", "people", "shares"))
-    ]
-    available = bool(relevant) and boundary_400 and boundary_1000 and not duplicates and not invalid_fields
-    reasons: list[str] = []
-    if not boundary_400:
-        reasons.append("missing_400_boundary")
-    if not boundary_1000:
-        reasons.append("missing_1000_boundary")
-    if duplicates:
-        reasons.append("duplicate_normalized_bucket")
-    if invalid_fields:
-        reasons.append("null_percent_people_or_shares")
-    return {"available": available, "expected_boundaries": [">=400000", ">=1000000"], "duplicate_thresholds": sorted(set(duplicates)), "invalid_thresholds": sorted(set(invalid_fields)), "reasons": reasons}
 
 
 def _weekly_difference(values: list[float | None], dates: list[str], weeks: int) -> float | None:
@@ -137,9 +120,7 @@ def _weekly_difference(values: list[float | None], dates: list[str], weeks: int)
     if not candidates:
         return None
     distance, previous = min(candidates, key=lambda item: item[0])
-    # Weekly reports may move a few days around holidays, but a large gap is
-    # missing publication data rather than a valid weekly delta.
-    return float(values[-1] - previous) if distance <= 4 else None
+    return float(values[-1] - previous) if distance == 0 else None
 
 
 def _parse_date(value: str) -> date | None:
@@ -155,7 +136,7 @@ def _holding_coverage(dates: list[str]) -> dict[str, Any]:
     parsed = [_parse_date(value) for value in dates]
     missing_weeks: list[int] = []
     for weeks in (1, 2, 4, 8):
-        if parsed[-1] is None or not any(day is not None and abs((day - (parsed[-1] - timedelta(days=7 * weeks))).days) <= 4 for day in parsed[:-1]):
+        if parsed[-1] is None or not any(day is not None and day == parsed[-1] - timedelta(days=7 * weeks) for day in parsed[:-1]):
             missing_weeks.append(weeks)
     return {"available": True, "missing_weeks": missing_weeks}
 
@@ -163,7 +144,7 @@ def _holding_coverage(dates: list[str]) -> dict[str, Any]:
 def broker_features(rows: list[dict[str, Any]]) -> dict[str, Any]:
     if not rows:
         return _broker_unavailable("no_broker_rows")
-    if any(row.get("provider_report_complete") is not True for row in rows):
+    if any(row.get("provider_report_complete") is not True or row.get("provider_contract_version") != BROKER_REPORT_CONTRACT_VERSION for row in rows):
         return _broker_unavailable("provider_report_completeness_not_proven")
     dates = sorted({str(row.get("date") or row.get("source_date") or "") for row in rows})
     broker_daily: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))

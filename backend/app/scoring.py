@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date, timedelta
 import hashlib
 import json
 from statistics import mean
@@ -8,9 +9,32 @@ from typing import Any, Iterable
 
 from .calendar import CALENDAR_HASH, CALENDAR_MANIFEST
 
-SCORE_VERSION = "s-only-v4"
+SCORE_VERSION = "s-only-v5"
 WEIGHTS = {"institutional_persistence": 0.35, "ownership_accumulation": 0.35, "broker_persistence": 0.30}
 HOLDING_METADATA_LEVELS = frozenset({"total", "all", "差異數調整（說明4）"})
+HOLDING_SCHEMA_VERSION = "finmind-holding-shares-level-v1"
+HOLDING_WEEKLY_PERIOD_VERSION = "friday-anchor-nearest-v1"
+HOLDING_WEEKLY_TOLERANCE_DAYS = 4
+HOLDING_CANONICAL_LEVELS = (
+    ("1-999", 1),
+    ("1,000-5,000", 1_000),
+    ("5,001-10,000", 5_001),
+    ("10,001-15,000", 10_001),
+    ("15,001-20,000", 15_001),
+    ("20,001-30,000", 20_001),
+    ("30,001-40,000", 30_001),
+    ("40,001-50,000", 40_001),
+    ("50,001-100,000", 50_001),
+    ("100,001-200,000", 100_001),
+    ("200,001-400,000", 200_001),
+    ("400,001-600,000", 400_001),
+    ("600,001-800,000", 600_001),
+    ("800,001-1,000,000", 800_001),
+    ("more than 1,000,001", 1_000_001),
+)
+HOLDING_CANONICAL_THRESHOLDS = frozenset(threshold for _, threshold in HOLDING_CANONICAL_LEVELS)
+HOLDING_RELEVANT_THRESHOLDS = frozenset({400_001, 600_001, 800_001, 1_000_001})
+BROKER_REPORT_CONTRACT_VERSION = "finmind-dedicated-stock-session-report-v1"
 SCORE_SPEC = {
     "version": SCORE_VERSION,
     "policy": "S-level only; price/reference data is supporting only",
@@ -39,15 +63,15 @@ SCORE_SPEC = {
         "final": {"formula": "clamp(institutional * 0.35 + ownership * 0.35 + broker * 0.30 + low_profile_modifier, 0, 100)", "low_profile_modifier": "clamp(LowPriceImpactFactor * 10, -10, 10)", "rounding": "round(score, 2)"},
     },
     "thresholds": {"strong": 80, "accumulation": 65, "watch": 50},
-    "holding_boundaries": {"400": ">400 lots (source bucket lower bound >= 400,000 shares)", "1000": ">1000 lots (source bucket lower bound >= 1,000,000 shares)"},
-    "holding_schema": {"accepted": "all real numeric threshold buckets; total/all are metadata only", "unknown_relevant_bucket": "SCHEMA_MISMATCH", "missing_or_duplicate_bucket": "PARTIAL"},
+    "holding_boundaries": {"400": ">400 lots (source bucket lower bound >= 400,001 shares)", "1000": ">1000 lots (source bucket lower bound >= 1,000,001 shares)"},
+    "holding_schema": {"version": HOLDING_SCHEMA_VERSION, "canonical_levels": [{"label": label, "threshold": threshold} for label, threshold in HOLDING_CANONICAL_LEVELS], "required_relevant_thresholds": sorted(HOLDING_RELEVANT_THRESHOLDS), "metadata_levels": sorted(HOLDING_METADATA_LEVELS), "unknown_bucket": "SCHEMA_MISMATCH", "missing_duplicate_or_null_canonical_bucket": "DATA_INSUFFICIENT"},
     "calendar_version": "tw-exchange-2026-v1",
     "calendar_manifest": CALENDAR_MANIFEST,
     "calendar_hash": CALENDAR_HASH,
-    "semantic_versions": {"institutional_normalization": "dealer-components-v1", "broker_features": "gross-positive-flow-v3-null-row-fail-closed", "holding_parser": "explicit-lower-bound-v2", "missing_data": "fail-closed-v3-current-provider-gate"},
+    "semantic_versions": {"institutional_normalization": "dealer-components-v1", "broker_features": "gross-positive-flow-v5-provider-report-contract", "holding_parser": HOLDING_SCHEMA_VERSION, "holding_weekly_period": HOLDING_WEEKLY_PERIOD_VERSION, "missing_data": "fail-closed-v5-current-score-run-gate"},
     "institutional_normalization": {"categories": ["foreign", "foreign_dealer_self", "investment_trust", "dealer_component"], "dealer_semantics": "Dealer_self + Dealer_Hedging are the non-overlapping dealer component when both are present; aggregate Dealer is fallback only when components are unavailable", "foreign_dealer_self_is_separate": True, "null_policy": "missing component does not become zero"},
-    "broker_semantics": {"persistent_buyer": "positive_days >= 5 and positive_total > 0 within true window", "true_windows": {"5": "all five expected sessions present", "10": "all ten expected sessions present", "20": "all twenty expected sessions present"}, "absent_branch": "omitted branch is not zero unless complete stock/session report contract is proven", "concentration_denominator": "gross positive broker flow across the window", "spike": "max daily gross positive flow / total daily gross positive flow"},
-    "holding_semantics": {"boundaries": {"400": "lower bound >= 400000 shares; displayed as >400 lots", "1000": "lower bound >= 1000000 shares; displayed as >1000 lots"}, "weekly_tolerance_days": 4, "metadata_levels": sorted(HOLDING_METADATA_LEVELS)},
+    "broker_semantics": {"provider_report_contract_version": BROKER_REPORT_CONTRACT_VERSION, "persistent_buyer": "positive_days >= 5 and positive_total > 0 within true window", "true_windows": {"5": "all five expected sessions present", "10": "all ten expected sessions present", "20": "all twenty expected sessions present"}, "absent_branch": "omitted branch is zero only for a response validated against the dedicated single-stock/single-session complete-report contract", "unproven_contract": "DATA_INSUFFICIENT", "concentration_denominator": "gross positive broker flow across the window", "spike": "max daily gross positive flow / total daily gross positive flow"},
+    "holding_semantics": {"boundaries": {"400": "lower bound >= 400001 shares; displayed as >400 lots", "1000": "lower bound >= 1000001 shares; displayed as >1000 lots"}, "weekly_period_version": HOLDING_WEEKLY_PERIOD_VERSION, "weekly_anchor": "Friday", "weekly_tolerance_days": HOLDING_WEEKLY_TOLERANCE_DAYS, "one_observation_per_period": True, "metadata_levels": sorted(HOLDING_METADATA_LEVELS)},
 }
 SCORE_MANIFEST = SCORE_SPEC
 FORMULA_HASH = hashlib.sha256(json.dumps(SCORE_SPEC, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
@@ -130,6 +154,71 @@ def parse_holding_level(level: str | int | float | None) -> int | None:
 def is_holding_metadata_level(level: str | int | float | None) -> bool:
     """Identify provider-declared aggregate/adjustment rows, not real buckets."""
     return str(level).strip().lower() in {item.lower() for item in HOLDING_METADATA_LEVELS} if level is not None else False
+
+
+def holding_period_anchor(observation_date: date, expected_periods: Iterable[date] | None = None) -> date | None:
+    """Assign one observation to one Friday-anchored publication period."""
+    if expected_periods is None:
+        previous_friday = observation_date - timedelta(days=(observation_date.weekday() - 4) % 7)
+        next_friday = previous_friday + timedelta(days=7)
+        candidates = (previous_friday, next_friday)
+    else:
+        candidates = tuple(expected_periods)
+    ranked = sorted((abs((candidate - observation_date).days), candidate) for candidate in candidates)
+    if not ranked or ranked[0][0] > HOLDING_WEEKLY_TOLERANCE_DAYS:
+        return None
+    if len(ranked) > 1 and ranked[0][0] == ranked[1][0]:
+        return None
+    return ranked[0][1]
+
+
+def holding_schema_state(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    """Validate the exact versioned FinMind HoldingSharesLevel vocabulary."""
+    buckets: dict[int, list[dict[str, Any]]] = {}
+    unknown_levels: list[str] = []
+    for row in rows:
+        level = row.get("HoldingSharesLevel") or row.get("holding_shares_level")
+        if is_holding_metadata_level(level):
+            continue
+        threshold = row.get("holding_shares_threshold")
+        if threshold is None:
+            threshold = parse_holding_level(level)
+        if threshold is None or int(threshold) not in HOLDING_CANONICAL_THRESHOLDS:
+            unknown_levels.append(str(level))
+            continue
+        buckets.setdefault(int(threshold), []).append(row)
+    observed = set(buckets)
+    relevant = observed & HOLDING_RELEVANT_THRESHOLDS
+    missing = sorted(HOLDING_CANONICAL_THRESHOLDS - observed)
+    duplicates = sorted(threshold for threshold, bucket_rows in buckets.items() if len(bucket_rows) != 1)
+    invalid_fields = sorted({
+        threshold
+        for threshold in HOLDING_CANONICAL_THRESHOLDS
+        for row in buckets.get(threshold, [])
+        if any(row.get(field) is None for field in ("percent", "people", "shares"))
+    })
+    reasons: list[str] = []
+    if missing:
+        reasons.append("missing_required_relevant_bucket")
+    if duplicates:
+        reasons.append("duplicate_normalized_bucket")
+    if invalid_fields:
+        reasons.append("null_percent_people_or_shares")
+    if unknown_levels:
+        reasons.append("unknown_holding_bucket")
+    return {
+        "available": not reasons,
+        "schema_version": HOLDING_SCHEMA_VERSION,
+        "expected_canonical_thresholds": sorted(HOLDING_CANONICAL_THRESHOLDS),
+        "observed_canonical_thresholds": sorted(observed),
+        "expected_relevant_thresholds": sorted(HOLDING_RELEVANT_THRESHOLDS),
+        "observed_relevant_thresholds": sorted(relevant),
+        "missing_thresholds": missing,
+        "duplicate_thresholds": duplicates,
+        "invalid_thresholds": invalid_fields,
+        "unknown_levels": sorted(set(unknown_levels)),
+        "reasons": reasons,
+    }
 
 
 def _bounded(value: float, low: float = 0.0, high: float = 100.0) -> float:

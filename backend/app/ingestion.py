@@ -8,7 +8,7 @@ from typing import Any, Callable
 from sqlalchemy import func, inspect, select, text, tuple_
 from sqlalchemy.orm import Session
 
-from .calendar import CALENDAR_VERSION, expected_trading_sessions, missing_sessions
+from .calendar import CALENDAR_HASH, CALENDAR_VERSION, expected_trading_sessions, missing_sessions
 from .features import build_features
 from .finmind import CAPABILITY_ONLY_DATASETS, GLOBAL_PROVIDER_FAILURE_CODES, FinMindClient, FinMindError, SchemaMismatch
 from .models import (
@@ -177,7 +177,7 @@ def normalize_broker(row: dict[str, Any], fetched_at: datetime | None = None, da
         net_value = buy - sell
     avg_buy = _num(_v(row, "avg_buy_price"))
     avg_sell = _num(_v(row, "avg_sell_price"))
-    return {"stock_id": stock_id, "source_date": source_date, "securities_trader_id": trader_id, "securities_trader_name": _v(row, "securities_trader_name", "securities_trader", "券商名稱"), "buy_volume": buy, "sell_volume": sell, "net_volume": net_value, "buy_amount": buy * price if buy is not None and price is not None else _num(_v(row, "buy_amount", "買進金額")), "sell_amount": sell * price if sell is not None and price is not None else _num(_v(row, "sell_amount", "賣出金額")), "avg_buy_price": avg_buy if avg_buy is not None else price, "avg_sell_price": avg_sell if avg_sell is not None else price, "source_dataset": dataset, "provider_report_complete": _v(row, "provider_report_complete") is True, "fetched_at": fetched_at or _now()}
+    return {"stock_id": stock_id, "source_date": source_date, "securities_trader_id": trader_id, "securities_trader_name": _v(row, "securities_trader_name", "securities_trader", "券商名稱"), "buy_volume": buy, "sell_volume": sell, "net_volume": net_value, "buy_amount": buy * price if buy is not None and price is not None else _num(_v(row, "buy_amount", "買進金額")), "sell_amount": sell * price if sell is not None and price is not None else _num(_v(row, "sell_amount", "賣出金額")), "avg_buy_price": avg_buy if avg_buy is not None else price, "avg_sell_price": avg_sell if avg_sell is not None else price, "source_dataset": dataset, "provider_report_complete": _v(row, "provider_report_complete") is True, "provider_contract_version": _v(row, "provider_contract_version"), "fetched_at": fetched_at or _now()}
 
 
 def normalize_price(row: dict[str, Any], fetched_at: datetime | None = None) -> dict[str, Any] | None:
@@ -436,7 +436,17 @@ def _expected_latest_source_date(dataset: str, as_of: date | None) -> date | Non
     return expected_trading_sessions(as_of, 1)[-1]
 
 
-def _mark_sync(db: Session, dataset: str, status: str, records: int, latest: date | None, error_code: str | None = None, error: str | None = None, *, fetched_at: datetime | None = None, metadata: dict[str, Any] | None = None, rows_received: int | None = None, rows_accepted: int | None = None, rows_rejected: int | None = None, rows_versioned: int | None = None, stored_total: int | None = None, expected_latest: date | None = None) -> None:
+def _mark_sync(db: Session, dataset: str, status: str, records: int, latest: date | None, error_code: str | None = None, error: str | None = None, *, fetched_at: datetime | None = None, metadata: dict[str, Any] | None = None, rows_received: int | None = None, rows_accepted: int | None = None, rows_rejected: int | None = None, rows_versioned: int | None = None, observations_reused: int = 0, stored_total: int | None = None, expected_latest: date | None = None) -> None:
+    received_count = rows_received if rows_received is not None else records
+    accepted_count = rows_accepted if rows_accepted is not None else records
+    rejected_count = rows_rejected or 0
+    versioned_count = rows_versioned if rows_versioned is not None else accepted_count
+    if min(received_count, accepted_count, rejected_count, versioned_count, observations_reused) < 0:
+        raise ValueError("sync counters cannot be negative")
+    if accepted_count + rejected_count > received_count:
+        raise ValueError("sync counters do not reconcile: accepted + rejected exceeds received")
+    if versioned_count > accepted_count:
+        raise ValueError("sync counters do not reconcile: versioned exceeds accepted")
     item = db.get(DataSyncStatus, dataset)
     if item is None:
         item = DataSyncStatus(dataset=dataset, status=status, records=records)
@@ -451,10 +461,11 @@ def _mark_sync(db: Session, dataset: str, status: str, records: int, latest: dat
         item.latest_source_date = latest
     item.expected_latest_source_date = expected_latest
     item.source_age_days = (expected_latest - item.latest_source_date).days if expected_latest and item.latest_source_date else None
-    item.rows_received_this_attempt = rows_received if rows_received is not None else records
-    item.rows_accepted_this_attempt = rows_accepted if rows_accepted is not None else records
-    item.rows_rejected_this_attempt = rows_rejected or 0
-    item.rows_versioned_this_attempt = rows_versioned if rows_versioned is not None else records
+    item.rows_received_this_attempt = received_count
+    item.rows_accepted_this_attempt = accepted_count
+    item.rows_rejected_this_attempt = rejected_count
+    item.rows_versioned_this_attempt = versioned_count
+    item.observations_reused_this_attempt = observations_reused
     item.stored_rows_total = item.stored_records
     if status in {"SUCCESS", "REUSED", "PARTIAL", "NO_DATA"}:
         item.last_http_success_at = fetched_at or _now()
@@ -617,6 +628,74 @@ def seed_score_version(db: Session) -> None:
         raise RuntimeError("score version manifest provenance is missing; create an explicit new score version")
 
 
+SCORE_READINESS_DATASETS = (
+    "TaiwanStockInfo",
+    "TaiwanStockInstitutionalInvestorsBuySellWide",
+    "TaiwanStockShareholding",
+    "TaiwanStockHoldingSharesPer",
+    "TaiwanStockTradingDailyReport",
+    "TaiwanStockPrice",
+)
+
+
+def authoritative_source_state_hash(db: Session) -> str:
+    """Bind a score run to the exact authoritative sync snapshot."""
+    payload = []
+    for dataset in SCORE_READINESS_DATASETS:
+        row = db.get(DataSyncStatus, dataset)
+        payload.append({
+            "dataset": dataset,
+            "status": row.status if row else None,
+            "latest_source_date": row.latest_source_date.isoformat() if row and row.latest_source_date else None,
+            "expected_latest_source_date": row.expected_latest_source_date.isoformat() if row and row.expected_latest_source_date else None,
+            "last_fully_successful_sync": row.last_fully_successful_sync.isoformat() if row and row.last_fully_successful_sync else None,
+            "staleness_state": row.staleness_state if row else None,
+        })
+    return hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def score_snapshot_state(db: Session, target_date: date) -> dict[str, Any]:
+    """Hash the latest immutable score row selected for every stock."""
+    rows = db.scalars(
+        select(AccumulationScore)
+        .where(AccumulationScore.source_date == target_date, AccumulationScore.score_version == SCORE_VERSION, AccumulationScore.knowledge_cutoff.is_not(None))
+        .order_by(AccumulationScore.stock_id, AccumulationScore.calculated_at.desc(), AccumulationScore.id.desc())
+    ).all()
+    latest_by_stock: dict[str, AccumulationScore] = {}
+    for row in rows:
+        latest_by_stock.setdefault(row.stock_id, row)
+    payload = [
+        {
+            "stock_id": stock_id,
+            "input_snapshot_hash": row.input_snapshot_hash,
+            "formula_hash": row.formula_hash,
+            "status": row.status,
+            "score": row.score,
+            "knowledge_cutoff": row.knowledge_cutoff.isoformat() if row.knowledge_cutoff else None,
+        }
+        for stock_id, row in sorted(latest_by_stock.items())
+    ]
+    return {
+        "score_rows_count": len(payload),
+        "numeric_score_count": sum(1 for item in payload if item["score"] is not None),
+        "score_snapshot_hash": hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
+        "formula_hashes_match": all(item["formula_hash"] == FORMULA_HASH for item in payload),
+        "input_snapshots_bound": all(bool(item["input_snapshot_hash"]) and bool(item["knowledge_cutoff"]) for item in payload),
+    }
+
+
+def score_readiness_checkpoint(db: Session, target_date: date, stock_count: int) -> dict[str, Any]:
+    return {
+        "target_date": target_date.isoformat(),
+        "score_version": SCORE_VERSION,
+        "formula_hash": FORMULA_HASH,
+        "calendar_hash": CALENDAR_HASH,
+        "source_state_hash": authoritative_source_state_hash(db),
+        "stock_count": stock_count,
+        **score_snapshot_state(db, target_date),
+    }
+
+
 async def catch_up(db: Session, client: FinMindClient, end_date: date | None = None, progress_callback: Callable[[str], None] | None = None) -> dict[str, Any]:
     """Run the complete scheduled pipeline for the dynamic common-stock universe."""
     def progress(phase: str) -> None:
@@ -645,12 +724,16 @@ async def catch_up(db: Session, client: FinMindClient, end_date: date | None = N
     for dataset in required:
         progress(dataset)
         job = _job_start(db, dataset, start, end, stocks_attempted=len(stock_ids))
-        received = accepted = 0
+        received = accepted = versioned = 0
         latest_dates: list[date] = []
         def sink(rows: list[dict[str, Any]]) -> dict[str, Any]:
-            nonlocal accepted
+            nonlocal accepted, versioned
+            revisions_before = db.scalar(select(func.count()).select_from(SourceRevision).where(SourceRevision.dataset == dataset)) or 0
             accepted_now = ingest_records(db, dataset, rows)
+            revisions_after = db.scalar(select(func.count()).select_from(SourceRevision).where(SourceRevision.dataset == dataset)) or 0
+            versioned_now = max(0, int(revisions_after) - int(revisions_before))
             accepted += accepted_now
+            versioned += versioned_now
             model = _DATASET_MODELS[dataset]
             stock_values = {str(_v(row, "stock_id", "證券代號") or "").strip() for row in rows}
             source_dates = {_as_date(_v(row, "date", "source_date")) for row in rows}
@@ -660,12 +743,14 @@ async def catch_up(db: Session, client: FinMindClient, end_date: date | None = N
             if accepted_now and stock_values and source_dates:
                 query = select(model.source_date).where(model.stock_id.in_(stock_values), model.source_date.in_(source_dates), model.source_dataset == dataset).distinct()
                 accepted_dates = sorted(day.isoformat() for day in db.scalars(query).all())
-            return {"accepted_count": accepted_now, "accepted_dates": accepted_dates}
+            return {"accepted_count": accepted_now, "versioned_count": versioned_now, "accepted_dates": accepted_dates}
 
         try:
             if hasattr(client, "fetch_stocks_dataset"):
                 metrics = await client.fetch_stocks_dataset(stock_ids, dataset, (start - timedelta(days=30)).isoformat(), end.isoformat(), record_sink=sink, progress_callback=progress)
-                received = int(metrics.get("rows", 0))
+                received = int(metrics.get("rows_received", metrics.get("rows", 0)))
+                accepted = int(metrics.get("rows_accepted", accepted))
+                versioned = int(metrics.get("rows_versioned", versioned))
                 latest_dates = [_as_date(item.get("last_source_date")) for item in metrics.get("per_stock", {}).values() if item.get("last_source_date")]
                 latest = max(latest_dates, default=None)
                 newly_fetched = int(metrics.get("newly_fetched", metrics.get("success", 0)))
@@ -678,17 +763,20 @@ async def catch_up(db: Session, client: FinMindClient, end_date: date | None = N
                 satisfied = not metrics.get("fatal_code") and retryable_pending == 0 and permanent_failed == 0 and int(metrics.get("success", 0)) >= len(stock_ids)
                 status = "FAILED" if metrics.get("fatal_code") else ("REUSED" if satisfied and physical_requests == 0 and len(stock_ids) > 0 else ("SUCCESS" if satisfied else "PARTIAL"))
                 code = metrics.get("fatal_code") or ("STOCK_PARTIAL" if not satisfied and (retryable_pending or permanent_failed) else None)
-                coverage = {"requested": len(stock_ids), "success": int(metrics.get("success", 0)), "newly_fetched": newly_fetched, "reused_complete": reused_complete, "reused_valid_no_data": reused_valid_no_data, "valid_no_data": valid_no_data, "retryable_pending": retryable_pending, "permanent_failed": permanent_failed, "physical_requests": physical_requests, "failed": int(metrics.get("failed", 0)), "rows": received, "fatal_code": metrics.get("fatal_code"), "checkpoint_state": metrics.get("checkpoint_state"), "selection_policy": metrics.get("selection_policy"), "observation_cadence": metrics.get("observation_cadence"), "expected_observations_per_stock": metrics.get("expected_observations_per_stock"), "verified_observations": metrics.get("verified_observations"), "unresolved_observations": metrics.get("unresolved_observations"), "partial_responses": metrics.get("partial_responses", 0)}
+                coverage = {"requested": len(stock_ids), "success": int(metrics.get("success", 0)), "newly_fetched": newly_fetched, "reused_complete": reused_complete, "reused_valid_no_data": reused_valid_no_data, "valid_no_data": valid_no_data, "retryable_pending": retryable_pending, "permanent_failed": permanent_failed, "physical_requests": physical_requests, "failed": int(metrics.get("failed", 0)), "rows_received": received, "rows_accepted": accepted, "rows_rejected": int(metrics.get("rows_rejected", max(0, received - accepted))), "rows_versioned": versioned, "observations_reused": int(metrics.get("observations_reused", 0)), "fatal_code": metrics.get("fatal_code"), "checkpoint_state": metrics.get("checkpoint_state"), "selection_policy": metrics.get("selection_policy"), "fair_cursor_start_stock_id": metrics.get("fair_cursor_start_stock_id"), "fair_cursor_end_stock_id": metrics.get("fair_cursor_end_stock_id"), "observation_cadence": metrics.get("observation_cadence"), "expected_observations_per_stock": metrics.get("expected_observations_per_stock"), "verified_observations": metrics.get("verified_observations"), "unresolved_observations": metrics.get("unresolved_observations"), "partial_responses": metrics.get("partial_responses", 0)}
             else:
                 records, meta = client.fetch(dataset, start_date=(start - timedelta(days=30)).isoformat(), end_date=end.isoformat())
                 received = len(records)
+                revisions_before = db.scalar(select(func.count()).select_from(SourceRevision).where(SourceRevision.dataset == dataset)) or 0
                 accepted = ingest_records(db, dataset, records)
+                revisions_after = db.scalar(select(func.count()).select_from(SourceRevision).where(SourceRevision.dataset == dataset)) or 0
+                versioned = max(0, int(revisions_after) - int(revisions_before))
                 latest = _as_date(meta.get("source_date"))
                 status = "SUCCESS" if accepted else "PARTIAL"
                 code = None if accepted else "NO_DATA"
-                coverage = {"mode": "fallback-broad", "requested": len(stock_ids), "rows": received}
+                coverage = {"mode": "fallback-broad", "requested": len(stock_ids), "rows_received": received, "rows_accepted": accepted, "rows_rejected": max(0, received - accepted), "rows_versioned": versioned, "observations_reused": 0}
             expected = _expected_latest_source_date(dataset, end)
-            _mark_sync(db, dataset, status, accepted, latest, code, fetched_at=_now(), expected_latest=expected, rows_received=received, rows_accepted=accepted, rows_rejected=max(0, received - accepted), rows_versioned=accepted, stored_total=_stored_rows_total(db, dataset), metadata={"requested_start": (start - timedelta(days=30)).isoformat(), "requested_end": end.isoformat(), "query_mode": "per_stock_date_range" if hasattr(client, "fetch_stocks_dataset") else "fallback_broad", "coverage": coverage})
+            _mark_sync(db, dataset, status, accepted, latest, code, fetched_at=_now(), expected_latest=expected, rows_received=received, rows_accepted=accepted, rows_rejected=int(coverage.get("rows_rejected", max(0, received - accepted))), rows_versioned=versioned, observations_reused=int(coverage.get("observations_reused", 0)), stored_total=_stored_rows_total(db, dataset), metadata={"requested_start": (start - timedelta(days=30)).isoformat(), "requested_end": end.isoformat(), "query_mode": "per_stock_date_range" if hasattr(client, "fetch_stocks_dataset") else "fallback_broad", "coverage": coverage})
             _job_finish(db, job, status, records=accepted, stocks_completed=coverage.get("success", 0), stocks_failed=coverage.get("failed", 0), error_code=code, checkpoint_state=coverage)
             result["datasets"][dataset] = {"status": status, "records_received": received, "records_accepted": accepted, "stored_rows_total": _stored_rows_total(db, dataset), "coverage": coverage}
             result["source_coverage"][dataset] = coverage
@@ -701,7 +789,7 @@ async def catch_up(db: Session, client: FinMindClient, end_date: date | None = N
             db.rollback()
             code = getattr(exc, "code", "UNEXPECTED")
             _job_finish(db, job, "FAILED", error_code=code, error=str(exc), stocks_failed=len(stock_ids))
-            _mark_sync(db, dataset, "FAILED", accepted, None, code, str(exc), fetched_at=_now(), expected_latest=_expected_latest_source_date(dataset, end), rows_received=received, rows_accepted=accepted, rows_rejected=max(0, received - accepted), stored_total=_stored_rows_total(db, dataset))
+            _mark_sync(db, dataset, "FAILED", accepted, None, code, str(exc), fetched_at=_now(), expected_latest=_expected_latest_source_date(dataset, end), rows_received=received, rows_accepted=accepted, rows_rejected=max(0, received - accepted), rows_versioned=versioned, stored_total=_stored_rows_total(db, dataset))
             result["datasets"][dataset] = {"status": "FAILED", "error_code": code}
             result["status"] = "PARTIAL"
             if code in GLOBAL_PROVIDER_FAILURE_CODES:
@@ -718,27 +806,36 @@ async def catch_up(db: Session, client: FinMindClient, end_date: date | None = N
     broker_metrics: dict[str, Any] = {}
     broker_buffer: list[dict[str, Any]] = []
     stored = 0
+    broker_versioned = 0
 
     def broker_sink(rows: list[dict[str, Any]]) -> int:
-        nonlocal stored
+        nonlocal stored, broker_versioned
         broker_buffer.extend(rows)
         if len(broker_buffer) >= 5000:
-            stored += ingest_records(db, "TaiwanStockTradingDailyReport", broker_buffer[:])
+            revisions_before = db.scalar(select(func.count()).select_from(SourceRevision).where(SourceRevision.dataset == "TaiwanStockTradingDailyReport")) or 0
+            stored_now = ingest_records(db, "TaiwanStockTradingDailyReport", broker_buffer[:])
+            revisions_after = db.scalar(select(func.count()).select_from(SourceRevision).where(SourceRevision.dataset == "TaiwanStockTradingDailyReport")) or 0
+            stored += stored_now
+            broker_versioned += max(0, int(revisions_after) - int(revisions_before))
             broker_buffer.clear()
         return stored
 
     try:
         broker_metrics = await client.fetch_broker_stocks(stock_ids, broker_start.isoformat(), end.isoformat(), record_sink=broker_sink, progress_callback=progress)
         if broker_buffer:
-            stored += ingest_records(db, "TaiwanStockTradingDailyReport", broker_buffer)
+            revisions_before = db.scalar(select(func.count()).select_from(SourceRevision).where(SourceRevision.dataset == "TaiwanStockTradingDailyReport")) or 0
+            stored_now = ingest_records(db, "TaiwanStockTradingDailyReport", broker_buffer)
+            revisions_after = db.scalar(select(func.count()).select_from(SourceRevision).where(SourceRevision.dataset == "TaiwanStockTradingDailyReport")) or 0
+            stored += stored_now
+            broker_versioned += max(0, int(revisions_after) - int(revisions_before))
             broker_buffer.clear()
         checkpoint_complete = broker_metrics.get("skipped_checkpoint", 0) >= broker_metrics.get("requested_keys", len(stock_ids) * 20)
-        no_work_reused = checkpoint_complete and broker_metrics.get("success", 0) == 0 and broker_metrics.get("rows", 0) == 0 and broker_metrics.get("failed", 0) == 0
+        no_work_reused = checkpoint_complete and broker_metrics.get("physical_requests", 0) == 0 and broker_metrics.get("rows", 0) == 0 and broker_metrics.get("failed", 0) == 0
         broker_status = "REUSED" if no_work_reused else ("SUCCESS" if broker_metrics.get("failed", 0) == 0 and (broker_metrics.get("rows", 0) > 0 or not stock_ids) else "PARTIAL")
         if no_work_reused:
             broker_metrics["reuse_reason"] = "all requested stock-session keys already completed; no new physical requests"
         broker_error = None if broker_status in {"SUCCESS", "REUSED"} else (broker_metrics.get("fatal_code") or "BROKER_PARTIAL")
-        _mark_sync(db, "TaiwanStockTradingDailyReport", broker_status, stored, end if stored else None, broker_error, fetched_at=_now(), expected_latest=_expected_latest_source_date("TaiwanStockTradingDailyReport", end), rows_received=broker_metrics.get("rows", 0), rows_accepted=stored, rows_rejected=max(0, broker_metrics.get("rows", 0) - stored), rows_versioned=stored, stored_total=_stored_rows_total(db, "TaiwanStockTradingDailyReport"), metadata={"query_mode": "per_stock_per_session", **broker_metrics})
+        _mark_sync(db, "TaiwanStockTradingDailyReport", broker_status, stored, end if stored else None, broker_error, fetched_at=_now(), expected_latest=_expected_latest_source_date("TaiwanStockTradingDailyReport", end), rows_received=broker_metrics.get("rows_received", broker_metrics.get("rows", 0)), rows_accepted=stored, rows_rejected=max(0, broker_metrics.get("rows_received", broker_metrics.get("rows", 0)) - stored), rows_versioned=broker_versioned, observations_reused=int(broker_metrics.get("observations_reused", 0)), stored_total=_stored_rows_total(db, "TaiwanStockTradingDailyReport"), metadata={"query_mode": "per_stock_per_session", "rows_versioned": broker_versioned, **broker_metrics})
         _job_finish(db, broker_job, broker_status, records=stored, retry_count=broker_metrics.get("retries", 0), stocks_completed=broker_metrics.get("stocks_completed", 0), stocks_failed=broker_metrics.get("stocks_failed", 0), error_code=broker_error, checkpoint_state=broker_metrics)
         result["datasets"]["TaiwanStockTradingDailyReport"] = {**broker_metrics, "stored_records": stored, "status": broker_status}
         if broker_status not in {"SUCCESS", "REUSED"}:
@@ -760,7 +857,7 @@ async def catch_up(db: Session, client: FinMindClient, end_date: date | None = N
     reuse_ready = len(existing_scores) >= len(stock_ids) and all(len(score.input_source_hashes or []) >= 20 for score in existing_scores)
     if broker_metrics.get("skipped_checkpoint", 0) >= len(stock_ids) * 20 and reuse_ready:
         score_job = _job_start(db, "score", end, end, stocks_attempted=len(stock_ids))
-        _job_finish(db, score_job, "REUSED", stocks_completed=len(stock_ids), checkpoint_state={"reused_existing_scores": True})
+        _job_finish(db, score_job, "REUSED", stocks_completed=len(stock_ids), checkpoint_state={"reused_existing_scores": True, **score_readiness_checkpoint(db, end, len(stock_ids))})
         result["scores"] = {status: count for status, count in db.execute(select(AccumulationScore.status, func.count()).where(AccumulationScore.source_date == end, AccumulationScore.score_version == SCORE_VERSION, AccumulationScore.knowledge_cutoff.is_not(None)).group_by(AccumulationScore.status)).all()}
         return result
     score_job = _job_start(db, "score", end, end, stocks_attempted=len(stock_ids))
@@ -773,7 +870,7 @@ async def catch_up(db: Session, client: FinMindClient, end_date: date | None = N
             result["status"] = "PARTIAL"
             result["scores"]["FAILED"] = result["scores"].get("FAILED", 0) + 1
     failures = result["scores"].get("FAILED", 0)
-    _job_finish(db, score_job, "SUCCESS" if failures == 0 else "PARTIAL", stocks_completed=len(stock_ids) - failures, stocks_failed=failures, checkpoint_state={"scores": result["scores"]})
+    _job_finish(db, score_job, "SUCCESS" if failures == 0 else "PARTIAL", stocks_completed=len(stock_ids) - failures, stocks_failed=failures, checkpoint_state={"scores": result["scores"], **score_readiness_checkpoint(db, end, len(stock_ids))})
     rebuilt = _mark_broker_rebuilds_complete(db, pending_broker_rebuilds, end)
     if pending_broker_rebuilds:
         result["broker_source_remediation"] = {

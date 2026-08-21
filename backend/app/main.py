@@ -9,13 +9,14 @@ from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import asc, desc, func, nulls_last, select
+from sqlalchemy import asc, case, desc, func, nulls_last, select
 from sqlalchemy.orm import Session
 
 from .config import get_settings
 from .db import get_db, init_db
 from .finmind import GLOBAL_PROVIDER_FAILURE_CODES
-from .ingestion import seed_score_version
+from .features import holding_distribution_features
+from .ingestion import authoritative_source_state_hash, score_snapshot_state, seed_score_version
 from .models import AccumulationFeature, AccumulationScore, BrokerDaily, DataSyncStatus, ForeignShareholdingDaily, HoldingDistribution, InstitutionalDaily, JobRun, PriceDaily, Stock
 from .schemas import PaginatedStocks, StockListItem
 from .calendar import CALENDAR_HASH, CALENDAR_VERSION
@@ -113,15 +114,14 @@ def worker_health() -> dict[str, Any]:
 def summary(db: Session = Depends(get_db)) -> dict[str, Any]:
     sync = db.scalars(select(DataSyncStatus).order_by(DataSyncStatus.dataset)).all()
     provider_state = _provider_state(sync)
+    current_latest = _current_score_date(db, provider_state, sync)
     historical_latest = _latest_score_date(db)
     total = db.scalar(select(func.count()).select_from(Stock).where(Stock.is_common_stock.is_(True))) or 0
-    if provider_state["numeric_scores_allowed"]:
-        _, status_map = _canonical_statuses(db)
+    if current_latest is not None:
+        _, status_map = _canonical_statuses(db, current_latest)
         counts = {status: sum(1 for value in status_map.values() if value == status) for status in ("STRONG_ACCUMULATION", "ACCUMULATION", "WATCH", "DATA_INSUFFICIENT", "NO_STRONG_EVIDENCE")}
-        current_latest = historical_latest
     else:
         counts = {"STRONG_ACCUMULATION": 0, "ACCUMULATION": 0, "WATCH": 0, "DATA_INSUFFICIENT": total, "NO_STRONG_EVIDENCE": 0}
-        current_latest = None
     last_updates = [s.last_fetch_at or s.last_successful_sync for s in sync if s.last_fetch_at or s.last_successful_sync]
     return {"stock_count": total, "strong_count": counts["STRONG_ACCUMULATION"], "accumulation_count": counts["ACCUMULATION"], "watch_count": counts["WATCH"], "data_insufficient_count": counts["DATA_INSUFFICIENT"], "no_strong_evidence_count": counts["NO_STRONG_EVIDENCE"], "status_invariant": sum(counts.values()) == total, "latest_score_date": current_latest, "historical_latest_score_date": historical_latest, "score_version": SCORE_VERSION, "formula_hash": FORMULA_HASH, "last_data_update": max(last_updates, default=None), "provider_state": provider_state, "sync_status": [_sync_dict(s) for s in sync]}
 
@@ -131,8 +131,9 @@ def stocks(
     page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=200), search: str | None = Query(None, max_length=64), market: str | None = Query(None), industry: str | None = Query(None), status: str | None = Query(None), min_score: float | None = Query(None, ge=0, le=100), sort: str = Query("score"), order: str = Query("desc"),
     db: Session = Depends(get_db),
 ) -> PaginatedStocks:
-    provider_state = _provider_state(db.scalars(select(DataSyncStatus).order_by(DataSyncStatus.dataset)).all())
-    latest = _current_score_date(db, provider_state)
+    sync = db.scalars(select(DataSyncStatus).order_by(DataSyncStatus.dataset)).all()
+    provider_state = _provider_state(sync)
+    latest = _current_score_date(db, provider_state, sync)
     score_value, score_status, score_version, score_coverage = _score_subqueries(latest)
     price_value, price_change = _price_subqueries()
     feature_values, feature_date = _feature_subqueries(latest)
@@ -164,8 +165,9 @@ def stocks(
 
 @app.get("/api/rankings")
 def rankings(kind: str = Query("top"), limit: int = Query(50, ge=1, le=200), db: Session = Depends(get_db)) -> dict[str, Any]:
-    provider_state = _provider_state(db.scalars(select(DataSyncStatus).order_by(DataSyncStatus.dataset)).all())
-    latest = _current_score_date(db, provider_state)
+    sync = db.scalars(select(DataSyncStatus).order_by(DataSyncStatus.dataset)).all()
+    provider_state = _provider_state(sync)
+    latest = _current_score_date(db, provider_state, sync)
     if latest is None:
         return {"source_date": None, "score_version": SCORE_VERSION, "provider_state": provider_state, "items": []}
     score_value, score_status, _, score_components = _score_subqueries(latest, components=True)
@@ -179,9 +181,10 @@ def stock_detail(stock_id: str, limit: int = Query(365, ge=1, le=1000), db: Sess
     stock = db.get(Stock, stock_id)
     if stock is None:
         raise HTTPException(status_code=404, detail="stock not found")
-    provider_state = _provider_state(db.scalars(select(DataSyncStatus).order_by(DataSyncStatus.dataset)).all())
-    latest = _current_score_date(db, provider_state)
-    return {"stock": {"stock_id": stock.stock_id, "stock_name": stock.stock_name, "market": stock.market, "industry": stock.industry}, "score": _score_dict(db, stock_id, latest), "sources": _source_status(db, stock_id), "institutional": _rows(db, InstitutionalDaily, stock_id, min(limit, 365), "TaiwanStockInstitutionalInvestorsBuySellWide"), "foreign_holding": _rows(db, ForeignShareholdingDaily, stock_id, min(limit, 365), "TaiwanStockShareholding"), "holding_distribution": _rows(db, HoldingDistribution, stock_id, min(limit, 200), "TaiwanStockHoldingSharesPer"), "holding_series": _holding_chart_series(db, stock_id, min(limit, 200)), "brokers": _broker_summary(db, stock_id), "prices": _rows(db, PriceDaily, stock_id, min(limit, 365), "TaiwanStockPrice"), "score_history": _score_history(db, stock_id, min(limit, 365)), "calendar_version": CALENDAR_VERSION}
+    sync = db.scalars(select(DataSyncStatus).order_by(DataSyncStatus.dataset)).all()
+    provider_state = _provider_state(sync)
+    latest = _current_score_date(db, provider_state, sync)
+    return {"stock": {"stock_id": stock.stock_id, "stock_name": stock.stock_name, "market": stock.market, "industry": stock.industry}, "score": _score_dict(db, stock_id, latest), "provider_state": provider_state, "sources": _source_status(db, stock_id), "institutional": _rows(db, InstitutionalDaily, stock_id, min(limit, 365), "TaiwanStockInstitutionalInvestorsBuySellWide"), "foreign_holding": _rows(db, ForeignShareholdingDaily, stock_id, min(limit, 365), "TaiwanStockShareholding"), "holding_distribution": _rows(db, HoldingDistribution, stock_id, min(limit, 200), "TaiwanStockHoldingSharesPer"), "holding_series": _holding_chart_series(db, stock_id, min(limit, 200)), "brokers": _broker_summary(db, stock_id), "prices": _rows(db, PriceDaily, stock_id, min(limit, 365), "TaiwanStockPrice"), "score_history": _score_history(db, stock_id, min(limit, 365)), "calendar_version": CALENDAR_VERSION}
 
 
 @app.get("/api/stocks/{stock_id}/institutional")
@@ -220,16 +223,59 @@ def _latest_score_date(db: Session) -> date | None:
     return db.scalar(select(func.max(AccumulationScore.source_date)).where(AccumulationScore.score_version == SCORE_VERSION, AccumulationScore.knowledge_cutoff.is_not(None)))
 
 
-def _current_score_date(db: Session, provider_state: dict[str, Any]) -> date | None:
-    """Return a score date only when current provider state authorizes it."""
-    if provider_state.get("numeric_scores_allowed") is not True:
+def _current_score_date(db: Session, provider_state: dict[str, Any], sync: list[DataSyncStatus] | None = None) -> date | None:
+    """Return only a current-date score bound to a successful score JobRun."""
+    sync = sync if sync is not None else list(db.scalars(select(DataSyncStatus).order_by(DataSyncStatus.dataset)).all())
+    readiness = _current_score_readiness(db, provider_state, sync)
+    source_gate = provider_state.get("numeric_scores_allowed") is True
+    provider_state["source_coverage_numeric_scores_allowed"] = source_gate
+    provider_state["numeric_scores_allowed"] = readiness["ready"]
+    provider_state["score_readiness"] = readiness
+    if not readiness["ready"]:
+        if source_gate:
+            provider_state["status"] = "DATA_INSUFFICIENT"
+            provider_state["reason_code"] = readiness["reason_code"]
         return None
-    return _latest_score_date(db)
+    return date.fromisoformat(str(readiness["target_date"]))
 
 
-def _canonical_statuses(db: Session) -> tuple[int, dict[str, str]]:
+def _current_score_readiness(db: Session, provider_state: dict[str, Any], sync: list[DataSyncStatus]) -> dict[str, Any]:
+    if provider_state.get("numeric_scores_allowed") is not True:
+        return {"ready": False, "reason_code": provider_state.get("reason_code") or "SOURCE_COVERAGE_NOT_READY", "target_date": None}
+    expected_dates = [row.expected_latest_source_date for row in sync if row.dataset in CURRENT_SCORE_DATASETS and row.expected_latest_source_date]
+    if not expected_dates:
+        return {"ready": False, "reason_code": "CURRENT_SCORE_TARGET_DATE_MISSING", "target_date": None}
+    target = max(expected_dates)
+    job = db.scalar(
+        select(JobRun)
+        .where(JobRun.dataset == "score", JobRun.requested_end_date == target, JobRun.status.in_(("SUCCESS", "REUSED")))
+        .order_by(JobRun.finished_at.desc(), JobRun.id.desc())
+        .limit(1)
+    )
+    if job is None:
+        return {"ready": False, "reason_code": "CURRENT_SCORE_JOB_NOT_SUCCESSFUL", "target_date": target.isoformat()}
+    checkpoint = job.checkpoint_state or {}
+    current_source_hash = authoritative_source_state_hash(db)
+    current_scores = score_snapshot_state(db, target)
+    stock_count = db.scalar(select(func.count()).select_from(Stock).where(Stock.is_common_stock.is_(True))) or 0
+    checks = {
+        "target_date_match": checkpoint.get("target_date") == target.isoformat(),
+        "score_version_match": checkpoint.get("score_version") == SCORE_VERSION,
+        "formula_hash_match": checkpoint.get("formula_hash") == FORMULA_HASH,
+        "calendar_hash_match": checkpoint.get("calendar_hash") == CALENDAR_HASH,
+        "source_state_hash_match": checkpoint.get("source_state_hash") == current_source_hash,
+        "score_snapshot_hash_match": checkpoint.get("score_snapshot_hash") == current_scores["score_snapshot_hash"],
+        "stock_count_match": int(checkpoint.get("stock_count", -1)) == stock_count == current_scores["score_rows_count"],
+        "score_rows_formula_match": current_scores["formula_hashes_match"] is True,
+        "score_rows_input_bound": current_scores["input_snapshots_bound"] is True,
+    }
+    ready = all(checks.values())
+    return {"ready": ready, "reason_code": None if ready else "CURRENT_SCORE_RUN_BINDING_FAILED", "target_date": target.isoformat(), "job_run_id": job.id, "checks": checks, "source_state_hash": current_source_hash, **current_scores}
+
+
+def _canonical_statuses(db: Session, latest: date | None = None) -> tuple[int, dict[str, str]]:
     stock_ids = list(db.scalars(select(Stock.stock_id).where(Stock.is_common_stock.is_(True))).all())
-    latest = _latest_score_date(db)
+    latest = latest or _latest_score_date(db)
     if latest is None:
         return len(stock_ids), {stock_id: "DATA_INSUFFICIENT" for stock_id in stock_ids}
     scores = db.scalars(select(AccumulationScore).where(AccumulationScore.source_date == latest, AccumulationScore.score_version == SCORE_VERSION, AccumulationScore.knowledge_cutoff.is_not(None)).order_by(AccumulationScore.calculated_at.desc())).all()
@@ -301,36 +347,37 @@ def _broker_summary(db: Session, stock_id: str) -> list[dict[str, Any]]:
         .order_by(BrokerDaily.source_date.desc())
         .limit(20)
     ).all()
-    rows = db.scalars(
-        select(BrokerDaily).where(BrokerDaily.stock_id == stock_id, BrokerDaily.source_dataset == "TaiwanStockTradingDailyReport", BrokerDaily.source_date.in_(latest_dates))
+    rows = db.execute(
+        select(
+            BrokerDaily.securities_trader_id,
+            func.max(BrokerDaily.securities_trader_name),
+            func.sum(BrokerDaily.buy_volume),
+            func.sum(BrokerDaily.sell_volume),
+            func.sum(BrokerDaily.net_volume),
+            func.sum(case((BrokerDaily.net_volume > 0, 1), else_=0)),
+            func.sum(case((BrokerDaily.net_volume < 0, 1), else_=0)),
+            func.sum(case((BrokerDaily.net_volume.is_(None), 1), else_=0)),
+            func.sum(case((BrokerDaily.buy_volume.is_(None), 1), else_=0)),
+            func.sum(case((BrokerDaily.sell_volume.is_(None), 1), else_=0)),
+        )
+        .where(BrokerDaily.stock_id == stock_id, BrokerDaily.source_dataset == "TaiwanStockTradingDailyReport", BrokerDaily.source_date.in_(latest_dates))
+        .group_by(BrokerDaily.securities_trader_id)
+        .order_by(desc(func.sum(BrokerDaily.net_volume)), asc(BrokerDaily.securities_trader_id))
+        .limit(20)
     ).all()
-    by_broker: dict[str, dict[str, Any]] = {}
-    for row in rows:
-        item = by_broker.setdefault(row.securities_trader_id, {"securities_trader_id": row.securities_trader_id, "securities_trader_name": row.securities_trader_name, "buy_volume": 0.0, "sell_volume": 0.0, "net_volume": 0.0, "_buy_missing": False, "_sell_missing": False, "_net_missing": False, "positive_days": 0, "negative_days": 0, "missing_days": 0})
-        _accumulate_nullable(item, "buy_volume", row.buy_volume)
-        _accumulate_nullable(item, "sell_volume", row.sell_volume)
-        _accumulate_nullable(item, "net_volume", row.net_volume)
-        if row.net_volume is None:
-            item["missing_days"] += 1
-        elif row.net_volume > 0:
-            item["positive_days"] += 1
-        elif row.net_volume < 0:
-            item["negative_days"] += 1
-    output = []
-    for item in by_broker.values():
-        item = {key: value for key, value in item.items() if not key.startswith("_")}
-        output.append(item)
-    return sorted(output, key=lambda item: item["net_volume"] if item["net_volume"] is not None else float("-inf"), reverse=True)[:20]
-
-
-def _accumulate_nullable(item: dict[str, Any], field: str, value: float | None) -> None:
-    missing_key = f"_{field.removesuffix('_volume')}_missing"
-    if value is None:
-        item[missing_key] = True
-    elif not item[missing_key]:
-        item[field] += value
-    if item[missing_key]:
-        item[field] = None
+    return [
+        {
+            "securities_trader_id": row[0],
+            "securities_trader_name": row[1],
+            "buy_volume": None if row[8] else row[2],
+            "sell_volume": None if row[9] else row[3],
+            "net_volume": None if row[7] else row[4],
+            "positive_days": row[5],
+            "negative_days": row[6],
+            "missing_days": row[7],
+        }
+        for row in rows
+    ]
 
 
 def _score_history(db: Session, stock_id: str, limit: int) -> list[dict[str, Any]]:
@@ -353,24 +400,20 @@ def _source_status(db: Session, stock_id: str) -> dict[str, Any]:
 
 
 def _holding_chart_series(db: Session, stock_id: str, limit: int) -> dict[str, list[dict[str, Any]]]:
-    rows = db.scalars(select(HoldingDistribution).where(HoldingDistribution.stock_id == stock_id, HoldingDistribution.source_dataset == "TaiwanStockHoldingSharesPer").order_by(HoldingDistribution.source_date.desc()).limit(limit)).all()
-    by_date: dict[date, dict[str, float | None]] = {}
-    for row in rows:
-        day = by_date.setdefault(row.source_date, {"400": None, "1000": None})
-        for label, threshold in (("400", 400_000), ("1000", 1_000_000)):
-            if row.holding_shares_threshold is not None and row.holding_shares_threshold >= threshold:
-                if row.percent is None:
-                    day[label] = None
-                elif day[label] is None:
-                    day[label] = row.percent
-                else:
-                    day[label] += row.percent
-    dates = sorted(by_date)
-    return {label: [{"source_date": day, "value": by_date[day][label]} for day in dates] for label in ("400", "1000")}
+    latest_dates = db.scalars(
+        select(HoldingDistribution.source_date)
+        .where(HoldingDistribution.stock_id == stock_id, HoldingDistribution.source_dataset == "TaiwanStockHoldingSharesPer")
+        .distinct()
+        .order_by(HoldingDistribution.source_date.desc())
+        .limit(limit)
+    ).all()
+    rows = db.scalars(select(HoldingDistribution).where(HoldingDistribution.stock_id == stock_id, HoldingDistribution.source_dataset == "TaiwanStockHoldingSharesPer", HoldingDistribution.source_date.in_(latest_dates))).all()
+    payload = [{key: getattr(row, key) for key in row.__table__.columns.keys() if key != "id"} for row in rows]
+    return holding_distribution_features(payload).get("HoldingDistributionSeries", {"400": [], "1000": []})
 
 
 def _sync_dict(row: DataSyncStatus) -> dict[str, Any]:
-    return {"dataset": row.dataset, "status": row.status, "latest_source_date": row.latest_source_date, "attempt_latest_source_date": row.attempt_latest_source_date, "expected_latest_source_date": row.expected_latest_source_date, "source_age_days": row.source_age_days, "last_attempt_at": row.last_attempt_at, "last_fetch_at": row.last_fetch_at, "last_http_success_at": row.last_http_success_at, "last_fully_successful_sync": row.last_fully_successful_sync, "last_usable_data_at": row.last_usable_data_at, "last_successful_sync": row.last_successful_sync, "records": row.records, "usable_records": row.usable_records, "stored_records": row.stored_records, "rows_received_this_attempt": row.rows_received_this_attempt, "rows_accepted_this_attempt": row.rows_accepted_this_attempt, "rows_rejected_this_attempt": row.rows_rejected_this_attempt, "rows_versioned_this_attempt": row.rows_versioned_this_attempt, "stored_rows_total": row.stored_rows_total, "staleness": row.staleness_state, "metadata": row.metadata_json, "error_code": row.last_error_code}
+    return {"dataset": row.dataset, "status": row.status, "latest_source_date": row.latest_source_date, "attempt_latest_source_date": row.attempt_latest_source_date, "expected_latest_source_date": row.expected_latest_source_date, "source_age_days": row.source_age_days, "last_attempt_at": row.last_attempt_at, "last_fetch_at": row.last_fetch_at, "last_http_success_at": row.last_http_success_at, "last_fully_successful_sync": row.last_fully_successful_sync, "last_usable_data_at": row.last_usable_data_at, "last_successful_sync": row.last_successful_sync, "records": row.records, "usable_records": row.usable_records, "stored_records": row.stored_records, "rows_received_this_attempt": row.rows_received_this_attempt, "rows_accepted_this_attempt": row.rows_accepted_this_attempt, "rows_rejected_this_attempt": row.rows_rejected_this_attempt, "rows_versioned_this_attempt": row.rows_versioned_this_attempt, "observations_reused_this_attempt": row.observations_reused_this_attempt, "stored_rows_total": row.stored_rows_total, "staleness": row.staleness_state, "metadata": row.metadata_json, "error_code": row.last_error_code}
 
 
 def _provider_state(sync: list[DataSyncStatus]) -> dict[str, Any]:
@@ -408,4 +451,4 @@ def _provider_state(sync: list[DataSyncStatus]) -> dict[str, Any]:
             return {"status": "DATA_INSUFFICIENT", "reason_code": "NO_AUTHORITATIVE_CURRENT_SOURCE_DATE", "provider": "FinMind", "score_policy": "FAIL_CLOSED", "numeric_scores_allowed": False}
         if row.staleness_state != "FRESH":
             return {"status": "DATA_INSUFFICIENT", "reason_code": "STALE_PROVIDER_COVERAGE", "provider": "FinMind", "score_policy": "FAIL_CLOSED", "numeric_scores_allowed": False}
-    return {"status": "AVAILABLE", "reason_code": None, "provider": "FinMind", "score_policy": "S_ONLY_V4", "numeric_scores_allowed": True}
+    return {"status": "AVAILABLE", "reason_code": None, "provider": "FinMind", "score_policy": SCORE_VERSION.upper().replace("-", "_"), "numeric_scores_allowed": True}

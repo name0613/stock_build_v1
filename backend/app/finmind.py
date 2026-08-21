@@ -22,13 +22,13 @@ except ImportError:  # pragma: no cover - production image installs pyarrow
 
 from .config import Settings, get_settings
 from .calendar import is_trading_session
-from .scoring import is_holding_metadata_level, parse_holding_level
+from .scoring import BROKER_REPORT_CONTRACT_VERSION, HOLDING_SCHEMA_VERSION, HOLDING_WEEKLY_PERIOD_VERSION, holding_period_anchor, holding_schema_state, is_holding_metadata_level, parse_holding_level
 
 logger = logging.getLogger(__name__)
-CHECKPOINT_SCHEMA_VERSION = "2026-08-21-v3-observation-bound"
-INCREMENTAL_CHECKPOINT_VERSION = "2026-08-21-incremental-v4"
-NORMALIZATION_POLICY_VERSION = "s-only-normalization-v4-probe-isolated"
-REQUEST_POLICY_VERSION = "finmind-request-policy-v4-observation-coverage"
+CHECKPOINT_SCHEMA_VERSION = "2026-08-21-v5-contract-bound"
+INCREMENTAL_CHECKPOINT_VERSION = "2026-08-21-incremental-v5"
+NORMALIZATION_POLICY_VERSION = "s-only-normalization-v5-contract-bound"
+REQUEST_POLICY_VERSION = "finmind-request-policy-v5-fair-period-coverage"
 GLOBAL_PROVIDER_FAILURE_CODES = frozenset({
     "AUTHENTICATION_FAILED",
     "ACCESS_DENIED",
@@ -69,8 +69,23 @@ def _validated_no_data_dates(dataset: str, meta: dict[str, Any], expected: set[s
     raw_dates = meta.get("empty_observation_dates")
     if not isinstance(raw_dates, list):
         return set(), None
-    dates = {str(value)[:10] for value in raw_dates if str(value)[:10] in expected}
+    dates = _source_dates_to_observation_periods(dataset, {str(value)[:10] for value in raw_dates}, expected)
     return dates, reason if dates else None
+
+
+def _source_dates_to_observation_periods(dataset: str, source_dates: set[str], expected: set[str]) -> set[str]:
+    if dataset != "TaiwanStockHoldingSharesPer":
+        return source_dates & expected
+    expected_dates = [date.fromisoformat(value) for value in sorted(expected)]
+    periods: set[str] = set()
+    for value in source_dates:
+        try:
+            anchor = holding_period_anchor(date.fromisoformat(value), expected_dates)
+        except ValueError:
+            continue
+        if anchor is not None:
+            periods.add(anchor.isoformat())
+    return periods
 
 
 def _record_observation_dates(dataset: str, stock_id: str, records: list[dict[str, Any]], expected: set[str]) -> set[str]:
@@ -78,39 +93,44 @@ def _record_observation_dates(dataset: str, stock_id: str, records: list[dict[st
     for row in records:
         row_stock = str(row.get("stock_id") or "").strip()
         source_day = str(row.get("date") or row.get("source_date") or "")[:10]
-        if row_stock == stock_id and source_day in expected:
+        if row_stock == stock_id and source_day:
             by_date.setdefault(source_day, []).append(row)
     if dataset != "TaiwanStockHoldingSharesPer":
-        return set(by_date)
+        return set(by_date) & expected
 
-    verified: set[str] = set()
+    expected_dates = [date.fromisoformat(value) for value in sorted(expected)]
+    candidates: dict[str, list[list[dict[str, Any]]]] = {}
     for source_day, rows in by_date.items():
-        thresholds: dict[int, list[dict[str, Any]]] = {}
-        invalid_schema = False
-        for row in rows:
-            level = row.get("HoldingSharesLevel") or row.get("holding_shares_level")
-            if is_holding_metadata_level(level):
-                continue
-            threshold = row.get("holding_shares_threshold")
-            if threshold is None:
-                threshold = parse_holding_level(level)
-            if threshold is None:
-                invalid_schema = True
-                continue
-            thresholds.setdefault(int(threshold), []).append(row)
-        relevant = {threshold: values for threshold, values in thresholds.items() if threshold >= 400_000}
-        boundary_400 = any(400_000 <= threshold < 1_000_000 for threshold in relevant)
-        boundary_1000 = any(threshold >= 1_000_000 for threshold in relevant)
-        complete = (
-            not invalid_schema
-            and boundary_400
-            and boundary_1000
-            and all(len(values) == 1 for values in relevant.values())
-            and all(all(row.get(field) is not None for field in ("percent", "people", "shares")) for values in relevant.values() for row in values)
-        )
-        if complete:
-            verified.add(source_day)
-    return verified
+        try:
+            anchor = holding_period_anchor(date.fromisoformat(source_day), expected_dates)
+        except ValueError:
+            continue
+        if anchor is not None:
+            candidates.setdefault(anchor.isoformat(), []).append(rows)
+    return {
+        period
+        for period, observations in candidates.items()
+        if len(observations) == 1 and holding_schema_state(observations[0])["available"] is True
+    }
+
+
+def _broker_report_contract(records: list[dict[str, Any]], stock_id: str | None, requested_date: str | None) -> tuple[bool, str]:
+    """Validate the dedicated endpoint's one-stock/one-session report shape."""
+    if not records:
+        return False, "empty_report"
+    expected_stock = str(stock_id or "").strip()
+    expected_day = str(requested_date or "")[:10]
+    required = {"securities_trader_id", "buy", "sell"}
+    for row in records:
+        row_stock = str(row.get("stock_id") or "").strip()
+        row_day = str(row.get("date") or row.get("source_date") or "")[:10]
+        if row_stock != expected_stock or row_day != expected_day:
+            return False, "mixed_stock_or_session"
+        if not required <= set(row) or not str(row.get("securities_trader_id") or "").strip():
+            return False, "required_report_field_missing"
+        if row.get("buy") is None or row.get("sell") is None:
+            return False, "null_buy_or_sell"
+    return True, BROKER_REPORT_CONTRACT_VERSION
 
 
 def classify_empty_response(dataset: str, meta: dict[str, Any]) -> tuple[bool, str]:
@@ -317,15 +337,20 @@ class FinMindClient:
                 if not isinstance(records, list):
                     raise SchemaMismatch("SCHEMA_MISMATCH", "FinMind response data field is not a list", response.status_code)
                 normalized = [self._normalize_record(dataset, record) for record in records]
+                pagination_complete = payload.get("pagination_complete") if isinstance(payload.get("pagination_complete"), bool) else None
+                broker_report_complete = None
+                broker_contract_reason = None
                 if dataset == "TaiwanStockTradingDailyReport":
-                    # A per-stock report is complete only when the provider
-                    # returned a successful report list. Legacy rows without
-                    # this marker remain unavailable during scoring.
-                    normalized = [{**record, "provider_report_complete": True} for record in normalized]
+                    broker_report_complete, broker_contract_reason = _broker_report_contract(normalized, data_id, end_date or start_date)
+                    if pagination_complete is False:
+                        broker_report_complete = False
+                        broker_contract_reason = "provider_declared_incomplete_pagination"
+                    elif broker_report_complete and pagination_complete is None:
+                        pagination_complete = True
+                    normalized = [{**record, "provider_report_complete": broker_report_complete, "provider_contract_version": BROKER_REPORT_CONTRACT_VERSION if broker_report_complete else None} for record in normalized]
                 source_date = self._latest_date(normalized)
                 evidence = self.store.write(dataset, normalized, safe_params, source_date) if persist_raw else {"records": len(normalized)}
-                pagination_complete = payload.get("pagination_complete") if isinstance(payload.get("pagination_complete"), bool) else None
-                return normalized, {"dataset": dataset, "parameters": safe_params, "source_date": source_date, "evidence": evidence, "attempt": attempt + 1, "pagination_complete": pagination_complete, "probe_only": capability_probe}
+                return normalized, {"dataset": dataset, "parameters": safe_params, "source_date": source_date, "evidence": evidence, "attempt": attempt + 1, "pagination_complete": pagination_complete, "probe_only": capability_probe, "provider_report_complete": broker_report_complete, "provider_contract_version": BROKER_REPORT_CONTRACT_VERSION if broker_report_complete else None, "provider_contract_reason": broker_contract_reason}
             except (httpx.TimeoutException, httpx.NetworkError) as exc:
                 last_error = FinMindError("TIMEOUT" if isinstance(exc, httpx.TimeoutException) else "NETWORK_ERROR", "FinMind network request failed")
             except FinMindError as exc:
@@ -408,7 +433,7 @@ class FinMindClient:
         session_hash = hashlib.sha256(json.dumps(days, separators=(",", ":")).encode()).hexdigest()
         manifest = {"dataset": dataset, "checkpoint_version": INCREMENTAL_CHECKPOINT_VERSION, "schema_version": CHECKPOINT_SCHEMA_VERSION, "normalization_version": NORMALIZATION_POLICY_VERSION, "request_policy_version": REQUEST_POLICY_VERSION, "query_mode": "per_stock_per_session"}
         manifest_hash = hashlib.sha256(json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-        checkpoint_file = checkpoint_dir / f"{dataset}-incremental-v4.json"
+        checkpoint_file = checkpoint_dir / f"{dataset}-incremental-v5.json"
         checkpoint: dict[str, Any] = {"manifest": manifest, "manifest_hash": manifest_hash, "completed": [], "failed": [], "permanent_failed": [], "last_request": {}}
         checkpoint_state = "new"
         if checkpoint_file.exists():
@@ -427,7 +452,7 @@ class FinMindClient:
         checkpoint_lock = asyncio.Lock()
         sink_lock = asyncio.Lock()
         fatal_event = asyncio.Event()
-        metrics = {"requested": len(stock_ids), "requested_keys": len(requested_keys), "skipped_checkpoint": len(completed), "reused_complete": len(completed), "reused_valid_no_data": 0, "newly_fetched": 0, "physical_requests": 0, "checkpoint_state": checkpoint_state, "checkpoint_manifest_hash": manifest_hash, "requested_start_date": start_date, "requested_end_date": end_date, "session_set_hash": session_hash, "universe_hash": universe_hash, "selection_policy": "date_major_round_robin", "success": len(completed), "failed": 0, "stocks_completed": 0, "stocks_failed": 0, "retryable_failed": 0, "permanent_failed": len(permanent_failed), "rows": 0, "retries": 0, "fatal_code": None}
+        metrics = {"requested": len(stock_ids), "requested_keys": len(requested_keys), "skipped_checkpoint": len(completed), "reused_complete": len(completed), "reused_valid_no_data": 0, "observations_reused": len(completed), "newly_fetched": 0, "physical_requests": 0, "checkpoint_state": checkpoint_state, "checkpoint_manifest_hash": manifest_hash, "requested_start_date": start_date, "requested_end_date": end_date, "session_set_hash": session_hash, "universe_hash": universe_hash, "selection_policy": "date_major_round_robin", "success": len(completed), "failed": 0, "stocks_completed": 0, "stocks_failed": 0, "retryable_failed": 0, "permanent_failed": len(permanent_failed), "rows": 0, "rows_received": 0, "contract_validated_rows": 0, "retries": 0, "fatal_code": None}
         completed_stocks: set[str] = set()
         failed_stocks: set[str] = set()
 
@@ -449,6 +474,8 @@ class FinMindClient:
                 try:
                     metrics["physical_requests"] += 1
                     records, meta = await asyncio.to_thread(self.fetch, dataset, stock_id, requested_date, requested_date)
+                    if records and (meta.get("provider_report_complete") is not True or meta.get("provider_contract_version") != BROKER_REPORT_CONTRACT_VERSION):
+                        raise SchemaMismatch("SCHEMA_MISMATCH", "broker report completeness contract was not proven")
                     if not records:
                         valid_empty, empty_reason = classify_empty_response(dataset, meta)
                         if not valid_empty:
@@ -462,6 +489,8 @@ class FinMindClient:
                         completed_stocks.add(stock_id)
                         metrics["stocks_completed"] = len(completed_stocks)
                         metrics["rows"] += len(records)
+                        metrics["rows_received"] += len(records)
+                        metrics["contract_validated_rows"] += len(records)
                         metrics["retries"] += max(0, int(meta.get("attempt", 1)) - 1)
                         if records and record_sink:
                             # The provider calls remain concurrent, but the
@@ -536,12 +565,15 @@ class FinMindClient:
             "normalization_version": NORMALIZATION_POLICY_VERSION,
             "request_policy_version": REQUEST_POLICY_VERSION,
             "observation_cadence": cadence,
+            "holding_schema_version": HOLDING_SCHEMA_VERSION if dataset in WEEKLY_OBSERVATION_DATASETS else None,
+            "weekly_period_version": HOLDING_WEEKLY_PERIOD_VERSION if dataset in WEEKLY_OBSERVATION_DATASETS else None,
         }
         manifest_hash = hashlib.sha256(json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         checkpoint_dir = self.settings.raw_root / "checkpoints"
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
-        checkpoint_file = checkpoint_dir / f"source-{dataset}-incremental-v4.json"
-        checkpoint: dict[str, Any] = {"manifest": manifest, "manifest_hash": manifest_hash, "completed": [], "no_data_but_valid": [], "failed": [], "permanent_failed": [], "global_fatal": None, "entries": {}, "last_request": {}}
+        checkpoint_file = checkpoint_dir / f"source-{dataset}-incremental-v5.json"
+        legacy_checkpoint_file = checkpoint_dir / f"source-{dataset}-incremental-v4.json"
+        checkpoint: dict[str, Any] = {"manifest": manifest, "manifest_hash": manifest_hash, "completed": [], "no_data_but_valid": [], "failed": [], "permanent_failed": [], "global_fatal": None, "entries": {}, "last_request": {}, "fair_cursor_stock_id": stock_ids[0] if stock_ids else None}
         checkpoint_state = "new"
         if checkpoint_file.exists():
             try:
@@ -553,12 +585,34 @@ class FinMindClient:
                     checkpoint_state = "incompatible_ignored"
             except (OSError, ValueError, TypeError):
                 checkpoint_state = "corrupt_ignored"
+        elif legacy_checkpoint_file.exists():
+            try:
+                candidate = json.loads(legacy_checkpoint_file.read_text(encoding="utf-8"))
+                if candidate.get("manifest", {}).get("dataset") == dataset and isinstance(candidate.get("entries"), dict):
+                    checkpoint = candidate
+                    checkpoint_state = "migrated_v4"
+                    checkpoint["manifest"] = manifest
+                    checkpoint["manifest_hash"] = manifest_hash
+                    checkpoint["fair_cursor_stock_id"] = stock_ids[0] if stock_ids else None
+                    if dataset in WEEKLY_OBSERVATION_DATASETS:
+                        for entry in checkpoint.get("entries", {}).values():
+                            record_periods = _source_dates_to_observation_periods(dataset, set(entry.get("verified_record_dates", [])), requested_observations)
+                            empty_periods = _source_dates_to_observation_periods(dataset, set(entry.get("verified_no_data_dates", [])), requested_observations)
+                            entry["covered_dates"] = sorted(record_periods | empty_periods)
+                else:
+                    checkpoint_state = "legacy_incompatible_ignored"
+            except (OSError, ValueError, TypeError):
+                checkpoint_state = "legacy_corrupt_ignored"
 
         entries = checkpoint.setdefault("entries", {})
+        cursor_start = checkpoint.get("fair_cursor_stock_id")
+        cursor_index = stock_ids.index(cursor_start) if cursor_start in stock_ids else 0
+        ordered_stock_ids = stock_ids[cursor_index:] + stock_ids[:cursor_index]
         pending: list[str] = []
         request_ranges: dict[str, tuple[str, str]] = {}
+        request_periods: dict[str, set[str]] = {}
         initial_complete: set[str] = set()
-        for stock_id in stock_ids:
+        for stock_id in ordered_stock_ids:
             covered = set(entries.get(stock_id, {}).get("covered_dates", [])) & requested_observations
             missing = [day for day in expected_strings if day not in covered]
             if not missing:
@@ -571,7 +625,13 @@ class FinMindClient:
                 if source_day in covered:
                     break
                 block.append(source_day)
-            request_ranges[stock_id] = (block[0], block[-1])
+            request_periods[stock_id] = set(block)
+            if dataset in WEEKLY_OBSERVATION_DATASETS:
+                requested_start = max(date.fromisoformat(start_date), date.fromisoformat(block[0]) - timedelta(days=4))
+                requested_end = min(date.fromisoformat(end_date), date.fromisoformat(block[-1]) + timedelta(days=4))
+                request_ranges[stock_id] = (requested_start.isoformat(), requested_end.isoformat())
+            else:
+                request_ranges[stock_id] = (block[0], block[-1])
 
         previous_global_fatal = checkpoint.get("global_fatal")
         checkpoint["last_global_fatal"] = previous_global_fatal
@@ -590,6 +650,11 @@ class FinMindClient:
             "newly_fetched": 0,
             "partial_responses": 0,
             "physical_requests": 0,
+            "rows_received": 0,
+            "rows_accepted": 0,
+            "rows_rejected": 0,
+            "rows_versioned": 0,
+            "observations_reused": sum(len(set(entries.get(stock_id, {}).get("covered_dates", [])) & requested_observations) for stock_id in stock_ids),
             "retryable_pending": 0,
             "permanent_failed": 0,
             "checkpoint_state": checkpoint_state,
@@ -597,7 +662,8 @@ class FinMindClient:
             "requested_start_date": start_date,
             "requested_end_date": end_date,
             "universe_hash": universe_hash,
-            "selection_policy": "sorted_stock_id_observation_resume",
+            "selection_policy": "durable_round_robin_stock_cursor_observation_resume",
+            "fair_cursor_start_stock_id": cursor_start,
             "success": 0,
             "usable_success": 0,
             "no_data": 0,
@@ -611,7 +677,7 @@ class FinMindClient:
         async def persist() -> None:
             checkpoint["manifest"] = manifest
             checkpoint["manifest_hash"] = manifest_hash
-            checkpoint["last_request"] = {"start_date": start_date, "end_date": end_date, "universe_hash": universe_hash, "pending_stock_count": len(pending), "expected_observation_count": len(expected_strings)}
+            checkpoint["last_request"] = {"start_date": start_date, "end_date": end_date, "universe_hash": universe_hash, "pending_stock_count": len(pending), "expected_observation_count": len(expected_strings), "fair_cursor_stock_id": checkpoint.get("fair_cursor_stock_id")}
             temporary = checkpoint_file.with_suffix(".tmp")
             temporary.write_text(json.dumps(checkpoint, ensure_ascii=False, indent=2), encoding="utf-8")
             temporary.replace(checkpoint_file)
@@ -653,7 +719,16 @@ class FinMindClient:
                     fatal_event.set()
                 metrics["failed"] += 1
                 metrics["per_stock"][stock_id] = entry
+                _advance_cursor(stock_id)
                 await persist()
+
+        def _advance_cursor(stock_id: str) -> None:
+            if not stock_ids:
+                checkpoint["fair_cursor_stock_id"] = None
+                return
+            current_index = stock_ids.index(stock_id)
+            checkpoint["fair_cursor_stock_id"] = stock_ids[(current_index + 1) % len(stock_ids)]
+            metrics["fair_cursor_end_stock_id"] = checkpoint["fair_cursor_stock_id"]
 
         async def one(stock_id: str) -> None:
             if fatal_event.is_set():
@@ -662,7 +737,7 @@ class FinMindClient:
                 if fatal_event.is_set():
                     return
                 request_start, request_end = request_ranges[stock_id]
-                request_expected = {day for day in expected_strings if request_start <= day <= request_end}
+                request_expected = request_periods[stock_id]
                 metrics["physical_requests"] += 1
                 try:
                     records, meta = await asyncio.to_thread(self.fetch, dataset, stock_id, request_start, request_end)
@@ -673,6 +748,8 @@ class FinMindClient:
                     if progress_callback:
                         progress_callback(f"{dataset} completed={metrics['newly_fetched'] + metrics['failed']}/{len(pending)}")
                     return
+                metrics["rows_received"] += len(records)
+                metrics["rows"] = metrics["rows_received"]
                 if meta.get("pagination_complete") is False:
                     await mark_failure(stock_id, "INCOMPLETE_PROVIDER_COVERAGE", "retryable_failed")
                     if progress_callback:
@@ -686,10 +763,23 @@ class FinMindClient:
                         async with sink_lock:
                             sink_result = record_sink(records)
                         if isinstance(sink_result, dict):
-                            sink_dates = {str(value)[:10] for value in sink_result.get("accepted_dates", [])}
+                            accepted_count = int(sink_result.get("accepted_count", 0))
+                            versioned_count = int(sink_result.get("versioned_count", accepted_count))
+                            metrics["rows_accepted"] += accepted_count
+                            metrics["rows_versioned"] += versioned_count
+                            metrics["rows_rejected"] += max(0, len(records) - accepted_count)
+                            sink_dates = _source_dates_to_observation_periods(dataset, {str(value)[:10] for value in sink_result.get("accepted_dates", [])}, request_expected)
                             verified_record_dates &= sink_dates
-                        elif int(sink_result) <= 0:
-                            verified_record_dates.clear()
+                        else:
+                            accepted_count = int(sink_result)
+                            metrics["rows_accepted"] += max(0, accepted_count)
+                            metrics["rows_versioned"] += max(0, accepted_count)
+                            metrics["rows_rejected"] += max(0, len(records) - max(0, accepted_count))
+                            if accepted_count <= 0:
+                                verified_record_dates.clear()
+                    elif records:
+                        metrics["rows_accepted"] += len(records)
+                        metrics["rows_versioned"] += len(records)
                 except SchemaMismatch:
                     await mark_failure(stock_id, "STOCK_SCHEMA_MISMATCH", "permanent_failed")
                     if progress_callback:
@@ -733,7 +823,6 @@ class FinMindClient:
                 }
                 async with checkpoint_lock:
                     entries[stock_id] = entry
-                    metrics["rows"] += len(records)
                     metrics["per_stock"][stock_id] = entry
                     checkpoint["failed"] = [item for item in checkpoint.get("failed", []) if item.get("stock_id") != stock_id]
                     checkpoint["completed"] = sorted(set(checkpoint.get("completed", [])) - {stock_id})
@@ -746,6 +835,7 @@ class FinMindClient:
                         metrics["partial_responses"] += 1
                         metrics["failed"] += 1
                         checkpoint["failed"].append({"stock_id": stock_id, **entry, "error_code": "PARTIAL_OBSERVATION_COVERAGE"})
+                    _advance_cursor(stock_id)
                     await persist()
                 if progress_callback:
                     progress_callback(f"{dataset} completed={metrics['newly_fetched'] + metrics['failed']}/{len(pending)}")
@@ -767,6 +857,7 @@ class FinMindClient:
         metrics["verified_observations"] = sum(len(set(entries.get(stock_id, {}).get("covered_dates", [])) & requested_observations) for stock_id in stock_ids)
         metrics["unresolved_observations"] = len(stock_ids) * len(expected_strings) - metrics["verified_observations"]
         metrics["per_stock"] = {key: value for key, value in entries.items() if key in stock_ids}
+        metrics["fair_cursor_end_stock_id"] = checkpoint.get("fair_cursor_stock_id")
         return metrics
 
 

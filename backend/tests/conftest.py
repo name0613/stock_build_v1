@@ -34,7 +34,7 @@ from app.models import (  # noqa: E402
     PriceDaily,
     Stock,
 )
-from app.scoring import FORMULA_HASH, SCORE_VERSION  # noqa: E402
+from app.scoring import BROKER_REPORT_CONTRACT_VERSION, FORMULA_HASH, HOLDING_CANONICAL_LEVELS, SCORE_VERSION  # noqa: E402
 
 
 def _seed_database() -> None:
@@ -53,10 +53,10 @@ def _seed_database() -> None:
         for index, (stock_id, name, market, industry) in enumerate(stocks):
             db.add(Stock(stock_id=stock_id, stock_name=name, market=market, industry=industry, is_common_stock=True, source_date=latest, fetched_at=now))
             db.add(PriceDaily(stock_id=stock_id, source_date=latest, close=100 + index, volume=1000 + index, change=index / 10, source_dataset="TaiwanStockPrice", fetched_at=now))
-            if stock_id in {"2330", "2317", "1101", "1102", "1103"}:
-                score = {"2330": 88.0, "2317": 75.0, "1101": 55.0, "1102": 20.0, "1103": None}[stock_id]
-                status = "STRONG_ACCUMULATION" if stock_id == "2330" else ("ACCUMULATION" if stock_id == "2317" else ("DATA_INSUFFICIENT" if stock_id == "1103" else "WATCH"))
-                coverage = {"institutional": stock_id != "1103", "foreign_holding": stock_id != "1103", "holding_distribution": stock_id != "1103", "broker": stock_id != "1103", "price": True}
+            if stock_id in {"2330", "2317", "1101", "1102", "1103", "1104"}:
+                score = {"2330": 88.0, "2317": 75.0, "1101": 55.0, "1102": 20.0, "1103": None, "1104": None}[stock_id]
+                status = "STRONG_ACCUMULATION" if stock_id == "2330" else ("ACCUMULATION" if stock_id == "2317" else ("DATA_INSUFFICIENT" if stock_id in {"1103", "1104"} else "WATCH"))
+                coverage = {"institutional": stock_id not in {"1103", "1104"}, "foreign_holding": stock_id not in {"1103", "1104"}, "holding_distribution": stock_id not in {"1103", "1104"}, "broker": stock_id not in {"1103", "1104"}, "price": True}
                 values = {"ForeignNet5D": 100.0 - index, "ForeignNet20D": 450.0 - index, "InvestmentTrustNet5D": 20.0, "InvestmentTrustNet20D": 80.0, "ForeignShareRatioChange20D": 0.03, "LargeHolder400Change4W": 0.02, "TopBrokerNetBuy20D": 120.0, "BrokerPersistenceScore": 0.8}
                 db.add(AccumulationFeature(stock_id=stock_id, source_date=latest, values=values, coverage=coverage, latest_source_date=latest.isoformat(), calculated_at=now, knowledge_cutoff=now, input_snapshot_hash=f"{index + 1:064d}"))
                 db.add(AccumulationScore(stock_id=stock_id, source_date=latest, score=score, status=status, score_version=SCORE_VERSION, components={"S": score or 0.0}, explanation=[{"label": "S-level evidence", "value": score or 0.0, "detail": "deterministic fixture"}], coverage=coverage, calculated_at=now, knowledge_cutoff=now, input_snapshot_hash=f"{index + 1:064d}", input_source_hashes=[f"{index + 1:064d}"], formula_hash=FORMULA_HASH))
@@ -65,9 +65,9 @@ def _seed_database() -> None:
             day = date(2026, 8, 18 + offset)
             db.add(InstitutionalDaily(stock_id="2330", source_date=day, foreign_net=100 + offset, investment_trust_net=20, dealer_net=5, institutional_net=125 + offset, source_dataset="TaiwanStockInstitutionalInvestorsBuySellWide", fetched_at=now))
             db.add(ForeignShareholdingDaily(stock_id="2330", source_date=day, foreign_investment_shares=100000 + offset, foreign_investment_shares_ratio=0.5 + offset / 100, number_of_shares_issued=200000, source_dataset="TaiwanStockShareholding", fetched_at=now))
-            db.add(HoldingDistribution(stock_id="2330", source_date=day, holding_shares_level="400,001-600,000", holding_shares_threshold=400001, people=10, percent=10 + offset, shares=500000, unit="shares", source_dataset="TaiwanStockHoldingSharesPer", fetched_at=now))
-            db.add(HoldingDistribution(stock_id="2330", source_date=day, holding_shares_level="1,000,001-2,000,000", holding_shares_threshold=1000001, people=5, percent=5 + offset, shares=1500000, unit="shares", source_dataset="TaiwanStockHoldingSharesPer", fetched_at=now))
-            db.add(BrokerDaily(stock_id="2330", source_date=day, securities_trader_id="A", securities_trader_name="fixture broker", buy_volume=100 + offset, sell_volume=20, net_volume=80 + offset, source_dataset="TaiwanStockTradingDailyReport", provider_report_complete=True, fetched_at=now))
+            for level_index, (level, threshold) in enumerate(HOLDING_CANONICAL_LEVELS):
+                db.add(HoldingDistribution(stock_id="2330", source_date=day, holding_shares_level=level, holding_shares_threshold=threshold, people=10 + level_index, percent=1 + offset + level_index / 10, shares=threshold, unit="shares", source_dataset="TaiwanStockHoldingSharesPer", fetched_at=now))
+            db.add(BrokerDaily(stock_id="2330", source_date=day, securities_trader_id="A", securities_trader_name="fixture broker", buy_volume=100 + offset, sell_volume=20, net_volume=80 + offset, source_dataset="TaiwanStockTradingDailyReport", provider_report_complete=True, provider_contract_version=BROKER_REPORT_CONTRACT_VERSION, fetched_at=now))
         db.commit()
 
 

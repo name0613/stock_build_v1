@@ -10,13 +10,24 @@ from app.calendar import CalendarUnknownError, expected_trading_sessions
 from app.finmind import FinMindClient, FinMindError
 from app.ingestion import _model_rows, _natural_key, calculate_stock_features_and_score, ingest_records, normalize_institutional, normalize_stock, sync_universe
 from app.models import AccumulationFeature, AccumulationScore, Base, BrokerDaily, DataSyncStatus, InstitutionalDaily, SourceRevision, Stock
-from app.scoring import parse_holding_level
+from app.scoring import BROKER_REPORT_CONTRACT_VERSION, HOLDING_CANONICAL_LEVELS, parse_holding_level
 
 
 def _db() -> tuple[Session, object]:
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
     return Session(engine), engine
+
+
+def _complete_holding_rows(stock_id: str, day: date, base_percent: float = 10.0) -> list[dict[str, object]]:
+    return [
+        {"stock_id": stock_id, "date": day, "HoldingSharesLevel": level, "holding_shares_threshold": threshold, "percent": base_percent + index, "people": index + 1, "shares": threshold}
+        for index, (level, threshold) in enumerate(HOLDING_CANONICAL_LEVELS)
+    ]
+
+
+def _complete_broker_row(stock_id: str, day: date, trader_id: str, *, buy: float = 100, sell: float = 10) -> dict[str, object]:
+    return {"stock_id": stock_id, "date": day, "securities_trader_id": trader_id, "buy_volume": buy, "sell_volume": sell, "provider_report_complete": True, "provider_contract_version": BROKER_REPORT_CONTRACT_VERSION}
 
 
 def test_raw_institutional_fallback_is_explicitly_rejected() -> None:
@@ -132,14 +143,10 @@ def test_holding_real_bucket_boundaries_and_weekly_gap_fail_closed() -> None:
     assert parse_holding_level("1,000 張以上") == 1_000_000
     from app.features import holding_distribution_features
 
-    rows = [
-        {"source_date": "2026-08-20", "HoldingSharesLevel": "400,001-600,000", "holding_shares_threshold": 400001, "percent": 10.0, "people": 3, "shares": 500000},
-        {"source_date": "2026-08-20", "HoldingSharesLevel": "1,000,001-2,000,000", "holding_shares_threshold": 1000001, "percent": 4.0, "people": 1, "shares": 1500000},
-        {"source_date": "2026-07-16", "HoldingSharesLevel": "400,001-600,000", "holding_shares_threshold": 400001, "percent": 8.0, "people": 2, "shares": 500000},
-    ]
+    rows = _complete_holding_rows("2330", date(2026, 8, 20)) + _complete_holding_rows("2330", date(2026, 7, 16), 8.0)
     result = holding_distribution_features(rows)
-    assert result["LargeHolder400LotsPercent"] == 14.0
-    assert result["LargeHolder1000LotsPercent"] == 4.0
+    assert result["LargeHolder400LotsPercent"] == 90.0
+    assert result["LargeHolder1000LotsPercent"] == 24.0
     assert result["LargeHolder400Change4W"] is None
     assert result["HoldingBoundarySemantics"]["400"] == ">400 lots"
 
@@ -162,8 +169,8 @@ def test_broker_explicit_null_net_fails_closed_even_with_valid_same_session_row(
 
     rows = []
     for day in expected_trading_sessions(date(2026, 8, 20), 20):
-        rows.append({"source_date": day, "securities_trader_id": "VALID", "net_volume": 100, "provider_report_complete": True})
-        rows.append({"source_date": day, "securities_trader_id": "NULL", "net_volume": None, "buy_volume": None, "sell_volume": None, "provider_report_complete": True})
+        rows.append({"source_date": day, "securities_trader_id": "VALID", "net_volume": 100, "provider_report_complete": True, "provider_contract_version": BROKER_REPORT_CONTRACT_VERSION})
+        rows.append({"source_date": day, "securities_trader_id": "NULL", "net_volume": None, "buy_volume": None, "sell_volume": None, "provider_report_complete": True, "provider_contract_version": BROKER_REPORT_CONTRACT_VERSION})
 
     result = broker_features(rows)
     assert result["BrokerDataContract"] == {"available": False, "reason": "null_or_invalid_broker_net"}
@@ -174,7 +181,7 @@ def test_broker_explicit_null_net_fails_closed_even_with_valid_same_session_row(
 def test_broker_omitted_branch_under_complete_report_retains_zero_absence_semantics() -> None:
     from app.features import broker_features
 
-    rows = [{"source_date": day, "securities_trader_id": "VALID", "net_volume": 100, "provider_report_complete": True} for day in expected_trading_sessions(date(2026, 8, 20), 20)]
+    rows = [{"source_date": day, "securities_trader_id": "VALID", "net_volume": 100, "provider_report_complete": True, "provider_contract_version": BROKER_REPORT_CONTRACT_VERSION} for day in expected_trading_sessions(date(2026, 8, 20), 20)]
     result = broker_features(rows)
     assert result["BrokerDataContract"] == {"available": True, "reason": None}
     assert result["BrokerPersistenceScore"] is not None
@@ -186,8 +193,8 @@ def test_broker_concentration_is_bounded_with_offsetting_sellers() -> None:
     rows = []
     for day in expected_trading_sessions(date(2026, 8, 20), 20):
         rows.extend([
-            {"source_date": day, "securities_trader_id": "BUY", "net_volume": 1000, "provider_report_complete": True},
-            {"source_date": day, "securities_trader_id": "SELL", "net_volume": -1000, "provider_report_complete": True},
+            {"source_date": day, "securities_trader_id": "BUY", "net_volume": 1000, "provider_report_complete": True, "provider_contract_version": BROKER_REPORT_CONTRACT_VERSION},
+            {"source_date": day, "securities_trader_id": "SELL", "net_volume": -1000, "provider_report_complete": True, "provider_contract_version": BROKER_REPORT_CONTRACT_VERSION},
         ])
     result = broker_features(rows)
     assert result["Top3BrokerConcentration20D"] == pytest.approx(1.0)
@@ -207,10 +214,9 @@ def test_source_revision_and_historical_score_are_point_in_time() -> None:
         ingest_records(db, "TaiwanStockInstitutionalInvestorsBuySellWide", [{"stock_id": "2330", "date": day, "Foreign_Investor_buy": 110, "Foreign_Investor_sell": 10, "Foreign_Dealer_Self_buy": 20, "Foreign_Dealer_Self_sell": 10, "Investment_Trust_Buy": 30, "Investment_Trust_Sell": 10, "Dealer_Buy": 15, "Dealer_Sell": 10, "Dealer_self_Buy": 5, "Dealer_self_Sell": 1, "Dealer_Hedging_Buy": 4, "Dealer_Hedging_Sell": 2}])
         ingest_records(db, "TaiwanStockShareholding", [{"stock_id": "2330", "date": day, "ForeignInvestmentShares": 1000 + day.day, "ForeignInvestmentSharesRatio": 40 + day.day / 100}])
         ingest_records(db, "TaiwanStockPrice", [{"stock_id": "2330", "date": day, "close": 100 + day.day, "TradingVolume": 100000}])
-        ingest_records(db, "TaiwanStockTradingDailyReport", [{"stock_id": "2330", "date": day, "securities_trader_id": "A", "buy_volume": 100, "sell_volume": 10}])
+        ingest_records(db, "TaiwanStockTradingDailyReport", [_complete_broker_row("2330", day, "A")])
     for day in (end - timedelta(days=28), end - timedelta(days=21), end - timedelta(days=14), end - timedelta(days=7), end):
-        ingest_records(db, "TaiwanStockHoldingSharesPer", [{"stock_id": "2330", "date": day, "HoldingSharesLevel": "400,001-600,000", "percent": 10, "people": 3}])
-        ingest_records(db, "TaiwanStockHoldingSharesPer", [{"stock_id": "2330", "date": day, "HoldingSharesLevel": "1,000,001-2,000,000", "percent": 5, "people": 1}])
+        ingest_records(db, "TaiwanStockHoldingSharesPer", _complete_holding_rows("2330", day))
     cutoff = datetime.now(timezone.utc)
     original = calculate_stock_features_and_score(db, "2330", end, cutoff)
     ingest_records(db, "TaiwanStockInstitutionalInvestorsBuySellWide", [{"stock_id": "2330", "date": sessions[-1], "Foreign_Investor_buy": 1, "Foreign_Investor_sell": 1000, "Foreign_Dealer_Self_buy": 20, "Foreign_Dealer_Self_sell": 10, "Investment_Trust_Buy": 30, "Investment_Trust_Sell": 10, "Dealer_Buy": 15, "Dealer_Sell": 10, "Dealer_self_Buy": 5, "Dealer_self_Sell": 1, "Dealer_Hedging_Buy": 4, "Dealer_Hedging_Sell": 2}])
@@ -283,13 +289,10 @@ def test_capability_broker_rows_cannot_change_s4_features_score_api_or_provenanc
         ingest_records(db, "TaiwanStockShareholding", [{"stock_id": "2330", "date": day, "ForeignInvestmentShares": 1000 + index, "ForeignInvestmentSharesRatio": 40 + index / 10}])
         ingest_records(db, "TaiwanStockPrice", [{"stock_id": "2330", "date": day, "close": 100 + index, "TradingVolume": 100000}])
         if day in sessions[-20:]:
-            ingest_records(db, "TaiwanStockTradingDailyReport", [{"stock_id": "2330", "date": day, "securities_trader_id": "OFF", "buy_volume": 100, "sell_volume": 10, "provider_report_complete": True}])
+            ingest_records(db, "TaiwanStockTradingDailyReport", [_complete_broker_row("2330", day, "OFF")])
     for offset in (28, 21, 14, 7, 0):
         holding_day = end - timedelta(days=offset)
-        ingest_records(db, "TaiwanStockHoldingSharesPer", [
-            {"stock_id": "2330", "date": holding_day, "HoldingSharesLevel": "400,001-600,000", "percent": 10 + (28 - offset) / 28, "people": 3, "shares": 500000},
-            {"stock_id": "2330", "date": holding_day, "HoldingSharesLevel": "1,000,001-2,000,000", "percent": 5, "people": 1, "shares": 1500000},
-        ])
+        ingest_records(db, "TaiwanStockHoldingSharesPer", _complete_holding_rows("2330", holding_day, 10 + (28 - offset) / 28))
 
     first_cutoff = datetime.now(timezone.utc) + timedelta(seconds=1)
     official_score = calculate_stock_features_and_score(db, "2330", end, first_cutoff)
@@ -368,11 +371,11 @@ def test_scheduled_catch_up_runs_all_phases_for_dynamic_multi_stock_universe() -
                     elif dataset == "TaiwanStockPrice":
                         rows.append({"stock_id": stock_id, "date": day, "close": 100, "TradingVolume": 1000})
                     elif dataset == "TaiwanStockHoldingSharesPer" and day in (end - timedelta(days=28), end - timedelta(days=21), end - timedelta(days=14), end - timedelta(days=7), end):
-                        rows.append({"stock_id": stock_id, "date": day, "HoldingSharesLevel": "400,001-600,000", "percent": 10, "people": 1})
+                        rows.extend(_complete_holding_rows(stock_id, day))
             return rows, {"source_date": end.isoformat()}
 
         async def fetch_broker_stocks(self, stock_ids: list[str], start_date: str, end_date: str, record_sink=None, progress_callback=None):
-            rows = [{"stock_id": stock_id, "date": day, "securities_trader_id": "A", "buy_volume": 100, "sell_volume": 10} for stock_id in stock_ids for day in sessions]
+            rows = [_complete_broker_row(stock_id, day, "A") for stock_id in stock_ids for day in sessions]
             if record_sink:
                 record_sink(rows)
             return {"requested": len(stock_ids), "skipped_checkpoint": 0, "success": len(stock_ids) * len(sessions), "failed": 0, "rows": len(rows), "retries": 0}

@@ -1,0 +1,41 @@
+{
+  "contract_version": "finmind-dedicated-stock-session-report-v1",
+  "dataset": "TaiwanStockTradingDailyReport",
+  "sanitized": true,
+  "official_sources": [
+    "https://github.com/FinMind/FinMind-MCP/blob/master/knowledge/datasets.md",
+    "https://github.com/FinMind/FinMind/blob/master/FinMind/data/finmind_api.py"
+  ],
+  "request_contract": {
+    "endpoint": "/api/v4/taiwan_stock_trading_daily_report",
+    "required_parameters": ["data_id", "date"],
+    "optional_parameters": [],
+    "scope": "one stock and one trading session",
+    "pagination_parameters": []
+  },
+  "response_contract": {
+    "required_fields": ["stock_id", "date", "securities_trader_id", "buy", "sell"],
+    "all_rows_must_match_requested_stock_and_date": true,
+    "empty_response_complete": false,
+    "explicit_incomplete_pagination_complete": false,
+    "omitted_branch_is_zero_only_after_contract_validation": true
+  },
+  "positive_fixture": {
+    "request": {"data_id": "2330", "date": "2026-08-20"},
+    "rows": [
+      {"stock_id": "2330", "date": "2026-08-20", "securities_trader_id": "SYNTH-A", "buy": 100, "sell": 20},
+      {"stock_id": "2330", "date": "2026-08-20", "securities_trader_id": "SYNTH-B", "buy": 0, "sell": 10}
+    ],
+    "known_omitted_synthetic_branch": "SYNTH-INACTIVE",
+    "expected_contract_complete": true,
+    "expected_omitted_branch_net": 0
+  },
+  "negative_reasons": [
+    "empty_report",
+    "mixed_stock_or_session",
+    "required_report_field_missing",
+    "null_buy_or_sell",
+    "provider_declared_incomplete_pagination"
+  ],
+  "contains_credentials": false
+}

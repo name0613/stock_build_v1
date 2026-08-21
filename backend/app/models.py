@@ -87,9 +87,11 @@ class BrokerDaily(Base):
     avg_sell_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     source_dataset: Mapped[str] = mapped_column(String(100))
     provider_report_complete: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    provider_contract_version: Mapped[str | None] = mapped_column(String(100), nullable=True)
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     __table_args__ = (
         UniqueConstraint("stock_id", "source_date", "securities_trader_id", name="uq_broker_stock_date_id"),
+        Index("ix_broker_stock_dataset_date", "stock_id", "source_dataset", "source_date"),
         CheckConstraint("source_dataset = 'TaiwanStockTradingDailyReport'", name="ck_broker_daily_official_source"),
     )
 
@@ -164,6 +166,7 @@ class DataSyncStatus(Base):
     rows_accepted_this_attempt: Mapped[int] = mapped_column(Integer, default=0)
     rows_rejected_this_attempt: Mapped[int] = mapped_column(Integer, default=0)
     rows_versioned_this_attempt: Mapped[int] = mapped_column(Integer, default=0)
+    observations_reused_this_attempt: Mapped[int] = mapped_column(Integer, default=0)
     stored_rows_total: Mapped[int] = mapped_column(Integer, default=0)
     metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 

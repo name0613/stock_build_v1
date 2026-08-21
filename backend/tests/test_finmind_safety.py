@@ -8,9 +8,10 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 from app.config import Settings
-from app.finmind import CAPABILITY_ONLY_DATASETS, FORBIDDEN_DATASETS, PRODUCTION_S_DATASETS, FinMindClient, FinMindError, capability_evidence, classify_empty_response, expected_observation_dates
+from app.finmind import CAPABILITY_ONLY_DATASETS, FORBIDDEN_DATASETS, PRODUCTION_S_DATASETS, FinMindClient, FinMindError, _broker_report_contract, _record_observation_dates, capability_evidence, classify_empty_response, expected_observation_dates
 from app.ingestion import _mark_sync, ingest_records, normalize_stock
 from app.models import Base, DataSyncStatus, InstitutionalDaily, Stock
+from app.scoring import BROKER_REPORT_CONTRACT_VERSION, HOLDING_CANONICAL_LEVELS
 
 
 def test_forbidden_datasets_are_rejected() -> None:
@@ -189,6 +190,26 @@ def test_global_request_budget_covers_retry_attempts(monkeypatch: pytest.MonkeyP
     assert fake.calls == 2
 
 
+def test_broker_provider_contract_is_bound_only_to_complete_dedicated_response(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    row = {"stock_id": "2330", "date": "2026-08-20", "securities_trader_id": "A", "buy": 10, "sell": 1}
+    complete = _Client([_Response(200, {"status": 200, "data": [row]})])
+    monkeypatch.setattr(httpx, "Client", lambda **_: complete)
+    client = FinMindClient(Settings(raw_root=tmp_path, broker_max_retries=0))
+    records, meta = client.fetch("TaiwanStockTradingDailyReport", "2330", "2026-08-20", "2026-08-20", persist_raw=False)
+    assert meta["provider_report_complete"] is True
+    assert meta["provider_contract_version"] == BROKER_REPORT_CONTRACT_VERSION
+    assert meta["pagination_complete"] is True
+    assert all(record["provider_report_complete"] is True for record in records)
+
+    incomplete = _Client([_Response(200, {"status": 200, "pagination_complete": False, "data": [row]})])
+    monkeypatch.setattr(httpx, "Client", lambda **_: incomplete)
+    records, meta = client.fetch("TaiwanStockTradingDailyReport", "2330", "2026-08-20", "2026-08-20", persist_raw=False)
+    assert meta["provider_report_complete"] is False
+    assert meta["provider_contract_version"] is None
+    assert meta["provider_contract_reason"] == "provider_declared_incomplete_pagination"
+    assert all(record["provider_report_complete"] is False for record in records)
+
+
 def test_broker_checkpoint_retains_retryable_failure_and_resumes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import asyncio
     client = FinMindClient(Settings(raw_root=tmp_path, broker_max_retries=0, broker_concurrency=1))
@@ -198,7 +219,7 @@ def test_broker_checkpoint_retains_retryable_failure_and_resumes(monkeypatch: py
     checkpoint = next((tmp_path / "checkpoints").glob("*.json"))
     failure = __import__("json").loads(checkpoint.read_text(encoding="utf-8"))["failed"][0]
     assert failure["classification"] == "retryable_failed"
-    monkeypatch.setattr(client, "fetch", lambda *_args, **_kwargs: ([{"stock_id": "2330", "date": "2026-08-20", "securities_trader_id": "A", "buy": 10, "sell": 1}], {"attempt": 1}))
+    monkeypatch.setattr(client, "fetch", lambda *_args, **_kwargs: ([{"stock_id": "2330", "date": "2026-08-20", "securities_trader_id": "A", "buy": 10, "sell": 1, "provider_report_complete": True, "provider_contract_version": BROKER_REPORT_CONTRACT_VERSION}], {"attempt": 1, "provider_report_complete": True, "provider_contract_version": BROKER_REPORT_CONTRACT_VERSION}))
     resumed = asyncio.run(client.fetch_broker_stocks(["2330"], "2026-08-20", "2026-08-20"))
     assert resumed["success"] == 1
     assert resumed["fatal_code"] is None
@@ -266,12 +287,71 @@ def test_source_checkpoint_resumes_finite_quota_without_repeating_completed_stoc
     assert second["fatal_code"] is None
 
 
+def test_source_checkpoint_round_robin_cursor_prevents_later_stock_starvation(tmp_path: Path) -> None:
+    import asyncio
+
+    settings = Settings(raw_root=tmp_path, broker_max_retries=0, source_concurrency=1)
+    stock_ids = [f"{index:04d}" for index in range(1, 9)]
+    expected = expected_observation_dates("TaiwanStockPrice", __import__("datetime").date(2026, 8, 3), __import__("datetime").date(2026, 8, 5))
+
+    def quota_run(allowance: int, calls: list[str]):
+        def fetch(_dataset: str, stock_id: str, *_args, **_kwargs):
+            calls.append(stock_id)
+            if len(calls) > allowance:
+                raise FinMindError("QUOTA_EXHAUSTED", "finite test budget")
+            return ([{"stock_id": stock_id, "date": day.isoformat()} for day in expected], {"attempt": 1})
+        client = FinMindClient(settings)
+        client.fetch = fetch  # type: ignore[method-assign]
+        return asyncio.run(client.fetch_stocks_dataset(stock_ids, "TaiwanStockPrice", "2026-08-03", "2026-08-05"))
+
+    first_calls: list[str] = []
+    first = quota_run(2, first_calls)
+    assert first_calls == ["0001", "0002", "0003"]
+    assert first["fair_cursor_end_stock_id"] == "0004"
+    second_calls: list[str] = []
+    second = quota_run(2, second_calls)
+    assert second_calls == ["0004", "0005", "0006"]
+    assert second["fair_cursor_start_stock_id"] == "0004"
+    assert second["fair_cursor_end_stock_id"] == "0007"
+    recovery_calls: list[str] = []
+    recovered = quota_run(99, recovery_calls)
+    assert recovered["fatal_code"] is None
+    assert {"0007", "0008", "0003", "0006"} <= set(recovery_calls)
+    assert "0001" not in recovery_calls and "0002" not in recovery_calls
+    assert recovered["success"] == len(stock_ids)
+
+
+def test_source_attempt_counters_reconcile_before_later_quota_failure(tmp_path: Path) -> None:
+    import asyncio
+
+    settings = Settings(raw_root=tmp_path, broker_max_retries=0, source_concurrency=1)
+    client = FinMindClient(settings)
+    expected = expected_observation_dates("TaiwanStockPrice", __import__("datetime").date(2026, 8, 3), __import__("datetime").date(2026, 8, 5))
+    calls = 0
+
+    def fetch(_dataset: str, stock_id: str, *_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 3:
+            raise FinMindError("QUOTA_EXHAUSTED", "later quota failure")
+        return ([{"stock_id": stock_id, "date": day.isoformat()} for day in expected], {"attempt": 1})
+
+    client.fetch = fetch  # type: ignore[method-assign]
+    result = asyncio.run(client.fetch_stocks_dataset(["0001", "0002", "0003"], "TaiwanStockPrice", "2026-08-03", "2026-08-05"))
+    assert result["fatal_code"] == "QUOTA_EXHAUSTED"
+    assert result["rows_received"] == 6
+    assert result["rows_accepted"] == 6
+    assert result["rows_rejected"] == 0
+    assert result["rows_versioned"] == 6
+    assert result["rows_received"] >= result["rows_accepted"] + result["rows_rejected"]
+
+
 def test_broker_checkpoint_manifest_rejects_changed_universe_and_corruption(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import asyncio
     import json
 
     client = FinMindClient(Settings(raw_root=tmp_path, broker_max_retries=0, broker_concurrency=1))
-    monkeypatch.setattr(client, "fetch", lambda *_args, **_kwargs: ([{"stock_id": "2330", "date": "2026-08-20", "securities_trader_id": "A"}], {"attempt": 1}))
+    monkeypatch.setattr(client, "fetch", lambda *_args, **_kwargs: ([{"stock_id": "2330", "date": "2026-08-20", "securities_trader_id": "A", "buy": 1, "sell": 0, "provider_report_complete": True, "provider_contract_version": BROKER_REPORT_CONTRACT_VERSION}], {"attempt": 1, "provider_report_complete": True, "provider_contract_version": BROKER_REPORT_CONTRACT_VERSION}))
     first = asyncio.run(client.fetch_broker_stocks(["2330"], "2026-08-20", "2026-08-20"))
     assert first["success"] == 1
     checkpoint_file = next((tmp_path / "checkpoints").glob("TaiwanStockTradingDailyReport-*.json"))
@@ -288,7 +368,7 @@ def test_broker_checkpoint_manifest_rejects_changed_universe_and_corruption(tmp_
         except json.JSONDecodeError:
             continue
     assert valid_manifests
-    assert all(manifest["checkpoint_version"] == "2026-08-21-incremental-v4" for manifest in valid_manifests)
+    assert all(manifest["checkpoint_version"] == "2026-08-21-incremental-v5" for manifest in valid_manifests)
 
 
 def test_source_checkpoint_reuses_covered_history_when_window_moves_forward(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -352,8 +432,8 @@ def test_weekly_holding_checkpoint_retries_unreturned_publication(tmp_path: Path
 
     def holding_rows(stock_id: str, day: str) -> list[dict[str, object]]:
         return [
-            {"stock_id": stock_id, "date": day, "holding_shares_threshold": 400001, "percent": 10, "people": 2, "shares": 500000},
-            {"stock_id": stock_id, "date": day, "holding_shares_threshold": 1000001, "percent": 5, "people": 1, "shares": 1500000},
+            {"stock_id": stock_id, "date": day, "HoldingSharesLevel": level, "holding_shares_threshold": threshold, "percent": 1, "people": 1, "shares": threshold}
+            for level, threshold in HOLDING_CANONICAL_LEVELS
         ]
 
     def partial(_dataset: str, stock_id: str, start: str, end: str, **_kwargs):
@@ -372,6 +452,28 @@ def test_weekly_holding_checkpoint_retries_unreturned_publication(tmp_path: Path
     assert second["success"] == 1
     assert second["per_stock"]["2330"]["covered_dates"] == ["2026-08-07", "2026-08-14"]
     assert calls == [("2026-08-07", "2026-08-14")]
+
+
+def test_holding_weekly_period_contract_accepts_holiday_shifts_and_rejects_ambiguity() -> None:
+    expected = {"2026-08-07", "2026-08-14"}
+
+    def rows(day: str) -> list[dict[str, object]]:
+        return [{"stock_id": "2330", "date": day, "HoldingSharesLevel": level, "holding_shares_threshold": threshold, "percent": 1, "people": 1, "shares": threshold} for level, threshold in HOLDING_CANONICAL_LEVELS]
+
+    assert _record_observation_dates("TaiwanStockHoldingSharesPer", "2330", rows("2026-08-07"), expected) == {"2026-08-07"}
+    assert _record_observation_dates("TaiwanStockHoldingSharesPer", "2330", rows("2026-08-06"), expected) == {"2026-08-07"}
+    assert _record_observation_dates("TaiwanStockHoldingSharesPer", "2330", rows("2026-08-10"), expected) == {"2026-08-07"}
+    assert _record_observation_dates("TaiwanStockHoldingSharesPer", "2330", rows("2026-08-02"), {"2026-08-07"}) == set()
+    assert _record_observation_dates("TaiwanStockHoldingSharesPer", "2330", rows("2026-08-06") + rows("2026-08-07"), expected) == set()
+
+
+def test_broker_complete_report_contract_rejects_mixed_missing_null_and_empty_rows() -> None:
+    valid = [{"stock_id": "2330", "date": "2026-08-20", "securities_trader_id": "A", "buy": 10, "sell": 1}]
+    assert _broker_report_contract(valid, "2330", "2026-08-20") == (True, BROKER_REPORT_CONTRACT_VERSION)
+    assert _broker_report_contract([], "2330", "2026-08-20") == (False, "empty_report")
+    assert _broker_report_contract([{**valid[0], "stock_id": "2317"}], "2330", "2026-08-20") == (False, "mixed_stock_or_session")
+    assert _broker_report_contract([{key: value for key, value in valid[0].items() if key != "securities_trader_id"}], "2330", "2026-08-20") == (False, "required_report_field_missing")
+    assert _broker_report_contract([{**valid[0], "buy": None}], "2330", "2026-08-20") == (False, "null_buy_or_sell")
 
 
 def test_explicit_valid_no_data_covers_only_named_observation(tmp_path: Path) -> None:
