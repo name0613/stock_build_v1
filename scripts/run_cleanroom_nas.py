@@ -35,8 +35,8 @@ def remote(ssh: paramiko.SSHClient, command: str, *, check: bool = True) -> str:
     stdin.channel.shutdown_write()
     output = stdout.read().decode("utf-8", "replace").strip()
     if check and stdout.channel.recv_exit_status() != 0:
-        error = stderr.read().decode("utf-8", "replace")[:500]
-        raise RuntimeError(f"remote command failed: {error}")
+        error = stderr.read().decode("utf-8", "replace")[:3000]
+        raise RuntimeError(f"remote command failed: stderr={error}; stdout={output[-3000:]}")
     return output
 
 
@@ -133,7 +133,7 @@ def main() -> None:
                 f"SCORE_SPEC_HASH={FORMULA_HASH}",
                 f"CALENDAR_HASH={CALENDAR_HASH}",
                 f"BUILD_TIMESTAMP={datetime.now(timezone.utc).isoformat()}",
-                "WEB_PORT=18081",
+                "WEB_PORT=18082",
             ]
         ) + "\n"
         sftp = ssh.open_sftp()
@@ -169,8 +169,8 @@ def main() -> None:
         )
         ps_output = remote(ssh, health_wait)
         migration_count = remote(ssh, f"cd {shlex.quote(project)} && {compose} exec -T postgres psql -U accumulation -d accumulation -Atc 'SELECT count(*) FROM schema_migrations;'")
-        api_health = remote(ssh, f"curl -fsS http://127.0.0.1:18081/health")
-        proxy_metadata = remote(ssh, f"curl -fsS http://127.0.0.1:18081/api/build-metadata")
+        api_health = remote(ssh, f"curl -fsS http://127.0.0.1:18082/health")
+        proxy_metadata = remote(ssh, f"curl -fsS http://127.0.0.1:18082/api/build-metadata")
         worker_health = remote(ssh, f"cd {shlex.quote(project)} && {compose} exec -T worker python -c 'import urllib.request; print(urllib.request.urlopen(\"http://127.0.0.1:8001/health\", timeout=5).read().decode())'")
         image_rows = {}
         for service in ("api", "worker", "frontend"):
@@ -183,7 +183,7 @@ def main() -> None:
         remote(ssh, f"cd {shlex.quote(project)} && {compose} restart api worker frontend nginx")
         remote(ssh, f"cd {shlex.quote(project)} && for i in $(seq 1 60); do {compose} ps --format json | python -c 'import json,sys; rows=[json.loads(x) for x in sys.stdin.read().splitlines() if x]; raise SystemExit(0 if rows and all(r.get(\"State\") == \"running\" and \"unhealthy\" not in r.get(\"Status\",\"\") for r in rows) else 1)' >/dev/null 2>&1 && break; sleep 2; done")
         after_state = remote(ssh, f"cd {shlex.quote(project)} && {compose} exec -T postgres psql -U accumulation -d accumulation -Atc \"SELECT (SELECT count(*) FROM schema_migrations)||':'||(SELECT count(*) FROM job_runs);\"")
-        post_restart_health = remote(ssh, "curl -fsS http://127.0.0.1:18081/health")
+        post_restart_health = remote(ssh, "curl -fsS http://127.0.0.1:18082/health")
         post_restart_worker = remote(ssh, f"cd {shlex.quote(project)} && {compose} exec -T worker python -c 'import urllib.request; print(urllib.request.urlopen(\"http://127.0.0.1:8001/health\", timeout=5).read().decode())'")
         evidence.update(
             {
@@ -191,7 +191,7 @@ def main() -> None:
                 "initial_stack": {"status": "PASS", "ps": ps_output, "api_health": api_health, "worker_health": worker_health, "proxy_build_metadata": proxy_metadata, "schema_migrations_count": migration_count, "images": image_rows},
                 "worker_image_validation": {"status": "PASS", "worker_built_image_inspect": image_rows["worker"]},
                 "restart_validation": {"status": "PASS", "before_state": before_state, "after_state": after_state, "state_persisted": before_state == after_state, "api_health": post_restart_health, "worker_health": post_restart_worker},
-                "frontend_api_via_nginx": {"status": "PASS", "url": "http://127.0.0.1:18081/health"},
+                "frontend_api_via_nginx": {"status": "PASS", "url": "http://127.0.0.1:18082/health"},
             }
         )
     finally:
