@@ -97,6 +97,12 @@ def completed_source_end_date(now: datetime | None = None) -> date:
     return expected_trading_sessions(candidate, 1)[-1]
 
 
+def source_publication_window_open(now: datetime | None = None) -> bool:
+    """Whether the nightly source publication window has opened."""
+    current = (now or datetime.now(ZoneInfo(MARKET_TIMEZONE))).astimezone(ZoneInfo(MARKET_TIMEZONE))
+    return current.time().replace(tzinfo=None) >= SOURCE_DATA_READY_TIME
+
+
 def expected_trading_sessions(end: date, count: int, holidays: set[date] | None = None) -> list[date]:
     if holidays is None and not CALENDAR_COVERAGE_START <= end <= CALENDAR_COVERAGE_END:
         raise CalendarUnknownError(f"calendar coverage unknown for {end.isoformat()}")

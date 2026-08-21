@@ -17,7 +17,7 @@ from .config import get_settings
 from .db import SessionLocal, init_db
 from .finmind import FinMindClient
 from .ingestion import catch_up, seed_score_version
-from .calendar import completed_source_end_date, market_session_state
+from .calendar import completed_source_end_date, market_session_state, source_publication_window_open
 from .models import JobRun
 from .worker_health import start_health_server
 
@@ -50,6 +50,11 @@ def _heartbeat(**updates: object) -> None:
 
 def _completed_source_end_date() -> object:
     return completed_source_end_date(datetime.now(ZoneInfo(settings.timezone)))
+
+
+def _startup_catch_up_allowed(now: datetime | None = None) -> bool:
+    """Do not launch provider work before the nightly source window."""
+    return source_publication_window_open(now or datetime.now(ZoneInfo(settings.timezone)))
 
 
 def _next_scheduled_run_at(now: datetime | None = None) -> str:
@@ -188,7 +193,18 @@ def main() -> None:
     _reconcile_interrupted_jobs(db)
     seed_score_version(db)
     db.close()
-    run_catch_up()
+    if _startup_catch_up_allowed():
+        run_catch_up()
+    else:
+        _heartbeat(
+            status="idle",
+            ready=True,
+            scheduler_ready=False,
+            market_session=market_session_state(),
+            last_job_status="DEFERRED_BEFORE_SOURCE_PUBLICATION",
+            last_error_code=None,
+            current_job_run_id=None,
+        )
     scheduler = BlockingScheduler(timezone=settings.timezone)
     scheduler.add_job(run_catch_up, CronTrigger(day_of_week="mon-fri", hour=21, minute=30, timezone=settings.timezone), id="main-sync", replace_existing=True, misfire_grace_time=300)
     scheduler.add_job(run_catch_up, CronTrigger(day_of_week="mon-fri", hour=23, minute=0, timezone=settings.timezone), id="retry-sync", replace_existing=True, misfire_grace_time=300)

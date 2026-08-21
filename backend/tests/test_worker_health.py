@@ -4,7 +4,8 @@ from datetime import datetime, timedelta, timezone
 
 from app.worker_health import evaluate_health
 from app.worker import _next_scheduled_run_at
-from app.calendar import completed_source_end_date, market_session_state
+from app.calendar import completed_source_end_date, market_session_state, source_publication_window_open
+from app.worker import _startup_catch_up_allowed
 
 
 def _payload(now: datetime) -> dict[str, object]:
@@ -119,3 +120,12 @@ def test_closed_period_does_not_claim_today_is_a_published_source_date() -> None
     assert completed_source_end_date(before_nightly_publication).isoformat() == "2026-08-20"
     assert completed_source_end_date(after_nightly_publication).isoformat() == "2026-08-21"
     assert completed_source_end_date(weekend_after_publication).isoformat() == "2026-08-21"
+
+
+def test_worker_does_not_start_provider_catch_up_before_source_publication_window() -> None:
+    before_window = datetime(2026, 8, 21, 12, 30, tzinfo=timezone.utc)  # 20:30 Taipei
+    after_window = datetime(2026, 8, 21, 13, 30, tzinfo=timezone.utc)  # 21:30 Taipei
+    assert source_publication_window_open(before_window) is False
+    assert source_publication_window_open(after_window) is True
+    assert _startup_catch_up_allowed(before_window) is False
+    assert _startup_catch_up_allowed(after_window) is True

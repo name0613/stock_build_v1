@@ -57,7 +57,7 @@ python scripts/deploy_nas.py
 
 ## Initial backfill / daily jobs
 
-Worker 啟動時做完整 catch-up：動態 universe、四個 full-market S/reference source、當日券商 bounded queue、全 universe feature/score，並以 JobRun 記錄每階段狀態；工作日 21:30 做主更新，23:00 做補抓／retry，時區為 `Asia/Taipei`。runtime heartbeat 同時標示台股連續交易時段 `OPEN`/`CLOSED`；閉市或週末沒有新行情是預期狀態，不會被當成 provider failure，開市時才標示 `monitoring_active=true`。批次來源日依 `completed_source_end_date` 決定：21:00 前不宣稱當日來源已發布，週末／假日回到最近已完成交易日。完整 backfill 應在 NAS 以 quota-aware checkpoint 工作執行；分點走 bounded queue、bounded concurrency、rate limiter、exponential backoff、jitter、Retry-After 與 atomic checkpoint/resume，不以無限呼叫換取 coverage。
+Worker 啟動時在來源發布窗口已開啟後才做完整 catch-up：動態 universe、四個 full-market S/reference source、當日券商 bounded queue、全 universe feature/score，並以 JobRun 記錄每階段狀態；工作日 21:30 做主更新，23:00 做補抓／retry，時區為 `Asia/Taipei`。若在窗口前啟動，worker 只維持健康 heartbeat 並標示 `DEFERRED_BEFORE_SOURCE_PUBLICATION`，不發出資料請求。runtime heartbeat 同時標示台股連續交易時段 `OPEN`/`CLOSED`；閉市或週末沒有新行情是預期狀態，不會被當成 provider failure，開市時才標示 `monitoring_active=true`。批次來源日依 `completed_source_end_date` 決定：21:00 前不宣稱當日來源已發布，週末／假日回到最近已完成交易日。完整 backfill 應在 NAS 以 quota-aware checkpoint 工作執行；分點走 bounded queue、bounded concurrency、rate limiter、exponential backoff、jitter、Retry-After 與 atomic checkpoint/resume，不以無限呼叫換取 coverage。
 
 ## Data status / troubleshooting
 
