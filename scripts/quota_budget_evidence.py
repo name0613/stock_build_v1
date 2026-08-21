@@ -7,9 +7,13 @@ import json
 import math
 from pathlib import Path
 import subprocess
+import sys
 from typing import Any
 
 import httpx
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
 try:
     from backend.app.finmind import CHECKPOINT_SCHEMA_VERSION, INCREMENTAL_CHECKPOINT_VERSION, REQUEST_POLICY_VERSION
