@@ -17,6 +17,8 @@ from .models import (
 )
 from .scoring import FORMULA_HASH, SCORE_MANIFEST, SCORE_VERSION, calculate_score
 
+PIPELINE_ADVISORY_LOCK_KEY = 8_202_608_210_001
+
 
 def _v(row: dict[str, Any], *keys: str) -> Any:
     for key in keys:
@@ -697,6 +699,21 @@ def score_readiness_checkpoint(db: Session, target_date: date, stock_count: int)
 
 
 async def catch_up(db: Session, client: FinMindClient, end_date: date | None = None, progress_callback: Callable[[str], None] | None = None) -> dict[str, Any]:
+    """Run one globally serialized production pipeline attempt."""
+    bind = db.get_bind()
+    if bind.dialect.name != "postgresql":
+        return await _catch_up_locked(db, client, end_date, progress_callback)
+    with bind.connect() as lock_connection:
+        acquired = lock_connection.scalar(text("SELECT pg_try_advisory_lock(:lock_key)"), {"lock_key": PIPELINE_ADVISORY_LOCK_KEY}) is True
+        if not acquired:
+            return {"status": "SKIPPED_CONCURRENT_RUN", "reason_code": "PIPELINE_ADVISORY_LOCK_HELD", "datasets": {}, "scores": {}, "source_coverage": {}}
+        try:
+            return await _catch_up_locked(db, client, end_date, progress_callback)
+        finally:
+            lock_connection.scalar(text("SELECT pg_advisory_unlock(:lock_key)"), {"lock_key": PIPELINE_ADVISORY_LOCK_KEY})
+
+
+async def _catch_up_locked(db: Session, client: FinMindClient, end_date: date | None = None, progress_callback: Callable[[str], None] | None = None) -> dict[str, Any]:
     """Run the complete scheduled pipeline for the dynamic common-stock universe."""
     def progress(phase: str) -> None:
         if progress_callback:
