@@ -97,7 +97,7 @@ test("live list filters pagination ranking and numeric-null ordering obey the AP
   for (let index = 1; index < ranking.items.length; index += 1) expect(ranking.items[index - 1].score).toBeGreaterThanOrEqual(ranking.items[index].score);
 });
 
-test("live detail renders exact provenance formula unavailable policy broker caveat and chart segments", async ({ page }) => {
+test("live detail renders exact provenance formula unavailable policy broker caveat and chart segments", async ({ page }, testInfo) => {
   const listResponse = await page.request.get("/api/stocks?page=1&page_size=1&sort=stock_id&order=asc");
   expect(listResponse.status()).toBe(200);
   const list = await listResponse.json();
@@ -118,8 +118,10 @@ test("live detail renders exact provenance formula unavailable policy broker cav
   await expect(row).toBeVisible();
   await row.click();
   await expect(page.getByText("Final = institutional 35% + ownership 35% + broker 30% + low-profile modifier。", { exact: false })).toBeVisible();
+  await expect(page.getByText("分點是券商營業據點的彙總，不等同於一位自然人或「主力」", { exact: false })).toBeVisible();
   await expect(page.getByText(`Formula hash ${detail.score.formula_hash}`)).toBeVisible();
   await expect(page.getByText("v6 只計入逐列驗證的正買超事件，未出現分點保持 unknown，絕不補零。", { exact: false })).toBeVisible();
+  testInfo.annotations.push({ type: "broker_disclaimer", description: "true" });
   await expect(page.getByTestId("source-major_shareholder_5pct")).toContainText("UNAVAILABLE_NOT_CONFIGURED");
   await expect(page.getByText(/分點資料 unavailable|持續承接證據/).first()).toBeVisible();
 
