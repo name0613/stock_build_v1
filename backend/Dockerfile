@@ -19,6 +19,7 @@ COPY backend/tests ./tests
 COPY fixtures ./fixtures
 COPY migrations ./migrations
 COPY scripts ./scripts
+COPY ARCHITECTURE.md SCORING.md ./
 RUN addgroup --gid 1000 app && adduser --uid 1000 --gid 1000 --disabled-password --gecos "" app \
     && mkdir -p /data/raw && chown -R app:app /app /data/raw
 USER app
