@@ -70,6 +70,8 @@ def _coverage(dataset: dict[str, Any]) -> dict[str, Any]:
     rejected = int(dataset.get("rows_rejected_this_attempt") or 0)
     versioned = int(dataset.get("rows_versioned_this_attempt") or 0)
     reused = int(dataset.get("observations_reused_this_attempt") or coverage.get("observations_reused") or 0)
+    current_contract = dataset.get("counters_are_current_attempt") is True and dataset.get("counter_semantics_version") == "attempt-v5-reconciled-v1" and accepted + rejected == received and versioned <= accepted
+    historical_reset_contract = dataset.get("counters_are_current_attempt") is False and dataset.get("counter_semantics_version") == "legacy-pre-v5-reset-v1" and all(value == 0 for value in (received, accepted, rejected, versioned, reused)) and dataset.get("historical_pre_v5_counters") is not None
     return {
         "dataset": dataset.get("dataset"),
         "status": dataset.get("status"),
@@ -90,7 +92,8 @@ def _coverage(dataset: dict[str, Any]) -> dict[str, Any]:
         "counter_semantics_version": dataset.get("counter_semantics_version"),
         "counters_are_current_attempt": dataset.get("counters_are_current_attempt") is True,
         "historical_pre_v5_counters_present": dataset.get("historical_pre_v5_counters") is not None,
-        "counter_reconciles": dataset.get("counters_are_current_attempt") is True and dataset.get("counter_semantics_version") == "attempt-v5-reconciled-v1" and accepted + rejected == received and versioned <= accepted,
+        "counter_state": "CURRENT_ATTEMPT" if current_contract else ("HISTORICAL_PRE_V5_RESET" if historical_reset_contract else "INVALID"),
+        "counter_reconciles": current_contract or historical_reset_contract,
     }
 
 

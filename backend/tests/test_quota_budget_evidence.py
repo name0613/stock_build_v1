@@ -52,3 +52,18 @@ def test_quota_evidence_rejects_unbound_or_non_direct_limit_artifact() -> None:
     evidence = generate({"stock_count": 1000}, _runtime(), provider, 300, source_revision="a" * 40)
     assert evidence["checks"]["provider_limit_directly_verified"] == "NOT_PROVEN"
     assert evidence["quota"]["provider_reported_limit_per_hour"] is None
+
+
+def test_quota_counter_reconciliation_accepts_explicit_legacy_reset_not_old_values() -> None:
+    runtime = _runtime()
+    row = runtime["datasets"][0]
+    for key in ("rows_received_this_attempt", "rows_accepted_this_attempt", "rows_rejected_this_attempt", "rows_versioned_this_attempt", "observations_reused_this_attempt"):
+        row[key] = 0
+    row["counters_are_current_attempt"] = False
+    row["counter_semantics_version"] = "legacy-pre-v5-reset-v1"
+    row["counter_attempt_id"] = None
+    row["historical_pre_v5_counters"] = {"rows_received": 0, "rows_accepted": 19995, "rows_versioned": 19995}
+    evidence = generate({"stock_count": 1000}, runtime, None, 300, source_revision="a" * 40)
+    attempt = next(item for item in evidence["runtime_attempts"] if item["dataset"] == row["dataset"])
+    assert attempt["counter_state"] == "HISTORICAL_PRE_V5_RESET"
+    assert attempt["counter_reconciles"] is True
