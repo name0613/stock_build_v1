@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import logging
 import json
+import re
 from pathlib import Path
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query
@@ -17,13 +18,16 @@ from .finmind import GLOBAL_PROVIDER_FAILURE_CODES
 from .ingestion import seed_score_version
 from .models import AccumulationFeature, AccumulationScore, BrokerDaily, DataSyncStatus, ForeignShareholdingDaily, HoldingDistribution, InstitutionalDaily, JobRun, PriceDaily, Stock
 from .schemas import PaginatedStocks, StockListItem
-from .calendar import CALENDAR_VERSION
+from .calendar import CALENDAR_HASH, CALENDAR_VERSION
 from .scoring import FORMULA_HASH, SCORE_MANIFEST, SCORE_VERSION
 from .worker_health import evaluate_health
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger(__name__)
 settings = get_settings()
+BUILD_METADATA_PATH = Path("/app/build-metadata.json")
+HEX_40 = re.compile(r"^[a-f0-9]{40}$")
+HEX_64 = re.compile(r"^[a-f0-9]{64}$")
 app = FastAPI(title=settings.app_name, version="0.1.0", docs_url="/api/docs", redoc_url=None)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["GET"], allow_headers=["*"])
 
@@ -48,7 +52,12 @@ def startup() -> None:
 def health(db: Session = Depends(get_db)) -> dict[str, Any]:
     try:
         db.execute(select(func.count()).select_from(Stock)).scalar_one()
+        metadata = _load_build_metadata()
+        if settings.app_env == "production" and metadata["build_metadata_available"] is not True:
+            raise HTTPException(status_code=503, detail={"status": "degraded", "database": "ok", "build_metadata": metadata.get("error_code")})
         return {"status": "ok", "service": "api", "database": "ok", "score_version": SCORE_VERSION, "formula_hash": FORMULA_HASH, "timezone": settings.timezone}
+    except HTTPException:
+        raise
     except Exception:
         raise HTTPException(status_code=503, detail={"status": "degraded", "database": "unavailable"})
 
@@ -60,12 +69,31 @@ def score_spec() -> dict[str, Any]:
 
 @app.get("/api/build-metadata")
 def build_metadata() -> dict[str, Any]:
-    path = Path("/app/build-metadata.json")
+    return _load_build_metadata()
+
+
+def _load_build_metadata(path: Path | None = None) -> dict[str, Any]:
+    metadata_path = path or BUILD_METADATA_PATH
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(metadata_path.read_text(encoding="utf-8"))
     except (OSError, TypeError, ValueError):
-        payload = {"source_revision": "development", "build_metadata_available": False}
-    return {**payload, "build_metadata_available": True}
+        return {"source_revision": "development", "build_metadata_available": False, "error_code": "BUILD_METADATA_MISSING_OR_INVALID"}
+    if not isinstance(payload, dict):
+        return {"source_revision": "development", "build_metadata_available": False, "error_code": "BUILD_METADATA_NOT_OBJECT"}
+    required = {"source_revision", "backend_lock_sha256", "score_spec_hash", "calendar_hash", "build_timestamp"}
+    if missing := sorted(required - set(payload)):
+        return {**payload, "build_metadata_available": False, "error_code": "BUILD_METADATA_FIELDS_MISSING", "missing_fields": missing}
+    valid_timestamp = False
+    try:
+        datetime.fromisoformat(str(payload["build_timestamp"]).replace("Z", "+00:00"))
+        valid_timestamp = True
+    except ValueError:
+        pass
+    hashes_valid = HEX_40.fullmatch(str(payload["source_revision"])) is not None and HEX_64.fullmatch(str(payload["backend_lock_sha256"])) is not None
+    bound = payload["score_spec_hash"] == FORMULA_HASH and payload["calendar_hash"] == CALENDAR_HASH
+    if not (hashes_valid and valid_timestamp and bound):
+        return {**payload, "build_metadata_available": False, "error_code": "BUILD_METADATA_PROVENANCE_MISMATCH", "score_spec_match": payload.get("score_spec_hash") == FORMULA_HASH, "calendar_match": payload.get("calendar_hash") == CALENDAR_HASH}
+    return {**payload, "build_metadata_available": True, "error_code": None, "score_spec_match": True, "calendar_match": True}
 
 
 @app.get("/api/worker-health")

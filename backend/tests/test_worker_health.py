@@ -8,7 +8,18 @@ from app.worker import _next_scheduled_run_at
 
 def _payload(now: datetime) -> dict[str, object]:
     stamp = now.isoformat()
-    return {"status": "idle", "ready": True, "scheduler_ready": True, "last_heartbeat_at": stamp, "last_scheduler_heartbeat_at": stamp, "scheduler_started_at": stamp, "next_expected_run_at": (now + timedelta(hours=1)).isoformat()}
+    job_state = {
+        job_id: {
+            "next_expected_fire_at": (now + timedelta(hours=1)).isoformat(),
+            "last_started_fire_at": None,
+            "last_completed_fire_at": None,
+            "last_event": "REGISTERED",
+            "last_event_at": stamp,
+            "last_error_code": None,
+        }
+        for job_id in ("main-sync", "retry-sync")
+    }
+    return {"status": "idle", "ready": True, "scheduler_ready": True, "last_heartbeat_at": stamp, "last_scheduler_heartbeat_at": stamp, "scheduler_started_at": stamp, "next_expected_run_at": (now + timedelta(hours=1)).isoformat(), "registered_scheduler_job_ids": ["main-sync", "retry-sync"], "scheduler_jobs": job_state}
 
 
 def test_health_requires_scheduler_contract_not_only_pulse() -> None:
@@ -51,3 +62,38 @@ def test_next_run_includes_main_and_retry_schedule() -> None:
     now = datetime(2026, 8, 21, 14, 0, tzinfo=timezone.utc)
     next_run = datetime.fromisoformat(_next_scheduled_run_at(now))
     assert next_run == datetime(2026, 8, 21, 15, 0, tzinfo=timezone.utc)
+
+
+def test_health_detects_due_fire_that_never_started_while_pulse_is_fresh() -> None:
+    now = datetime(2026, 8, 21, 14, 40, tzinfo=timezone.utc)
+    payload = _payload(now)
+    payload["scheduler_jobs"]["main-sync"]["next_expected_fire_at"] = (now - timedelta(minutes=10)).isoformat()  # type: ignore[index]
+    result = evaluate_health(payload, now)
+    assert result["heartbeat_age_seconds"] == 0
+    assert result["scheduler_execution_overdue"] is True
+    assert result["ready"] is False
+    assert "main-sync:scheduled_fire_not_started" in result["scheduler_job_reasons"]
+
+
+def test_health_accepts_legitimate_idle_after_scheduled_fire_started_and_completed() -> None:
+    now = datetime(2026, 8, 21, 14, 40, tzinfo=timezone.utc)
+    payload = _payload(now)
+    state = payload["scheduler_jobs"]["main-sync"]  # type: ignore[index]
+    state.update({"next_expected_fire_at": (now + timedelta(days=3)).isoformat(), "last_started_fire_at": (now - timedelta(minutes=10)).isoformat(), "last_completed_fire_at": (now - timedelta(minutes=5)).isoformat(), "last_event": "COMPLETED"})
+    result = evaluate_health(payload, now)
+    assert result["scheduler_execution_overdue"] is False
+    assert result["scheduler_event_error"] is False
+    assert result["ready"] is True
+
+
+def test_health_detects_missed_or_error_event_and_stopped_scheduler() -> None:
+    now = datetime(2026, 8, 21, 14, 40, tzinfo=timezone.utc)
+    missed = _payload(now)
+    missed["scheduler_jobs"]["retry-sync"]["last_event"] = "MISSED"  # type: ignore[index]
+    assert evaluate_health(missed, now)["scheduler_event_error"] is True
+    failed = _payload(now)
+    failed["scheduler_jobs"]["main-sync"]["last_event"] = "ERROR"  # type: ignore[index]
+    assert evaluate_health(failed, now)["ready"] is False
+    stopped = _payload(now)
+    stopped["scheduler_ready"] = False
+    assert evaluate_health(stopped, now)["ready"] is False

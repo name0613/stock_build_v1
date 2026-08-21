@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import json
+
 from fastapi.testclient import TestClient
 
-from app.main import app
+from app.calendar import CALENDAR_HASH
+from app.main import _load_build_metadata, app
+from app.scoring import FORMULA_HASH
 
 
 def test_health_endpoint_has_no_secret_fields() -> None:
@@ -86,3 +90,19 @@ def test_worker_health_contract_is_sanitized() -> None:
     assert response.status_code == 200
     assert "token" not in response.text.lower()
     assert "password" not in response.text.lower()
+
+
+def test_build_metadata_reports_valid_missing_malformed_and_mismatched_states(tmp_path) -> None:
+    valid = tmp_path / "valid.json"
+    valid.write_text(json.dumps({"source_revision": "a" * 40, "backend_lock_sha256": "b" * 64, "score_spec_hash": FORMULA_HASH, "calendar_hash": CALENDAR_HASH, "build_timestamp": "2026-08-21T00:00:00+00:00"}), encoding="utf-8")
+    assert _load_build_metadata(valid)["build_metadata_available"] is True
+    assert _load_build_metadata(tmp_path / "missing.json")["build_metadata_available"] is False
+    malformed = tmp_path / "malformed.json"
+    malformed.write_text("{not-json", encoding="utf-8")
+    assert _load_build_metadata(malformed)["error_code"] == "BUILD_METADATA_MISSING_OR_INVALID"
+    incomplete = tmp_path / "incomplete.json"
+    incomplete.write_text(json.dumps({"source_revision": "a" * 40}), encoding="utf-8")
+    assert _load_build_metadata(incomplete)["error_code"] == "BUILD_METADATA_FIELDS_MISSING"
+    mismatch = tmp_path / "mismatch.json"
+    mismatch.write_text(json.dumps({"source_revision": "a" * 40, "backend_lock_sha256": "b" * 64, "score_spec_hash": "c" * 64, "calendar_hash": CALENDAR_HASH, "build_timestamp": "2026-08-21T00:00:00+00:00"}), encoding="utf-8")
+    assert _load_build_metadata(mismatch)["error_code"] == "BUILD_METADATA_PROVENANCE_MISMATCH"

@@ -8,6 +8,10 @@ from threading import Thread
 from typing import Any
 
 
+REQUIRED_SCHEDULED_JOB_IDS = frozenset({"main-sync", "retry-sync"})
+SCHEDULED_FIRE_GRACE_SECONDS = 300
+
+
 def _read_heartbeat(path: Path) -> dict[str, Any]:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
@@ -49,6 +53,34 @@ def evaluate_health(payload: dict[str, Any], now: datetime | None = None) -> dic
             datetime.fromisoformat(str(payload["next_expected_run_at"]))
         except (KeyError, TypeError, ValueError):
             scheduler_contract_missing = True
+    registered = set(payload.get("registered_scheduler_job_ids") or [])
+    scheduler_jobs = payload.get("scheduler_jobs")
+    scheduler_execution_overdue = False
+    scheduler_event_error = False
+    scheduler_job_reasons: list[str] = []
+    if scheduler_ready:
+        if registered != REQUIRED_SCHEDULED_JOB_IDS or not isinstance(scheduler_jobs, dict):
+            scheduler_contract_missing = True
+        else:
+            for job_id in sorted(REQUIRED_SCHEDULED_JOB_IDS):
+                state = scheduler_jobs.get(job_id)
+                if not isinstance(state, dict):
+                    scheduler_contract_missing = True
+                    scheduler_job_reasons.append(f"{job_id}:state_missing")
+                    continue
+                try:
+                    expected_fire = datetime.fromisoformat(str(state["next_expected_fire_at"]))
+                    if expected_fire.tzinfo is None:
+                        expected_fire = expected_fire.replace(tzinfo=timezone.utc)
+                    if (now - expected_fire).total_seconds() > SCHEDULED_FIRE_GRACE_SECONDS:
+                        scheduler_execution_overdue = True
+                        scheduler_job_reasons.append(f"{job_id}:scheduled_fire_not_started")
+                except (KeyError, TypeError, ValueError):
+                    scheduler_contract_missing = True
+                    scheduler_job_reasons.append(f"{job_id}:next_fire_missing")
+                if state.get("last_event") in {"MISSED", "ERROR"}:
+                    scheduler_event_error = True
+                    scheduler_job_reasons.append(f"{job_id}:{str(state.get('last_event')).lower()}")
     prolonged = False
     if payload.get("status") == "running" and payload.get("last_job_started_at"):
         try:
@@ -56,8 +88,8 @@ def evaluate_health(payload: dict[str, Any], now: datetime | None = None) -> dic
         except ValueError:
             prolonged = True
     scheduler_operational = scheduler_ready or job_progress_active
-    ready = process_ready and scheduler_operational and not stale and not prolonged and not scheduler_contract_missing
-    return {"status": "ok" if ready else "degraded", "ready": ready, "heartbeat_age_seconds": heartbeat_age, "scheduler_age_seconds": scheduler_age, "progress_age_seconds": progress_age, "progress_deadline_seconds": progress_deadline, "stale": stale, "prolonged_job": prolonged, "scheduler_ready": scheduler_ready, "job_progress_active": job_progress_active, "scheduler_contract_missing": scheduler_contract_missing, "heartbeat": payload}
+    ready = process_ready and scheduler_operational and not stale and not prolonged and not scheduler_contract_missing and not scheduler_execution_overdue and not scheduler_event_error
+    return {"status": "ok" if ready else "degraded", "ready": ready, "heartbeat_age_seconds": heartbeat_age, "scheduler_age_seconds": scheduler_age, "progress_age_seconds": progress_age, "progress_deadline_seconds": progress_deadline, "stale": stale, "prolonged_job": prolonged, "scheduler_ready": scheduler_ready, "job_progress_active": job_progress_active, "scheduler_contract_missing": scheduler_contract_missing, "scheduler_execution_overdue": scheduler_execution_overdue, "scheduler_event_error": scheduler_event_error, "scheduler_job_reasons": scheduler_job_reasons, "heartbeat": payload}
 
 
 def start_health_server(path: Path, port: int = 8001) -> ThreadingHTTPServer:

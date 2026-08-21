@@ -6,8 +6,10 @@ import logging
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from threading import Thread
+from threading import Lock, Thread
+from typing import Any
 from zoneinfo import ZoneInfo
+from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_EXECUTED, EVENT_JOB_MISSED, EVENT_JOB_SUBMITTED
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
 
@@ -22,22 +24,28 @@ from .worker_health import start_health_server
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger(__name__)
 settings = get_settings()
+SCHEDULE_CONTRACT = {"main-sync": (21, 30), "retry-sync": (23, 0)}
+_heartbeat_lock = Lock()
+_scheduler_state_lock = Lock()
+_scheduler_runtime: BlockingScheduler | None = None
+_scheduler_job_state: dict[str, dict[str, Any]] = {}
 
 
 def _heartbeat(**updates: object) -> None:
-    path = Path(settings.worker_heartbeat_file)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    current: dict[str, object] = {}
-    if path.exists():
-        try:
-            current = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            current = {}
-    current.update(updates)
-    current["last_heartbeat_at"] = datetime.now(timezone.utc).isoformat()
-    temporary = path.with_suffix(".tmp")
-    temporary.write_text(json.dumps(current, ensure_ascii=False), encoding="utf-8")
-    temporary.replace(path)
+    with _heartbeat_lock:
+        path = Path(settings.worker_heartbeat_file)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        current: dict[str, object] = {}
+        if path.exists():
+            try:
+                current = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                current = {}
+        current.update(updates)
+        current["last_heartbeat_at"] = datetime.now(timezone.utc).isoformat()
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(current, ensure_ascii=False), encoding="utf-8")
+        temporary.replace(path)
 
 
 def _completed_source_end_date() -> object:
@@ -63,6 +71,72 @@ def _next_scheduled_run_at(now: datetime | None = None) -> str:
     return candidate.astimezone(timezone.utc).isoformat()
 
 
+def _next_job_fire_at(job_id: str, now: datetime | None = None) -> str:
+    """Return the next fire for one registered job in the canonical schedule."""
+    if job_id not in SCHEDULE_CONTRACT:
+        raise ValueError(f"unknown scheduled job: {job_id}")
+    current = now or datetime.now(timezone.utc)
+    local = current.astimezone(ZoneInfo(settings.timezone))
+    hour, minute = SCHEDULE_CONTRACT[job_id]
+    for day_offset in range(0, 8):
+        day = local + timedelta(days=day_offset)
+        if day.weekday() >= 5:
+            continue
+        candidate = day.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if candidate > local:
+            return candidate.astimezone(timezone.utc).isoformat()
+    raise RuntimeError("unable to calculate next scheduled fire")
+
+
+def _initial_scheduler_job_state(now: datetime | None = None) -> dict[str, dict[str, Any]]:
+    return {
+        job_id: {
+            "next_expected_fire_at": _next_job_fire_at(job_id, now),
+            "last_started_fire_at": None,
+            "last_completed_fire_at": None,
+            "last_event": "REGISTERED",
+            "last_event_at": (now or datetime.now(timezone.utc)).isoformat(),
+            "last_error_code": None,
+        }
+        for job_id in SCHEDULE_CONTRACT
+    }
+
+
+def _scheduler_listener(event: Any) -> None:
+    """Persist APScheduler execution events; pulse liveness cannot forge them."""
+    job_id = str(getattr(event, "job_id", ""))
+    if job_id not in SCHEDULE_CONTRACT:
+        return
+    now = datetime.now(timezone.utc)
+    scheduled_times = list(getattr(event, "scheduled_run_times", []) or [])
+    scheduled = getattr(event, "scheduled_run_time", None) or (scheduled_times[-1] if scheduled_times else None)
+    scheduled = scheduled if isinstance(scheduled, datetime) else now
+    if scheduled.tzinfo is None:
+        scheduled = scheduled.replace(tzinfo=timezone.utc)
+    with _scheduler_state_lock:
+        state = _scheduler_job_state.setdefault(job_id, _initial_scheduler_job_state(now)[job_id])
+        if event.code == EVENT_JOB_SUBMITTED:
+            state.update(
+                last_started_fire_at=scheduled.isoformat(),
+                next_expected_fire_at=_next_job_fire_at(job_id, scheduled),
+                last_event="STARTED",
+                last_event_at=now.isoformat(),
+                last_error_code=None,
+            )
+        elif event.code == EVENT_JOB_EXECUTED:
+            state.update(last_completed_fire_at=scheduled.isoformat(), last_event="COMPLETED", last_event_at=now.isoformat(), last_error_code=None)
+        elif event.code == EVENT_JOB_MISSED:
+            state.update(last_missed_fire_at=scheduled.isoformat(), next_expected_fire_at=_next_job_fire_at(job_id, scheduled), last_event="MISSED", last_event_at=now.isoformat(), last_error_code="SCHEDULED_FIRE_MISSED")
+        elif event.code == EVENT_JOB_ERROR:
+            state.update(last_error_fire_at=scheduled.isoformat(), last_event="ERROR", last_event_at=now.isoformat(), last_error_code="SCHEDULED_FIRE_ERROR")
+        snapshot = json.loads(json.dumps(_scheduler_job_state))
+    _heartbeat(
+        registered_scheduler_job_ids=sorted(SCHEDULE_CONTRACT),
+        scheduler_jobs=snapshot,
+        last_scheduler_event_at=now.isoformat(),
+    )
+
+
 def _reconcile_interrupted_jobs(db: object) -> None:
     for job in db.query(JobRun).filter(JobRun.status == "RUNNING").all():
         job.status = "PARTIAL"
@@ -76,12 +150,11 @@ def _heartbeat_pulse() -> None:
     while True:
         time.sleep(30)
         try:
-            path = Path(settings.worker_heartbeat_file)
-            payload = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-            if payload.get("scheduler_ready"):
-                _heartbeat(last_scheduler_heartbeat_at=datetime.now(timezone.utc).isoformat(), next_expected_run_at=_next_scheduled_run_at())
-            else:
-                _heartbeat()
+            scheduler_ready = bool(_scheduler_runtime is not None and _scheduler_runtime.running)
+            updates: dict[str, object] = {"scheduler_ready": scheduler_ready}
+            if scheduler_ready:
+                updates["last_scheduler_heartbeat_at"] = datetime.now(timezone.utc).isoformat()
+            _heartbeat(**updates)
         except OSError:
             logger.warning("worker heartbeat write failed")
 
@@ -91,19 +164,24 @@ def run_catch_up() -> None:
     _heartbeat(status="running", ready=True, scheduler_ready=False, last_scheduler_heartbeat_at=started, last_job_started_at=started, last_error_code=None)
     db = SessionLocal()
     try:
-        result = asyncio.run(catch_up(db, FinMindClient(settings), end_date=_completed_source_end_date(), progress_callback=lambda phase: _heartbeat(last_job_progress_at=datetime.now(timezone.utc).isoformat(), job_phase=phase)))
+        def report_progress(phase: str) -> None:
+            running = db.query(JobRun).filter(JobRun.status == "RUNNING").order_by(JobRun.id.desc()).first()
+            _heartbeat(last_job_progress_at=datetime.now(timezone.utc).isoformat(), job_phase=phase, current_job_run_id=running.id if running else None)
+
+        result = asyncio.run(catch_up(db, FinMindClient(settings), end_date=_completed_source_end_date(), progress_callback=report_progress))
         logger.info("catch-up completed status=%s datasets=%s", result.get("status"), result.get("datasets"))
         finished = datetime.now(timezone.utc).isoformat()
-        _heartbeat(status="idle", ready=True, scheduler_ready=True, last_scheduler_heartbeat_at=finished, last_job_finished_at=finished, last_job_status=result.get("status"), last_error_code=result.get("fatal_code"))
+        _heartbeat(status="idle", ready=True, scheduler_ready=bool(_scheduler_runtime and _scheduler_runtime.running), last_job_finished_at=finished, last_job_status=result.get("status"), last_error_code=result.get("fatal_code"), current_job_run_id=None)
     except Exception as exc:
         logger.error("catch-up failed code=%s", getattr(exc, "code", "UNEXPECTED"))
         finished = datetime.now(timezone.utc).isoformat()
-        _heartbeat(status="idle", ready=True, scheduler_ready=True, last_scheduler_heartbeat_at=finished, last_job_finished_at=finished, last_job_status="FAILED", last_error_code=getattr(exc, "code", "UNEXPECTED"))
+        _heartbeat(status="idle", ready=True, scheduler_ready=bool(_scheduler_runtime and _scheduler_runtime.running), last_job_finished_at=finished, last_job_status="FAILED", last_error_code=getattr(exc, "code", "UNEXPECTED"), current_job_run_id=None)
     finally:
         db.close()
 
 
 def main() -> None:
+    global _scheduler_runtime, _scheduler_job_state
     _heartbeat(status="starting", ready=False, scheduler_ready=False, scheduler_started_at=None)
     start_health_server(Path(settings.worker_heartbeat_file))
     Thread(target=_heartbeat_pulse, daemon=True, name="worker-heartbeat-pulse").start()
@@ -114,11 +192,16 @@ def main() -> None:
     db.close()
     run_catch_up()
     scheduler = BlockingScheduler(timezone=settings.timezone)
-    scheduler.add_job(run_catch_up, CronTrigger(day_of_week="mon-fri", hour=21, minute=30, timezone=settings.timezone), id="main-sync", replace_existing=True)
-    scheduler.add_job(run_catch_up, CronTrigger(day_of_week="mon-fri", hour=23, minute=0, timezone=settings.timezone), id="retry-sync", replace_existing=True)
+    scheduler.add_job(run_catch_up, CronTrigger(day_of_week="mon-fri", hour=21, minute=30, timezone=settings.timezone), id="main-sync", replace_existing=True, misfire_grace_time=300)
+    scheduler.add_job(run_catch_up, CronTrigger(day_of_week="mon-fri", hour=23, minute=0, timezone=settings.timezone), id="retry-sync", replace_existing=True, misfire_grace_time=300)
+    scheduler.add_listener(_scheduler_listener, EVENT_JOB_SUBMITTED | EVENT_JOB_EXECUTED | EVENT_JOB_ERROR | EVENT_JOB_MISSED)
+    _scheduler_runtime = scheduler
     logger.info("worker scheduled timezone=%s", settings.timezone)
     scheduler_started = datetime.now(timezone.utc).isoformat()
-    _heartbeat(status="idle", ready=True, scheduler_ready=True, scheduler_started_at=scheduler_started, last_scheduler_heartbeat_at=scheduler_started, next_expected_run_at=_next_scheduled_run_at())
+    with _scheduler_state_lock:
+        _scheduler_job_state = _initial_scheduler_job_state()
+        state_snapshot = json.loads(json.dumps(_scheduler_job_state))
+    _heartbeat(status="idle", ready=True, scheduler_ready=True, scheduler_started_at=scheduler_started, last_scheduler_heartbeat_at=scheduler_started, next_expected_run_at=_next_scheduled_run_at(), registered_scheduler_job_ids=sorted(SCHEDULE_CONTRACT), scheduler_jobs=state_snapshot, last_scheduler_event_at=scheduler_started)
     try:
         scheduler.start()
     except (KeyboardInterrupt, SystemExit):
