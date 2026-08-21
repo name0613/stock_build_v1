@@ -6,8 +6,12 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
-from backend.app.config import get_settings
-from backend.app.finmind import FinMindClient, capability_evidence
+try:
+    from backend.app.config import get_settings
+    from backend.app.finmind import FinMindClient, capability_evidence
+except ModuleNotFoundError:  # running from the backend/worker image
+    from app.config import get_settings
+    from app.finmind import FinMindClient, capability_evidence
 
 
 def source_revision() -> str:
