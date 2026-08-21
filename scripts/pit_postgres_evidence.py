@@ -55,6 +55,8 @@ def run() -> dict[str, object]:
     sessions = expected_trading_sessions(end, 21)
     t1 = datetime(2026, 8, 20, 13, tzinfo=timezone.utc)
     before = t1 - timedelta(hours=1)
+    mapped = None
+    db = None
     try:
         with engine.begin() as connection:
             connection.execute(text(f"CREATE SCHEMA {schema}"))
@@ -103,10 +105,15 @@ def run() -> dict[str, object]:
             "provenance_rows": db.query(SourceRevision).count(),
             "secrets_included": False,
         }
-        db.close()
-        mapped.close()
         return evidence
     finally:
+        if db is not None:
+            db.rollback()
+            db.close()
+        if mapped is not None:
+            if mapped.in_transaction():
+                mapped.rollback()
+            mapped.close()
         with engine.begin() as connection:
             connection.execute(text(f"DROP SCHEMA IF EXISTS {schema} CASCADE"))
 
