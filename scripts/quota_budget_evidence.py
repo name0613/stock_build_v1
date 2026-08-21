@@ -73,7 +73,7 @@ def _coverage(dataset: dict[str, Any]) -> dict[str, Any]:
     return {
         "dataset": dataset.get("dataset"),
         "status": dataset.get("status"),
-        "physical_requests": int(coverage.get("physical_requests") or 0),
+        "physical_requests": int(dataset.get("physical_requests_this_attempt") or 0),
         "requested_stocks": int(coverage.get("requested") or 0),
         "successful_stocks": int(coverage.get("success") or 0),
         "verified_observations": int(coverage.get("verified_observations") or 0),
@@ -86,7 +86,11 @@ def _coverage(dataset: dict[str, Any]) -> dict[str, Any]:
         "rows_rejected": rejected,
         "rows_versioned": versioned,
         "observations_reused": reused,
-        "counter_reconciles": accepted + rejected <= received and versioned <= accepted,
+        "counter_attempt_id": dataset.get("counter_attempt_id"),
+        "counter_semantics_version": dataset.get("counter_semantics_version"),
+        "counters_are_current_attempt": dataset.get("counters_are_current_attempt") is True,
+        "historical_pre_v5_counters_present": dataset.get("historical_pre_v5_counters") is not None,
+        "counter_reconciles": dataset.get("counters_are_current_attempt") is True and dataset.get("counter_semantics_version") == "attempt-v5-reconciled-v1" and accepted + rejected == received and versioned <= accepted,
     }
 
 
@@ -107,13 +111,34 @@ def _renewal_history(jobs: list[dict[str, Any]]) -> dict[str, Any]:
                 continue
             if int(left_checkpoint.get("physical_requests") or 0) <= 0 or int(right_checkpoint.get("physical_requests") or 0) <= 0:
                 continue
-            progress = int(right_checkpoint.get("success") or 0) > int(left_checkpoint.get("success") or 0) or right_checkpoint.get("fair_cursor_end_stock_id") != left_checkpoint.get("fair_cursor_end_stock_id")
+            left_unresolved = int(left_checkpoint.get("unresolved_observations") or 0)
+            right_unresolved = int(right_checkpoint.get("unresolved_observations") or 0)
+            progress = right_unresolved < left_unresolved and right_checkpoint.get("fair_cursor_end_stock_id") != left_checkpoint.get("fair_cursor_end_stock_id") and int(right_checkpoint.get("observations_reused") or 0) > 0
             if progress:
-                qualifying_pairs.append({"dataset": dataset, "earlier_started_at": left.get("started_at"), "later_started_at": right.get("started_at"), "earlier_success": left_checkpoint.get("success"), "later_success": right_checkpoint.get("success"), "earlier_cursor": left_checkpoint.get("fair_cursor_end_stock_id"), "later_cursor": right_checkpoint.get("fair_cursor_end_stock_id")})
+                qualifying_pairs.append({"dataset": dataset, "earlier_started_at": left.get("started_at"), "later_started_at": right.get("started_at"), "earlier_success": left_checkpoint.get("success"), "later_success": right_checkpoint.get("success"), "earlier_cursor": left_checkpoint.get("fair_cursor_end_stock_id"), "later_cursor": right_checkpoint.get("fair_cursor_end_stock_id"), "earlier_unresolved": left_unresolved, "later_unresolved": right_unresolved, "later_observations_reused": right_checkpoint.get("observations_reused"), "earlier_checkpoint_hash": left_checkpoint.get("checkpoint_manifest_hash"), "later_checkpoint_hash": right_checkpoint.get("checkpoint_manifest_hash")})
     return {"status": "PASS" if qualifying_pairs else "NOT_PROVEN", "minimum_separation_minutes": 55, "qualifying_pairs": qualifying_pairs}
 
 
-def generate(summary: dict[str, Any], status: dict[str, Any], provider_limit: int | None, provider_used: int | None, reserve: int) -> dict[str, Any]:
+def _verified_provider_quota(evidence: dict[str, Any] | None, source_revision: str) -> tuple[int | None, int | None]:
+    if not evidence:
+        return None, None
+    valid = (
+        evidence.get("status") == "PASS"
+        and evidence.get("direct_provider_response") is True
+        and evidence.get("source_revision") == source_revision
+        and evidence.get("sanitized") is True
+        and evidence.get("secrets_included") is False
+    )
+    limit = evidence.get("provider_reported_limit_per_hour")
+    used = evidence.get("provider_reported_used")
+    if not valid or not isinstance(limit, int) or not isinstance(used, int) or limit <= 0 or used < 0:
+        return None, None
+    return limit, used
+
+
+def generate(summary: dict[str, Any], status: dict[str, Any], provider_evidence: dict[str, Any] | None, reserve: int, *, source_revision: str | None = None) -> dict[str, Any]:
+    revision = source_revision or _revision()
+    provider_limit, provider_used = _verified_provider_quota(provider_evidence, revision)
     universe = int(summary.get("stock_count") or 0)
     effective_limit = provider_limit or EXPECTED_SPONSOR_LIMIT
     usable_budget = max(0, effective_limit - reserve)
@@ -141,10 +166,10 @@ def generate(summary: dict[str, Any], status: dict[str, Any], provider_limit: in
     overall = "PASS" if all(value == "PASS" for value in checks.values()) else "PARTIAL_NOT_PROVEN"
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "source_revision": _revision(),
+        "source_revision": revision,
         "status": overall,
         "checks": checks,
-        "quota": {"expected_sponsor_limit_per_hour": EXPECTED_SPONSOR_LIMIT, "provider_reported_limit_per_hour": provider_limit, "provider_reported_used": provider_used, "effective_limit_per_hour": effective_limit, "operational_reserve": reserve, "usable_budget_per_hour": usable_budget, "direct_verification_note": "expected limit is not treated as provider-confirmed when provider_reported_limit_per_hour is null"},
+        "quota": {"expected_sponsor_limit_per_hour": EXPECTED_SPONSOR_LIMIT, "provider_reported_limit_per_hour": provider_limit, "provider_reported_used": provider_used, "effective_limit_per_hour": effective_limit, "operational_reserve": reserve, "usable_budget_per_hour": usable_budget, "direct_evidence_source_revision": provider_evidence.get("source_revision") if provider_evidence else None, "direct_evidence_type": provider_evidence.get("evidence_type") if provider_evidence else None, "direct_verification_note": "only a source-matched sanitized authenticated_provider_user_info artifact can directly verify the limit"},
         "universe_stock_count": universe,
         "request_models": request_models,
         "checkpoint_contract": {"checkpoint_schema_version": CHECKPOINT_SCHEMA_VERSION, "incremental_checkpoint_version": INCREMENTAL_CHECKPOINT_VERSION, "request_policy_version": REQUEST_POLICY_VERSION, "non_broker_selection_policy": "durable_round_robin_stock_cursor_observation_resume", "broker_selection_policy": "date_major_round_robin"},
@@ -159,13 +184,13 @@ def generate(summary: dict[str, Any], status: dict[str, Any], provider_limit: in
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("base_url")
-    parser.add_argument("--provider-limit", type=int)
-    parser.add_argument("--provider-used", type=int)
+    parser.add_argument("--provider-quota-evidence", type=Path)
     parser.add_argument("--reserve", type=int, default=DEFAULT_RESERVE)
     parser.add_argument("--output", type=Path, default=Path("deployment_evidence/QUOTA_BUDGET_EVIDENCE.json"))
     args = parser.parse_args()
     summary, status = _load_runtime(args.base_url)
-    evidence = generate(summary, status, args.provider_limit, args.provider_used, args.reserve)
+    provider_evidence = json.loads(args.provider_quota_evidence.read_text(encoding="utf-8")) if args.provider_quota_evidence else None
+    evidence = generate(summary, status, provider_evidence, args.reserve)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(evidence, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({"path": str(args.output), "status": evidence["status"], "secrets_included": False}, ensure_ascii=False))

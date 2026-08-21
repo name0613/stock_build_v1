@@ -25,6 +25,7 @@ from .calendar import is_trading_session
 from .scoring import BROKER_ROW_CONTRACT_VERSION, HOLDING_SCHEMA_VERSION, HOLDING_WEEKLY_PERIOD_VERSION, holding_period_anchor, holding_schema_state, is_holding_metadata_level, parse_holding_level
 
 logger = logging.getLogger(__name__)
+FINMIND_USER_INFO_URL = "https://api.web.finmindtrade.com/v2/user_info"
 CHECKPOINT_SCHEMA_VERSION = "2026-08-21-v5-contract-bound"
 INCREMENTAL_CHECKPOINT_VERSION = "2026-08-21-incremental-v5"
 NORMALIZATION_POLICY_VERSION = "s-only-normalization-v5-contract-bound"
@@ -36,6 +37,34 @@ GLOBAL_PROVIDER_FAILURE_CODES = frozenset({
     "SCHEMA_MISMATCH",
     "EMPTY_RESPONSE_UNVERIFIED",
 })
+
+
+def _extract_scalar(value: Any, keys: set[str]) -> Any:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if str(key) in keys and not isinstance(child, (dict, list)):
+                return child
+        for child in value.values():
+            found = _extract_scalar(child, keys)
+            if found is not None:
+                return found
+    elif isinstance(value, list):
+        for child in value:
+            found = _extract_scalar(child, keys)
+            if found is not None:
+                return found
+    return None
+
+
+def _provider_integer(value: Any) -> int | None:
+    try:
+        return int(float(str(value).replace(",", "").strip()))
+    except (TypeError, ValueError):
+        return None
+
+
+def _quota_plan(limit: int | None) -> str:
+    return {600: "Free", 1_600: "Backer", 6_000: "Sponsor", 20_000: "Sponsor Pro"}.get(limit, "Unknown")
 
 
 def _date_range(start: date, end: date) -> list[date]:
@@ -289,6 +318,49 @@ class FinMindClient:
         if self.settings.finmind_api_token:
             params["token"] = self.settings.finmind_api_token
         return endpoint, params
+
+    def provider_quota(self, *, source_revision: str) -> dict[str, Any]:
+        """Read the authenticated provider quota endpoint and emit no raw payload."""
+        if not self.settings.finmind_api_token:
+            raise FinMindError("AUTHENTICATION_FAILED", "FinMind quota probe requires configured authentication")
+        self._wait_for_http_attempt()
+        try:
+            with httpx.Client(timeout=self.timeout, follow_redirects=True) as client:
+                response = client.get(
+                    FINMIND_USER_INFO_URL,
+                    headers={"Authorization": f"Bearer {self.settings.finmind_api_token}"},
+                )
+        except (httpx.TimeoutException, httpx.NetworkError) as exc:
+            raise FinMindError("NETWORK_ERROR", "FinMind quota endpoint was unavailable") from exc
+        if response.status_code in {401, 403}:
+            raise FinMindError("AUTHENTICATION_FAILED", "FinMind quota authentication failed", response.status_code)
+        if response.status_code >= 400:
+            raise FinMindError("PROVIDER_QUOTA_PROBE_FAILED", "FinMind quota endpoint rejected the request", response.status_code)
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise SchemaMismatch("SCHEMA_MISMATCH", "FinMind quota response was not valid JSON", response.status_code) from exc
+        limit = _provider_integer(_extract_scalar(payload, {"api_request_limit", "request_limit", "limit"}))
+        used = _provider_integer(_extract_scalar(payload, {"user_count", "api_request_count", "request_count", "used"}))
+        if limit is None or used is None or limit <= 0 or used < 0:
+            raise SchemaMismatch("SCHEMA_MISMATCH", "FinMind quota response omitted required numeric counters", response.status_code)
+        return {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "source_revision": source_revision,
+            "status": "PASS",
+            "evidence_type": "authenticated_provider_user_info",
+            "direct_provider_response": True,
+            "provider": "FinMind",
+            "plan": _quota_plan(limit),
+            "provider_reported_limit_per_hour": limit,
+            "provider_reported_used": used,
+            "provider_reported_remaining": max(limit - used, 0),
+            "sponsor_limit_matches_expected": limit == 6_000,
+            "raw_response_persisted": False,
+            "authorization_material_included": False,
+            "sanitized": True,
+            "secrets_included": False,
+        }
 
     def fetch(self, dataset: str, data_id: str | None = None, start_date: str | None = None, end_date: str | None = None, *, persist_raw: bool = True, securities_trader_id: str | None = None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         """Production fetch path; capability-only datasets are rejected."""

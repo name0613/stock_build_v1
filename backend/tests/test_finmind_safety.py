@@ -136,6 +136,33 @@ class _Client:
         return response
 
 
+def test_provider_quota_is_direct_source_bound_and_sanitized(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    fake = _Client([_Response(200, {"data": {"api_request_limit": "6,000", "user_count": 123}})])
+    monkeypatch.setattr(httpx, "Client", lambda **_: fake)
+    client = FinMindClient(Settings(raw_root=tmp_path, finmind_api_token="test-only-secret"))
+    evidence = client.provider_quota(source_revision="a" * 40)
+    serialized = __import__("json").dumps(evidence)
+    assert evidence["status"] == "PASS"
+    assert evidence["direct_provider_response"] is True
+    assert evidence["source_revision"] == "a" * 40
+    assert evidence["plan"] == "Sponsor"
+    assert evidence["provider_reported_limit_per_hour"] == 6_000
+    assert evidence["provider_reported_used"] == 123
+    assert evidence["provider_reported_remaining"] == 5_877
+    assert evidence["raw_response_persisted"] is False
+    assert "test-only-secret" not in serialized
+
+
+@pytest.mark.parametrize("payload", [{"data": {"user_count": 1}}, {"data": {"api_request_limit": 6000}}, {"data": {"api_request_limit": "bad", "user_count": 1}}])
+def test_provider_quota_schema_drift_fails_closed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, payload: dict) -> None:
+    monkeypatch.setattr(httpx, "Client", lambda **_: _Client([_Response(200, payload)]))
+    client = FinMindClient(Settings(raw_root=tmp_path, finmind_api_token="test-only-secret"))
+    with pytest.raises(FinMindError) as exc:
+        client.provider_quota(source_revision="a" * 40)
+    assert exc.value.code == "SCHEMA_MISMATCH"
+    assert "test-only-secret" not in str(exc.value)
+
+
 @pytest.mark.parametrize("response,code", [(_Response(401), "AUTHENTICATION_FAILED"), (_Response(402), "QUOTA_EXHAUSTED"), (_Response(403), "ACCESS_DENIED"), (_Response(400), "NON_RETRYABLE_4XX")])
 def test_finmind_non_retryable_and_quota_fail_fast(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, response: _Response, code: str) -> None:
     fake = _Client([response])
