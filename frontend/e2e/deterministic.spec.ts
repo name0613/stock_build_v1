@@ -92,6 +92,11 @@ async function installApiFixtures(page: Page) {
       return route.fulfill({ json: { stock_count: 55, strong_count: 21, accumulation_count: 15, watch_count: 15, data_insufficient_count: 3, no_strong_evidence_count: 1, status_invariant: true, score_version: "s-only-v6", formula_hash: formulaHash, latest_score_date: "2026-08-20", sync_status: [] } });
     }
     if (url.pathname === "/api/stocks") {
+      // Force the initial unfiltered request to finish after a rapid filter request.
+      // The UI must never allow this stale response to overwrite current results.
+      if (!url.searchParams.has("search") && !url.searchParams.has("market") && !url.searchParams.has("status") && !url.searchParams.has("min_score")) {
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
       let filtered = [...stocks];
       const search = url.searchParams.get("search")?.toLowerCase();
       if (search) filtered = filtered.filter((stock) => stock.stock_id.includes(search) || stock.stock_name.toLowerCase().includes(search));
@@ -164,11 +169,23 @@ test("market status and minimum-score filters compose through the UI", async ({ 
   await expect(page.getByTestId("filtered-total")).toContainText(`${expectedIds.length} 檔`);
 });
 
+test("a delayed initial response cannot overwrite newer search results", async ({ page }) => {
+  await page.goto("/");
+  await page.getByLabel("股票代碼或名稱搜尋").fill("1007");
+  await expect(page.getByTestId("stock-row")).toHaveCount(1);
+  await expect(page.getByTestId("stock-row")).toHaveAttribute("data-stock-id", "1007");
+  await page.waitForTimeout(400);
+  await expect(page.getByTestId("stock-row")).toHaveCount(1);
+  await expect(page.getByTestId("stock-row")).toHaveAttribute("data-stock-id", "1007");
+  await expect(page.getByTestId("filtered-total")).toContainText("1 檔");
+});
+
 test("score pagination keeps numeric values ahead of null and sorting resets page", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByTestId("stock-row")).toHaveCount(50);
   await page.getByRole("button", { name: "下一頁 →" }).click();
   await expect(page.getByText("第 2 頁")).toBeVisible();
+  await expect(page.getByTestId("stock-row")).toHaveCount(5);
   expect(await page.locator(".score-cell b").allTextContents()).toEqual(["50.0", "49.0", "—", "—", "—"]);
   await page.getByLabel("排序").selectOption("stock_id");
   await expect(page.getByText("第 1 頁")).toBeVisible();

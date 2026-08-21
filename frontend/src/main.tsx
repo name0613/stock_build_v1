@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./styles.css";
 
@@ -24,18 +24,31 @@ function App() {
   const [detail, setDetail] = useState<Detail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const stocksRequestId = useRef(0);
 
   async function loadSummary() { try { setSummary(await fetchJson<Summary>("/api/summary")); } catch { setError("API 尚未可用，請確認服務與資料庫狀態。"); } }
-  async function loadStocks() {
+  async function loadStocks(signal: AbortSignal, requestId: number) {
     setLoading(true);
     try {
       const params = new URLSearchParams({ page: String(page), page_size: "50", sort, order: "desc" });
       if (search) params.set("search", search); if (market) params.set("market", market); if (status) params.set("status", status); if (minScore) params.set("min_score", minScore);
-      const response = await fetchJson<{ items: Stock[]; total: number }>(`/api/stocks?${params}`); setItems(response.items); setTotal(response.total); setError(null);
-    } catch { setError("無法讀取股票清單；資料不足時系統會維持 DATA_INSUFFICIENT，不會補成 0。"); } finally { setLoading(false); }
+      const response = await fetchJson<{ items: Stock[]; total: number }>(`/api/stocks?${params}`, signal);
+      if (requestId !== stocksRequestId.current) return;
+      setItems(response.items); setTotal(response.total); setError(null);
+    } catch (error) {
+      if (signal.aborted || requestId !== stocksRequestId.current) return;
+      setError("無法讀取股票清單；資料不足時系統會維持 DATA_INSUFFICIENT，不會補成 0。");
+    } finally {
+      if (requestId === stocksRequestId.current) setLoading(false);
+    }
   }
   useEffect(() => { void loadSummary(); }, []);
-  useEffect(() => { void loadStocks(); }, [page, search, market, status, minScore, sort]);
+  useEffect(() => {
+    const controller = new AbortController();
+    const requestId = ++stocksRequestId.current;
+    void loadStocks(controller.signal, requestId);
+    return () => controller.abort();
+  }, [page, search, market, status, minScore, sort]);
   useEffect(() => { if (!selected) return; void fetchJson<Detail>(`/api/stocks/${selected}`).then(setDetail).catch(() => setError("個股資料讀取失敗。")); }, [selected]);
 
   const filtered = useMemo(() => items, [items]);
@@ -70,7 +83,7 @@ function Coverage({ coverage, large = false }: { coverage: Record<string, boolea
 function formatNumber(value: any) { return value == null || Number.isNaN(Number(value)) ? "—" : Number(value).toLocaleString("zh-TW", { maximumFractionDigits: 2 }); }
 function formatDate(value?: string) { return value ? new Date(value).toLocaleString("zh-TW", { timeZone: "Asia/Taipei" }) : "—"; }
 function scoreClass(status: string) { return ({ STRONG_ACCUMULATION: "strong", ACCUMULATION: "accumulation", WATCH: "watch", DATA_INSUFFICIENT: "insufficient" } as Record<string, string>)[status] || "neutral"; }
-async function fetchJson<T>(url: string): Promise<T> { const response = await fetch(url); if (!response.ok) throw new Error(`HTTP ${response.status}`); return response.json() as Promise<T>; }
+async function fetchJson<T>(url: string, signal?: AbortSignal): Promise<T> { const response = await fetch(url, { signal }); if (!response.ok) throw new Error(`HTTP ${response.status}`); return response.json() as Promise<T>; }
 
 createRoot(document.getElementById("root")!).render(<App />);
 export default App;
