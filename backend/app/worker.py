@@ -17,7 +17,7 @@ from .config import get_settings
 from .db import SessionLocal, init_db
 from .finmind import FinMindClient
 from .ingestion import catch_up, seed_score_version
-from .calendar import expected_trading_sessions, market_session_state
+from .calendar import completed_source_end_date, market_session_state
 from .models import JobRun
 from .worker_health import start_health_server
 
@@ -49,9 +49,7 @@ def _heartbeat(**updates: object) -> None:
 
 
 def _completed_source_end_date() -> object:
-    now = datetime.now(ZoneInfo(settings.timezone))
-    candidate = now.date() if now.hour >= 21 else now.date() - timedelta(days=1)
-    return expected_trading_sessions(candidate, 1)[-1]
+    return completed_source_end_date(datetime.now(ZoneInfo(settings.timezone)))
 
 
 def _next_scheduled_run_at(now: datetime | None = None) -> str:

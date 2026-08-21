@@ -28,6 +28,7 @@ CALENDAR_HASH = hashlib.sha256(json.dumps(CALENDAR_MANIFEST, ensure_ascii=False,
 MARKET_TIMEZONE = "Asia/Taipei"
 MARKET_OPEN_TIME = time(9, 0)
 MARKET_CLOSE_TIME = time(13, 30)
+SOURCE_DATA_READY_TIME = time(21, 0)
 
 
 def is_trading_session(day: date, holidays: set[date] | None = None) -> bool:
@@ -78,6 +79,22 @@ def market_session_state(now: datetime | None = None) -> dict[str, object]:
         "calendar_version": CALENDAR_VERSION,
         "calendar_hash": CALENDAR_HASH,
     }
+
+
+def completed_source_end_date(now: datetime | None = None) -> date:
+    """Return the latest source date that the nightly provider cycle may use.
+
+    Daily FinMind observations are consumed after the exchange session and
+    provider publication window.  During the closed period before the
+    nightly cycle, today's trading session is therefore not yet an eligible
+    source target.  This is intentionally separate from market_session_state:
+    OPEN controls live monitoring semantics, while this cutoff controls batch
+    source freshness and prevents a closed-market run from claiming today's
+    data is available.
+    """
+    current = (now or datetime.now(ZoneInfo(MARKET_TIMEZONE))).astimezone(ZoneInfo(MARKET_TIMEZONE))
+    candidate = current.date() if current.time().replace(tzinfo=None) >= SOURCE_DATA_READY_TIME else current.date() - timedelta(days=1)
+    return expected_trading_sessions(candidate, 1)[-1]
 
 
 def expected_trading_sessions(end: date, count: int, holidays: set[date] | None = None) -> list[date]:

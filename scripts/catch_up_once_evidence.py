@@ -12,11 +12,13 @@ try:
     from backend.app.db import SessionLocal, init_db
     from backend.app.finmind import FinMindClient
     from backend.app.ingestion import catch_up
+    from backend.app.calendar import completed_source_end_date, market_session_state
 except ModuleNotFoundError:
     from app.config import get_settings
     from app.db import SessionLocal, init_db
     from app.finmind import FinMindClient
     from app.ingestion import catch_up
+    from app.calendar import completed_source_end_date, market_session_state
 
 
 def source_revision() -> str:
@@ -35,13 +37,16 @@ def run(target_date: date | None = None) -> dict[str, object]:
     init_db()
     db = SessionLocal()
     started = datetime.now(timezone.utc)
+    resolved_target = target_date or completed_source_end_date()
     try:
-        result = asyncio.run(catch_up(db, FinMindClient(get_settings()), end_date=target_date or date.today()))
+        result = asyncio.run(catch_up(db, FinMindClient(get_settings()), end_date=resolved_target))
         return {
             "started_at": started.isoformat(),
             "finished_at": datetime.now(timezone.utc).isoformat(),
             "source_revision": source_revision(),
-            "target_date": (target_date or date.today()).isoformat(),
+            "target_date": resolved_target.isoformat(),
+            "target_date_policy": "explicit_override" if target_date else "completed_source_end_date_v1",
+            "market_session": market_session_state(),
             "result": result,
             "sanitized": True,
             "secrets_included": False,

@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 from app.worker_health import evaluate_health
 from app.worker import _next_scheduled_run_at
-from app.calendar import market_session_state
+from app.calendar import completed_source_end_date, market_session_state
 
 
 def _payload(now: datetime) -> dict[str, object]:
@@ -110,3 +110,12 @@ def test_market_session_is_open_only_during_continuous_trading_hours() -> None:
     assert closed_state["monitoring_active"] is False
     assert holiday_state["state"] == "CLOSED"
     assert holiday_state["reason"] == "weekend_or_exchange_holiday"
+
+
+def test_closed_period_does_not_claim_today_is_a_published_source_date() -> None:
+    before_nightly_publication = datetime(2026, 8, 21, 12, 30, tzinfo=timezone.utc)  # 20:30 Taipei
+    after_nightly_publication = datetime(2026, 8, 21, 13, 30, tzinfo=timezone.utc)  # 21:30 Taipei
+    weekend_after_publication = datetime(2026, 8, 22, 3, 30, tzinfo=timezone.utc)  # 11:30 Taipei
+    assert completed_source_end_date(before_nightly_publication).isoformat() == "2026-08-20"
+    assert completed_source_end_date(after_nightly_publication).isoformat() == "2026-08-21"
+    assert completed_source_end_date(weekend_after_publication).isoformat() == "2026-08-21"
