@@ -17,7 +17,7 @@ from .config import get_settings
 from .db import SessionLocal, init_db
 from .finmind import FinMindClient
 from .ingestion import catch_up, seed_score_version
-from .calendar import expected_trading_sessions
+from .calendar import expected_trading_sessions, market_session_state
 from .models import JobRun
 from .worker_health import start_health_server
 
@@ -151,7 +151,7 @@ def _heartbeat_pulse() -> None:
         time.sleep(30)
         try:
             scheduler_ready = bool(_scheduler_runtime is not None and _scheduler_runtime.running)
-            updates: dict[str, object] = {"scheduler_ready": scheduler_ready}
+            updates: dict[str, object] = {"scheduler_ready": scheduler_ready, "market_session": market_session_state()}
             if scheduler_ready:
                 updates["last_scheduler_heartbeat_at"] = datetime.now(timezone.utc).isoformat()
             _heartbeat(**updates)
@@ -161,7 +161,7 @@ def _heartbeat_pulse() -> None:
 
 def run_catch_up() -> None:
     started = datetime.now(timezone.utc).isoformat()
-    _heartbeat(status="running", ready=True, scheduler_ready=False, last_scheduler_heartbeat_at=started, last_job_started_at=started, last_error_code=None)
+    _heartbeat(status="running", ready=True, scheduler_ready=False, market_session=market_session_state(), last_scheduler_heartbeat_at=started, last_job_started_at=started, last_error_code=None)
     db = SessionLocal()
     try:
         def report_progress(phase: str) -> None:
@@ -171,18 +171,18 @@ def run_catch_up() -> None:
         result = asyncio.run(catch_up(db, FinMindClient(settings), end_date=_completed_source_end_date(), progress_callback=report_progress))
         logger.info("catch-up completed status=%s datasets=%s", result.get("status"), result.get("datasets"))
         finished = datetime.now(timezone.utc).isoformat()
-        _heartbeat(status="idle", ready=True, scheduler_ready=bool(_scheduler_runtime and _scheduler_runtime.running), last_job_finished_at=finished, last_job_status=result.get("status"), last_error_code=result.get("fatal_code"), current_job_run_id=None)
+        _heartbeat(status="idle", ready=True, scheduler_ready=bool(_scheduler_runtime and _scheduler_runtime.running), market_session=market_session_state(), last_job_finished_at=finished, last_job_status=result.get("status"), last_error_code=result.get("fatal_code"), current_job_run_id=None)
     except Exception as exc:
         logger.error("catch-up failed code=%s", getattr(exc, "code", "UNEXPECTED"))
         finished = datetime.now(timezone.utc).isoformat()
-        _heartbeat(status="idle", ready=True, scheduler_ready=bool(_scheduler_runtime and _scheduler_runtime.running), last_job_finished_at=finished, last_job_status="FAILED", last_error_code=getattr(exc, "code", "UNEXPECTED"), current_job_run_id=None)
+        _heartbeat(status="idle", ready=True, scheduler_ready=bool(_scheduler_runtime and _scheduler_runtime.running), market_session=market_session_state(), last_job_finished_at=finished, last_job_status="FAILED", last_error_code=getattr(exc, "code", "UNEXPECTED"), current_job_run_id=None)
     finally:
         db.close()
 
 
 def main() -> None:
     global _scheduler_runtime, _scheduler_job_state
-    _heartbeat(status="starting", ready=False, scheduler_ready=False, scheduler_started_at=None)
+    _heartbeat(status="starting", ready=False, scheduler_ready=False, market_session=market_session_state(), scheduler_started_at=None)
     start_health_server(Path(settings.worker_heartbeat_file))
     Thread(target=_heartbeat_pulse, daemon=True, name="worker-heartbeat-pulse").start()
     init_db()
@@ -201,7 +201,7 @@ def main() -> None:
     with _scheduler_state_lock:
         _scheduler_job_state = _initial_scheduler_job_state()
         state_snapshot = json.loads(json.dumps(_scheduler_job_state))
-    _heartbeat(status="idle", ready=True, scheduler_ready=True, scheduler_started_at=scheduler_started, last_scheduler_heartbeat_at=scheduler_started, next_expected_run_at=_next_scheduled_run_at(), registered_scheduler_job_ids=sorted(SCHEDULE_CONTRACT), scheduler_jobs=state_snapshot, last_scheduler_event_at=scheduler_started)
+    _heartbeat(status="idle", ready=True, scheduler_ready=True, market_session=market_session_state(), scheduler_started_at=scheduler_started, last_scheduler_heartbeat_at=scheduler_started, next_expected_run_at=_next_scheduled_run_at(), registered_scheduler_job_ids=sorted(SCHEDULE_CONTRACT), scheduler_jobs=state_snapshot, last_scheduler_event_at=scheduler_started)
     try:
         scheduler.start()
     except (KeyboardInterrupt, SystemExit):

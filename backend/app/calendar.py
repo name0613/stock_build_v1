@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 import hashlib
 import json
+from zoneinfo import ZoneInfo
 
 CALENDAR_VERSION = "tw-exchange-2026-v1"
 CALENDAR_COVERAGE_START = date(2026, 1, 1)
@@ -24,12 +25,59 @@ TW_HOLIDAYS = {
 }
 CALENDAR_MANIFEST = {"version": CALENDAR_VERSION, "coverage_start": CALENDAR_COVERAGE_START.isoformat(), "coverage_end": CALENDAR_COVERAGE_END.isoformat(), "holidays": sorted(day.isoformat() for day in TW_HOLIDAYS)}
 CALENDAR_HASH = hashlib.sha256(json.dumps(CALENDAR_MANIFEST, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+MARKET_TIMEZONE = "Asia/Taipei"
+MARKET_OPEN_TIME = time(9, 0)
+MARKET_CLOSE_TIME = time(13, 30)
 
 
 def is_trading_session(day: date, holidays: set[date] | None = None) -> bool:
     if holidays is None and not CALENDAR_COVERAGE_START <= day <= CALENDAR_COVERAGE_END:
         raise CalendarUnknownError(f"calendar coverage unknown for {day.isoformat()}")
     return day.weekday() < 5 and day not in (holidays or TW_HOLIDAYS)
+
+
+def market_session_state(now: datetime | None = None) -> dict[str, object]:
+    """Describe whether continuous Taiwan equity trading is currently open.
+
+    This is deliberately separate from source-publication scheduling.  FinMind
+    daily observations commonly arrive after the exchange closes, so a CLOSED
+    state is expected and must not be treated as a provider failure.
+    """
+    current = (now or datetime.now(ZoneInfo(MARKET_TIMEZONE))).astimezone(ZoneInfo(MARKET_TIMEZONE))
+    try:
+        trading_day = is_trading_session(current.date())
+    except CalendarUnknownError:
+        return {
+            "state": "UNKNOWN",
+            "monitoring_active": False,
+            "reason": "calendar_coverage_unknown",
+            "timezone": MARKET_TIMEZONE,
+            "local_date": current.date().isoformat(),
+            "local_time": current.time().replace(microsecond=0).isoformat(),
+            "open_time": MARKET_OPEN_TIME.isoformat(),
+            "close_time": MARKET_CLOSE_TIME.isoformat(),
+            "calendar_version": CALENDAR_VERSION,
+            "calendar_hash": CALENDAR_HASH,
+        }
+    if not trading_day:
+        reason = "weekend_or_exchange_holiday"
+        is_open = False
+    else:
+        current_time = current.time().replace(tzinfo=None)
+        is_open = MARKET_OPEN_TIME <= current_time < MARKET_CLOSE_TIME
+        reason = "continuous_trading" if is_open else "outside_continuous_trading_hours"
+    return {
+        "state": "OPEN" if is_open else "CLOSED",
+        "monitoring_active": is_open,
+        "reason": reason,
+        "timezone": MARKET_TIMEZONE,
+        "local_date": current.date().isoformat(),
+        "local_time": current.time().replace(microsecond=0).isoformat(),
+        "open_time": MARKET_OPEN_TIME.isoformat(),
+        "close_time": MARKET_CLOSE_TIME.isoformat(),
+        "calendar_version": CALENDAR_VERSION,
+        "calendar_hash": CALENDAR_HASH,
+    }
 
 
 def expected_trading_sessions(end: date, count: int, holidays: set[date] | None = None) -> list[date]:

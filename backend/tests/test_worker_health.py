@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 from app.worker_health import evaluate_health
 from app.worker import _next_scheduled_run_at
+from app.calendar import market_session_state
 
 
 def _payload(now: datetime) -> dict[str, object]:
@@ -97,3 +98,15 @@ def test_health_detects_missed_or_error_event_and_stopped_scheduler() -> None:
     stopped = _payload(now)
     stopped["scheduler_ready"] = False
     assert evaluate_health(stopped, now)["ready"] is False
+
+
+def test_market_session_is_open_only_during_continuous_trading_hours() -> None:
+    open_state = market_session_state(datetime(2026, 8, 21, 2, 0, tzinfo=timezone.utc))
+    closed_state = market_session_state(datetime(2026, 8, 21, 6, 0, tzinfo=timezone.utc))
+    holiday_state = market_session_state(datetime(2026, 8, 22, 2, 0, tzinfo=timezone.utc))
+    assert open_state["state"] == "OPEN"
+    assert open_state["monitoring_active"] is True
+    assert closed_state["state"] == "CLOSED"
+    assert closed_state["monitoring_active"] is False
+    assert holiday_state["state"] == "CLOSED"
+    assert holiday_state["reason"] == "weekend_or_exchange_holiday"
