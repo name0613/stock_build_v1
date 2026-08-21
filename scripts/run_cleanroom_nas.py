@@ -68,6 +68,27 @@ def json_lines(value: str) -> list[dict[str, object]]:
     return rows
 
 
+def stack_wait_command(project: str, compose: str) -> str:
+    services = "postgres api worker frontend nginx"
+    return (
+        f"cd {shlex.quote(project)} && "
+        "for i in $(seq 1 60); do "
+        "ok=1; "
+        f"for service in {services}; do "
+        f"id=$({compose} ps -q \"$service\"); "
+        "[ -n \"$id\" ] || { ok=0; continue; }; "
+        "state=$(docker inspect --format '{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{end}}' \"$id\"); "
+        "case \"$service\" in "
+        "frontend) [ \"$state\" = 'running|' ] || ok=0 ;; "
+        "*) [ \"$state\" = 'running|healthy' ] || ok=0 ;; "
+        "esac; "
+        "done; "
+        "[ $ok -eq 1 ] && break; sleep 2; "
+        "done; "
+        f"{compose} ps"
+    )
+
+
 def main() -> None:
     if not USER or not PASSWORD:
         raise SystemExit("NAS_USER and NAS_PASSWORD are required through the environment")
@@ -157,17 +178,7 @@ def main() -> None:
         evidence["build"] = {"status": "PASS", "no_cache": True, "backend_lock_sha256": backend_lock, "frontend_lock_sha256": frontend_lock}
         remote(ssh, f"cd {shlex.quote(project)} && {compose} up -d")
         print("cleanroom: stack started", flush=True)
-        health_wait = (
-            f"cd {shlex.quote(project)} && "
-            f"for i in $(seq 1 60); do "
-            f"docker compose -p {shlex.quote(project_name)} ps --format json | "
-            "python -c 'import json,sys; rows=[json.loads(x) for x in sys.stdin.read().splitlines() if x]; "
-            "raise SystemExit(0 if rows and all(r.get(\"State\") == \"running\" and \"unhealthy\" not in r.get(\"Status\",\"\") for r in rows) else 1)' "
-            ">/dev/null 2>&1 && break; sleep 2; "
-            "done; "
-            f"docker compose -p {shlex.quote(project_name)} ps"
-        )
-        ps_output = remote(ssh, health_wait)
+        ps_output = remote(ssh, stack_wait_command(project, compose))
         migration_count = remote(ssh, f"cd {shlex.quote(project)} && {compose} exec -T postgres psql -U accumulation -d accumulation -Atc 'SELECT count(*) FROM schema_migrations;'")
         api_health = remote(ssh, f"curl -fsS http://127.0.0.1:18082/health")
         proxy_metadata = remote(ssh, f"curl -fsS http://127.0.0.1:18082/api/build-metadata")
@@ -177,12 +188,12 @@ def main() -> None:
             image_id = remote(ssh, f"cd {shlex.quote(project)} && {compose} images -q {service}")
             inspect = remote(ssh, f"docker image inspect {shlex.quote(image_id)} --format '{{{{.Id}}}}|{{{{json .Config.Labels}}}}'")
             image_rows[service] = {"image_id": image_id, "inspect": inspect}
-        before_state = remote(ssh, f"cd {shlex.quote(project)} && {compose} exec -T postgres psql -U accumulation -d accumulation -Atc \"SELECT (SELECT count(*) FROM schema_migrations)||':'||(SELECT count(*) FROM job_runs);\"")
+        before_state = json.loads(remote(ssh, f"cd {shlex.quote(project)} && {compose} exec -T postgres psql -U accumulation -d accumulation -Atc \"SELECT json_build_object('schema_migrations',(SELECT count(*) FROM schema_migrations),'job_runs',(SELECT count(*) FROM job_runs))::text;\""))
         remote(ssh, f"cd {shlex.quote(project)} && {compose} restart postgres")
         remote(ssh, f"cd {shlex.quote(project)} && for i in $(seq 1 40); do {compose} exec -T postgres pg_isready -U accumulation -d accumulation >/dev/null 2>&1 && break; sleep 2; done")
         remote(ssh, f"cd {shlex.quote(project)} && {compose} restart api worker frontend nginx")
-        remote(ssh, f"cd {shlex.quote(project)} && for i in $(seq 1 60); do {compose} ps --format json | python -c 'import json,sys; rows=[json.loads(x) for x in sys.stdin.read().splitlines() if x]; raise SystemExit(0 if rows and all(r.get(\"State\") == \"running\" and \"unhealthy\" not in r.get(\"Status\",\"\") for r in rows) else 1)' >/dev/null 2>&1 && break; sleep 2; done")
-        after_state = remote(ssh, f"cd {shlex.quote(project)} && {compose} exec -T postgres psql -U accumulation -d accumulation -Atc \"SELECT (SELECT count(*) FROM schema_migrations)||':'||(SELECT count(*) FROM job_runs);\"")
+        remote(ssh, stack_wait_command(project, compose))
+        after_state = json.loads(remote(ssh, f"cd {shlex.quote(project)} && {compose} exec -T postgres psql -U accumulation -d accumulation -Atc \"SELECT json_build_object('schema_migrations',(SELECT count(*) FROM schema_migrations),'job_runs',(SELECT count(*) FROM job_runs))::text;\""))
         post_restart_health = remote(ssh, "curl -fsS http://127.0.0.1:18082/health")
         post_restart_worker = remote(ssh, f"cd {shlex.quote(project)} && {compose} exec -T worker python -c 'import urllib.request; print(urllib.request.urlopen(\"http://127.0.0.1:8001/health\", timeout=5).read().decode())'")
         evidence.update(
@@ -190,7 +201,7 @@ def main() -> None:
                 "compose_config": "PASS",
                 "initial_stack": {"status": "PASS", "ps": ps_output, "api_health": api_health, "worker_health": worker_health, "proxy_build_metadata": proxy_metadata, "schema_migrations_count": migration_count, "images": image_rows},
                 "worker_image_validation": {"status": "PASS", "worker_built_image_inspect": image_rows["worker"]},
-                "restart_validation": {"status": "PASS", "before_state": before_state, "after_state": after_state, "state_persisted": before_state == after_state, "api_health": post_restart_health, "worker_health": post_restart_worker},
+                "restart_validation": {"status": "PASS", "before_state": before_state, "after_state": after_state, "schema_migrations_persisted": before_state["schema_migrations"] == after_state["schema_migrations"], "job_runs_not_lost": after_state["job_runs"] >= before_state["job_runs"], "state_persisted": before_state["schema_migrations"] == after_state["schema_migrations"] and after_state["job_runs"] >= before_state["job_runs"], "api_health": post_restart_health, "worker_health": post_restart_worker},
                 "frontend_api_via_nginx": {"status": "PASS", "url": "http://127.0.0.1:18082/health"},
             }
         )
