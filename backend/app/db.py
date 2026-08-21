@@ -16,6 +16,7 @@ engine = create_engine(
     pool_pre_ping=True,
 )
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+MIGRATION_ADVISORY_LOCK_KEY = 8_202_608_210_008
 
 
 def init_db() -> None:
@@ -34,6 +35,9 @@ def _apply_versioned_migrations() -> None:
     if migration_dir is None:
         raise RuntimeError("checked-in migrations directory is missing")
     with engine.begin() as connection:
+        # API and worker start together. Serialize their migration transaction
+        # before either process reads schema_migrations, then release on commit.
+        connection.execute(text("SELECT pg_advisory_xact_lock(:lock_key)"), {"lock_key": MIGRATION_ADVISORY_LOCK_KEY})
         connection.execute(text("CREATE TABLE IF NOT EXISTS schema_migrations (version VARCHAR(64) PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW())"))
         applied = {row[0] for row in connection.execute(text("SELECT version FROM schema_migrations"))}
         for path in sorted(migration_dir.glob("*.sql")):
