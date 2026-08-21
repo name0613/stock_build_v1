@@ -25,12 +25,20 @@ if __name__ == "__main__":
         timeout=15,
     )
     try:
+        probe = (
+            "import json\n"
+            "from app.config import get_settings\n"
+            "from app.finmind import FinMindClient\n"
+            "metadata = json.load(open('/app/build-metadata.json', encoding='utf-8'))\n"
+            "evidence = FinMindClient(get_settings()).provider_quota(source_revision=metadata['source_revision'])\n"
+            "print(json.dumps(evidence, ensure_ascii=False))\n"
+        )
         output = remote(
             client,
             "cd /volume1/docker/tw-accumulation-evidence && "
-            "docker compose exec -T worker env FINMIND_PROVIDER_STDOUT=1 "
-            "python /app/scripts/provider_quota_probe.py",
+            "docker compose exec -T worker python -",
             sudo=True,
+            input_text=probe,
         )
     finally:
         client.close()
