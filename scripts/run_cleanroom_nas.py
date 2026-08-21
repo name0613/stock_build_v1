@@ -1,6 +1,7 @@
 """Build and exercise a disposable production-equivalent stack on the NAS.
 
-The clean-room source is created only from ``git archive HEAD``.  Runtime
+The clean-room source is created from an extracted reviewer ZIP when
+``CLEANROOM_BUNDLE_ZIP`` is set, otherwise from ``git archive HEAD``. Runtime
 secrets are generated on the NAS for this disposable project and are never
 written to the evidence file.
 """
@@ -12,8 +13,10 @@ import os
 import posixpath
 import re
 import shlex
+import shutil
 import subprocess
 import tempfile
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -25,6 +28,7 @@ HOST = os.getenv("NAS_HOST", "192.168.31.138")
 USER = os.getenv("NAS_USER")
 PASSWORD = os.getenv("NAS_PASSWORD")
 REMOTE_ROOT = "/volume1/docker"
+BUNDLE_ZIP = os.getenv("CLEANROOM_BUNDLE_ZIP")
 
 
 def remote(ssh: paramiko.SSHClient, command: str, *, check: bool = True) -> str:
@@ -56,6 +60,21 @@ def sftp_path(shell_path: str, prefix: str) -> str:
 
 def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def bundle_source_root(bundle_zip: Path, extraction_root: Path) -> Path:
+    """Extract a reviewer ZIP and return only its bundled source tree."""
+    with zipfile.ZipFile(bundle_zip) as archive:
+        archive.extractall(extraction_root)
+    candidates = sorted(extraction_root.glob("review_bundle_*/source"))
+    if len(candidates) != 1:
+        raise RuntimeError("clean-room bundle must contain exactly one review_bundle_*/source tree")
+    source = candidates[0]
+    required = ("backend/Dockerfile", "backend/requirements.lock", "frontend/package-lock.json", "fixtures")
+    missing = [relative for relative in required if not (source / relative).exists()]
+    if missing:
+        raise RuntimeError(f"extracted reviewer bundle is missing clean-room inputs: {', '.join(missing)}")
+    return source
 
 
 def json_lines(value: str) -> list[dict[str, object]]:
@@ -116,7 +135,7 @@ def main() -> None:
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "acceptance_run_id": run_id,
         "source_revision": revision,
-        "source_mode": "git_archive_HEAD_only",
+        "source_mode": "reviewer_bundle_zip_extracted" if BUNDLE_ZIP else "git_archive_HEAD_only",
         "host": HOST,
         "project": project,
         "services": ["postgres", "api", "worker", "frontend", "nginx"],
@@ -127,11 +146,22 @@ def main() -> None:
     archive_fd, archive_name = tempfile.mkstemp(prefix="cleanroom-", suffix=".tar")
     os.close(archive_fd)
     archive_path = Path(archive_name)
+    extraction_root = Path(tempfile.mkdtemp(prefix="cleanroom-bundle-")) if BUNDLE_ZIP else None
     ssh: paramiko.SSHClient | None = None
     cleanup_complete = False
     try:
-        with archive_path.open("wb") as handle:
-            subprocess.run(["git", "archive", "--format=tar", revision], cwd=ROOT, stdout=handle, check=True)
+        if BUNDLE_ZIP:
+            bundle_path = Path(BUNDLE_ZIP).resolve()
+            if not bundle_path.is_file():
+                raise RuntimeError(f"clean-room reviewer ZIP does not exist: {bundle_path}")
+            source_root = bundle_source_root(bundle_path, extraction_root)
+            evidence["reviewer_bundle_zip"] = str(bundle_path)
+            evidence["reviewer_bundle_zip_sha256"] = sha256(bundle_path)
+            with archive_path.open("wb") as handle:
+                subprocess.run(["tar", "-cf", "-", "-C", str(source_root), "."], stdout=handle, check=True)
+        else:
+            with archive_path.open("wb") as handle:
+                subprocess.run(["git", "archive", "--format=tar", revision], cwd=ROOT, stdout=handle, check=True)
         evidence["source_archive_sha256"] = sha256(archive_path)
         print("cleanroom: source archive ready", flush=True)
         ssh = paramiko.SSHClient()
@@ -239,6 +269,8 @@ def main() -> None:
             finally:
                 ssh.close()
         archive_path.unlink(missing_ok=True)
+        if extraction_root is not None:
+            shutil.rmtree(extraction_root, ignore_errors=True)
 
     evidence["cleanup_complete"] = cleanup_complete
     output = ROOT / "deployment_evidence" / "CLEANROOM_DOCKER_EVIDENCE.json"
