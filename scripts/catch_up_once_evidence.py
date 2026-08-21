@@ -19,6 +19,18 @@ except ModuleNotFoundError:
     from app.ingestion import catch_up
 
 
+def source_revision() -> str:
+    configured = os.getenv("SOURCE_REVISION", "").strip()
+    if configured:
+        return configured
+    metadata_path = Path("/app/build-metadata.json")
+    if metadata_path.exists():
+        value = json.loads(metadata_path.read_text(encoding="utf-8")).get("source_revision")
+        if value:
+            return str(value)
+    return "unavailable"
+
+
 def run(target_date: date | None = None) -> dict[str, object]:
     init_db()
     db = SessionLocal()
@@ -28,6 +40,7 @@ def run(target_date: date | None = None) -> dict[str, object]:
         return {
             "started_at": started.isoformat(),
             "finished_at": datetime.now(timezone.utc).isoformat(),
+            "source_revision": source_revision(),
             "target_date": (target_date or date.today()).isoformat(),
             "result": result,
             "sanitized": True,
