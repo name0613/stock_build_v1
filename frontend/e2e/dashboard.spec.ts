@@ -57,9 +57,18 @@ test("filters, rankings, freshness and score hash are exposed", async ({ page })
   const rankingJson = await rankings.json();
   expect(rankingJson.score_version).toBe(summaryJson.score_version);
   expect(Array.isArray(rankingJson.items)).toBeTruthy();
-  expect(rankingJson.items.some((item: { score: number | null }) => item.score !== null)).toBeTruthy();
-  for (let i = 1; i < rankingJson.items.length; i += 1) {
-    expect(rankingJson.items[i - 1].score).toBeGreaterThanOrEqual(rankingJson.items[i].score);
+  const numericScores = rankingJson.items.filter((item: { score: number | null }) => item.score !== null);
+  if (numericScores.length > 0) {
+    expect(summaryJson.provider_state.status).toBe("AVAILABLE");
+    expect(summaryJson.provider_state.numeric_scores_allowed).toBeTruthy();
+    for (let i = 1; i < rankingJson.items.length; i += 1) {
+      expect(rankingJson.items[i - 1].score).toBeGreaterThanOrEqual(rankingJson.items[i].score);
+    }
+  } else {
+    expect(["PROVIDER_UNAVAILABLE", "DATA_INSUFFICIENT"]).toContain(summaryJson.provider_state.status);
+    expect(summaryJson.provider_state.reason_code).toBeTruthy();
+    expect(summaryJson.provider_state.numeric_scores_allowed).toBeFalsy();
+    expect(summaryJson.data_insufficient_count).toBe(summaryJson.stock_count);
   }
   await page.getByLabel("股票代碼或名稱搜尋").fill("2330");
   await page.getByLabel("市場").selectOption("上市");

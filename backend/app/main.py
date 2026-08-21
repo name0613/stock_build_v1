@@ -77,7 +77,7 @@ def summary(db: Session = Depends(get_db)) -> dict[str, Any]:
     counts = {status: sum(1 for value in status_map.values() if value == status) for status in ("STRONG_ACCUMULATION", "ACCUMULATION", "WATCH", "DATA_INSUFFICIENT", "NO_STRONG_EVIDENCE")}
     sync = db.scalars(select(DataSyncStatus).order_by(DataSyncStatus.dataset)).all()
     last_updates = [s.last_fetch_at or s.last_successful_sync for s in sync if s.last_fetch_at or s.last_successful_sync]
-    return {"stock_count": total, "strong_count": counts["STRONG_ACCUMULATION"], "accumulation_count": counts["ACCUMULATION"], "watch_count": counts["WATCH"], "data_insufficient_count": counts["DATA_INSUFFICIENT"], "no_strong_evidence_count": counts["NO_STRONG_EVIDENCE"], "status_invariant": sum(counts.values()) == total, "latest_score_date": _latest_score_date(db), "score_version": SCORE_VERSION, "formula_hash": FORMULA_HASH, "last_data_update": max(last_updates, default=None), "sync_status": [_sync_dict(s) for s in sync]}
+    return {"stock_count": total, "strong_count": counts["STRONG_ACCUMULATION"], "accumulation_count": counts["ACCUMULATION"], "watch_count": counts["WATCH"], "data_insufficient_count": counts["DATA_INSUFFICIENT"], "no_strong_evidence_count": counts["NO_STRONG_EVIDENCE"], "status_invariant": sum(counts.values()) == total, "latest_score_date": _latest_score_date(db), "score_version": SCORE_VERSION, "formula_hash": FORMULA_HASH, "last_data_update": max(last_updates, default=None), "provider_state": _provider_state(sync), "sync_status": [_sync_dict(s) for s in sync]}
 
 
 @app.get("/api/stocks", response_model=PaginatedStocks)
@@ -314,3 +314,16 @@ def _holding_chart_series(db: Session, stock_id: str, limit: int) -> dict[str, l
 
 def _sync_dict(row: DataSyncStatus) -> dict[str, Any]:
     return {"dataset": row.dataset, "status": row.status, "latest_source_date": row.latest_source_date, "attempt_latest_source_date": row.attempt_latest_source_date, "expected_latest_source_date": row.expected_latest_source_date, "source_age_days": row.source_age_days, "last_attempt_at": row.last_attempt_at, "last_fetch_at": row.last_fetch_at, "last_http_success_at": row.last_http_success_at, "last_fully_successful_sync": row.last_fully_successful_sync, "last_usable_data_at": row.last_usable_data_at, "last_successful_sync": row.last_successful_sync, "records": row.records, "usable_records": row.usable_records, "stored_records": row.stored_records, "rows_received_this_attempt": row.rows_received_this_attempt, "rows_accepted_this_attempt": row.rows_accepted_this_attempt, "rows_rejected_this_attempt": row.rows_rejected_this_attempt, "rows_versioned_this_attempt": row.rows_versioned_this_attempt, "stored_rows_total": row.stored_rows_total, "staleness": row.staleness_state, "metadata": row.metadata_json, "error_code": row.last_error_code}
+
+
+def _provider_state(sync: list[DataSyncStatus]) -> dict[str, Any]:
+    """Expose provider availability without turning incomplete data into a score."""
+    errors = [row.last_error_code for row in sync if row.last_error_code]
+    if "QUOTA_EXHAUSTED" in errors:
+        return {"status": "PROVIDER_UNAVAILABLE", "reason_code": "QUOTA_EXHAUSTED", "provider": "FinMind", "score_policy": "FAIL_CLOSED", "numeric_scores_allowed": False}
+    fatal = next((code for code in errors if code in {"AUTHENTICATION_FAILED", "ACCESS_DENIED", "SCHEMA_MISMATCH"}), None)
+    if fatal:
+        return {"status": "PROVIDER_UNAVAILABLE", "reason_code": fatal, "provider": "FinMind", "score_policy": "FAIL_CLOSED", "numeric_scores_allowed": False}
+    if any(row.status in {"FAILED", "PARTIAL"} or row.staleness_state in {"ERROR", "PARTIAL"} for row in sync):
+        return {"status": "DATA_INSUFFICIENT", "reason_code": "INCOMPLETE_PROVIDER_COVERAGE", "provider": "FinMind", "score_policy": "FAIL_CLOSED", "numeric_scores_allowed": False}
+    return {"status": "AVAILABLE", "reason_code": None, "provider": "FinMind", "score_policy": "S_ONLY_V3", "numeric_scores_allowed": True}
