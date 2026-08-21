@@ -151,8 +151,8 @@ def stocks(
     if latest:
         if status:
             base = base.where(effective_status == status)
-        if min_score is not None:
-            base = base.where(score_value >= min_score)
+    if min_score is not None:
+        base = base.where(score_value >= min_score)
     if status and not latest:
         base = base.where(effective_status == status)
     direction = desc(sort_column) if order.lower() == "desc" else asc(sort_column)
