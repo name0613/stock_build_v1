@@ -100,16 +100,20 @@ def main() -> None:
         "sanitized": True,
     }
 
-    archive_path = Path(tempfile.mkstemp(prefix="cleanroom-", suffix=".tar")[1])
+    archive_fd, archive_name = tempfile.mkstemp(prefix="cleanroom-", suffix=".tar")
+    os.close(archive_fd)
+    archive_path = Path(archive_name)
     ssh: paramiko.SSHClient | None = None
     cleanup_complete = False
     try:
         with archive_path.open("wb") as handle:
             subprocess.run(["git", "archive", "--format=tar", revision], cwd=ROOT, stdout=handle, check=True)
         evidence["source_archive_sha256"] = sha256(archive_path)
+        print("cleanroom: source archive ready", flush=True)
         ssh = paramiko.SSHClient()
         ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         ssh.connect(HOST, username=USER, password=PASSWORD, look_for_keys=False, allow_agent=False, timeout=15)
+        print("cleanroom: NAS connected", flush=True)
         if remote(ssh, f"if [ -e {shlex.quote(project)} ]; then printf EXISTS; fi") == "EXISTS":
             raise RuntimeError("clean-room target already exists; refusing to overwrite it")
         remote(ssh, f"mkdir -p {shlex.quote(project)}/secrets")
@@ -119,6 +123,7 @@ def main() -> None:
         sftp.put(str(archive_path), sftp_path(remote_archive, prefix))
         sftp.close()
         remote(ssh, f"tar -xf {shlex.quote(remote_archive)} -C {shlex.quote(project)} && rm -f {shlex.quote(remote_archive)}")
+        print("cleanroom: source extracted", flush=True)
 
         env_text = "\n".join(
             [
@@ -142,12 +147,16 @@ def main() -> None:
             handle.close()
             sftp.chmod(sftp_path(path, prefix), 0o600)
         sftp.close()
+        print("cleanroom: disposable secrets configured", flush=True)
 
         compose = f"docker compose -p {shlex.quote(project_name)}"
         remote(ssh, f"cd {shlex.quote(project)} && {compose} config --quiet")
+        print("cleanroom: compose config valid; building images", flush=True)
         remote(ssh, f"cd {shlex.quote(project)} && {compose} build --no-cache")
+        print("cleanroom: images built", flush=True)
         evidence["build"] = {"status": "PASS", "no_cache": True, "backend_lock_sha256": backend_lock, "frontend_lock_sha256": frontend_lock}
         remote(ssh, f"cd {shlex.quote(project)} && {compose} up -d")
+        print("cleanroom: stack started", flush=True)
         health_wait = (
             f"cd {shlex.quote(project)} && "
             f"for i in $(seq 1 60); do "
