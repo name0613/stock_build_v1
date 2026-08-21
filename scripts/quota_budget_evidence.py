@@ -122,9 +122,17 @@ def _renewal_history(jobs: list[dict[str, Any]]) -> dict[str, Any]:
                 left_checkpoint.get("checkpoint_content_hash_after")
                 and left_checkpoint.get("checkpoint_content_hash_after") == right_checkpoint.get("checkpoint_content_hash_before")
             )
-            progress = checkpoint_continuity and right_unresolved < left_unresolved and right_checkpoint.get("fair_cursor_end_stock_id") != left_checkpoint.get("fair_cursor_end_stock_id") and int(right_checkpoint.get("observations_reused") or 0) > 0
+            cursor_changed = right_checkpoint.get("fair_cursor_end_stock_id") != left_checkpoint.get("fair_cursor_end_stock_id")
+            requested = int(right_checkpoint.get("requested") or 0)
+            accounted_stocks = sum(
+                int(right_checkpoint.get(key) or 0)
+                for key in ("physical_requests", "reused_complete", "reused_valid_no_data")
+            )
+            full_round_trip = requested > 0 and accounted_stocks >= requested
+            cursor_progress_mode = "cursor_advanced" if cursor_changed else ("full_round_trip_cursor_wrapped" if full_round_trip else None)
+            progress = checkpoint_continuity and right_unresolved < left_unresolved and cursor_progress_mode is not None and int(right_checkpoint.get("observations_reused") or 0) > 0
             if progress:
-                qualifying_pairs.append({"dataset": dataset, "earlier_started_at": left.get("started_at"), "later_started_at": right.get("started_at"), "earlier_success": left_checkpoint.get("success"), "later_success": right_checkpoint.get("success"), "earlier_cursor": left_checkpoint.get("fair_cursor_end_stock_id"), "later_cursor": right_checkpoint.get("fair_cursor_end_stock_id"), "earlier_unresolved": left_unresolved, "later_unresolved": right_unresolved, "later_observations_reused": right_checkpoint.get("observations_reused"), "checkpoint_continuity": checkpoint_continuity, "earlier_checkpoint_content_hash_after": left_checkpoint.get("checkpoint_content_hash_after"), "later_checkpoint_content_hash_before": right_checkpoint.get("checkpoint_content_hash_before"), "later_checkpoint_content_hash_after": right_checkpoint.get("checkpoint_content_hash_after"), "checkpoint_manifest_hash": right_checkpoint.get("checkpoint_manifest_hash")})
+                qualifying_pairs.append({"dataset": dataset, "earlier_started_at": left.get("started_at"), "later_started_at": right.get("started_at"), "earlier_success": left_checkpoint.get("success"), "later_success": right_checkpoint.get("success"), "earlier_cursor": left_checkpoint.get("fair_cursor_end_stock_id"), "later_cursor": right_checkpoint.get("fair_cursor_end_stock_id"), "cursor_progress_mode": cursor_progress_mode, "later_requested": requested, "later_accounted_stocks": accounted_stocks, "earlier_unresolved": left_unresolved, "later_unresolved": right_unresolved, "later_observations_reused": right_checkpoint.get("observations_reused"), "checkpoint_continuity": checkpoint_continuity, "earlier_checkpoint_content_hash_after": left_checkpoint.get("checkpoint_content_hash_after"), "later_checkpoint_content_hash_before": right_checkpoint.get("checkpoint_content_hash_before"), "later_checkpoint_content_hash_after": right_checkpoint.get("checkpoint_content_hash_after"), "checkpoint_manifest_hash": right_checkpoint.get("checkpoint_manifest_hash")})
     return {"status": "PASS" if qualifying_pairs else "NOT_PROVEN", "minimum_separation_minutes": 55, "qualifying_pairs": qualifying_pairs}
 
 

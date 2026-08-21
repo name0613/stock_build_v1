@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from copy import deepcopy
+
 from scripts.quota_budget_evidence import SOURCE_DATASETS, generate
 
 
@@ -52,6 +54,37 @@ def test_quota_evidence_rejects_unbound_or_non_direct_limit_artifact() -> None:
     evidence = generate({"stock_count": 1000}, _runtime(), provider, 300, source_revision="a" * 40)
     assert evidence["checks"]["provider_limit_directly_verified"] == "NOT_PROVEN"
     assert evidence["quota"]["provider_reported_limit_per_hour"] is None
+
+
+def test_quota_renewal_accepts_a_complete_round_trip_when_cursor_wraps_to_same_stock() -> None:
+    runtime = _runtime()
+    later = runtime["jobs"][1]["checkpoint_state"]
+    earlier = runtime["jobs"][0]["checkpoint_state"]
+    later.update({
+        "fair_cursor_end_stock_id": earlier["fair_cursor_end_stock_id"],
+        "requested": 1000,
+        "physical_requests": 500,
+        "reused_complete": 500,
+    })
+    evidence = generate({"stock_count": 1000}, runtime, None, 300, source_revision="a" * 40)
+    pair = evidence["renewal_history"]["qualifying_pairs"][0]
+    assert pair["cursor_progress_mode"] == "full_round_trip_cursor_wrapped"
+    assert pair["later_accounted_stocks"] == pair["later_requested"] == 1000
+
+
+def test_quota_renewal_rejects_same_cursor_without_a_complete_round_trip() -> None:
+    runtime = deepcopy(_runtime())
+    later = runtime["jobs"][1]["checkpoint_state"]
+    earlier = runtime["jobs"][0]["checkpoint_state"]
+    later.update({
+        "fair_cursor_end_stock_id": earlier["fair_cursor_end_stock_id"],
+        "requested": 1000,
+        "physical_requests": 499,
+        "reused_complete": 500,
+    })
+    evidence = generate({"stock_count": 1000}, runtime, None, 300, source_revision="a" * 40)
+    assert evidence["renewal_history"]["status"] == "NOT_PROVEN"
+    assert evidence["renewal_history"]["qualifying_pairs"] == []
 
 
 def test_quota_counter_reconciliation_accepts_explicit_legacy_reset_not_old_values() -> None:
