@@ -34,7 +34,7 @@ function App() {
   async function loadSummary() { try { setSummary(await fetchJson<Summary>("/api/summary")); } catch { setError("API 尚未可用，請確認服務與資料庫狀態。"); } }
   async function loadHoldingStatus() {
     try {
-      setHoldingStatus(await fetchJson<HoldingStatusSnapshot>("/api/holdings/status"));
+      setHoldingStatus(await fetchJson<HoldingStatusSnapshot>("/api/holdings/status", undefined, { cache: "no-store" }));
     } catch {
       setHoldingStatusError(true);
     }
@@ -98,7 +98,7 @@ function Coverage({ coverage, large = false }: { coverage: Record<string, boolea
 function formatNumber(value: any) { return value == null || Number.isNaN(Number(value)) ? "—" : Number(value).toLocaleString("zh-TW", { maximumFractionDigits: 2 }); }
 function formatDate(value?: string) { return value ? new Date(value).toLocaleString("zh-TW", { timeZone: "Asia/Taipei" }) : "—"; }
 function scoreClass(status: string) { return ({ STRONG_ACCUMULATION: "strong", ACCUMULATION: "accumulation", WATCH: "watch", DATA_INSUFFICIENT: "insufficient" } as Record<string, string>)[status] || "neutral"; }
-async function fetchJson<T>(url: string, signal?: AbortSignal): Promise<T> { const response = await fetch(url, { signal }); if (!response.ok) throw new Error(`HTTP ${response.status}`); return response.json() as Promise<T>; }
+async function fetchJson<T>(url: string, signal?: AbortSignal, init?: RequestInit): Promise<T> { const response = await fetch(url, { ...init, signal }); if (!response.ok) throw new Error(`HTTP ${response.status}`); return response.json() as Promise<T>; }
 
 createRoot(document.getElementById("root")!).render(<App />);
 export default App;

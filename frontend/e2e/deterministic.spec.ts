@@ -162,6 +162,21 @@ test("summary count invariant and deterministic ranking contract are exact", asy
   expect(contract.spec.spec.weights).toEqual({ institutional_persistence: 0.35, ownership_accumulation: 0.35, broker_persistence: 0.30 });
 });
 
+test("holding status is requested once per page load and again after refresh", async ({ page }) => {
+  let requestCount = 0;
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname === "/api/holdings/status") requestCount += 1;
+  });
+  await page.goto("/");
+  await expect(page.getByTestId("holding-status-load")).toContainText("55 / 55 檔已載入");
+  expect(requestCount).toBe(1);
+  await page.getByLabel("市場").selectOption("上市");
+  await expect.poll(() => requestCount).toBe(1);
+  await page.reload();
+  await expect(page.getByTestId("holding-status-load")).toContainText("55 / 55 檔已載入");
+  expect(requestCount).toBe(2);
+});
+
 test("market status and minimum-score filters compose through the UI", async ({ page }) => {
   await page.goto("/");
   await page.getByLabel("市場").selectOption("上市");
