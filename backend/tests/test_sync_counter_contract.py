@@ -49,7 +49,11 @@ def test_current_attempt_rejects_unreconciled_rows() -> None:
 
 
 def test_postgres_migration_preserves_then_resets_unversioned_counters() -> None:
-    sql = (Path(__file__).resolve().parents[2] / "migrations/009_version_sync_attempt_counters.sql").read_text(encoding="utf-8")
+    candidates = [root / "migrations/009_version_sync_attempt_counters.sql" for root in (Path(__file__).resolve().parents[2], Path(__file__).resolve().parents[1])]
+    migration = next((candidate for candidate in candidates if candidate.is_file()), None)
+    if migration is None:
+        raise RuntimeError("migration 009 is missing from the source or container layout")
+    sql = migration.read_text(encoding="utf-8")
     assert "legacy_pre_v5_counter_snapshot" in sql
     assert "ALTER COLUMN metadata_json TYPE JSONB" in sql
     assert "USING COALESCE(metadata_json::jsonb, '{}'::jsonb)" in sql

@@ -16,6 +16,7 @@ RUN pip install --no-cache-dir -r requirements.lock \
     && printf '{"source_revision":"%s","backend_lock_sha256":"%s","score_spec_hash":"%s","calendar_hash":"%s","build_timestamp":"%s"}\n' "$SOURCE_REVISION" "$BACKEND_LOCK_SHA256" "$SCORE_SPEC_HASH" "$CALENDAR_HASH" "$BUILD_TIMESTAMP" > /app/build-metadata.json
 COPY backend/app ./app
 COPY backend/tests ./tests
+COPY fixtures ./fixtures
 COPY migrations ./migrations
 COPY scripts ./scripts
 RUN addgroup --gid 1000 app && adduser --uid 1000 --gid 1000 --disabled-password --gecos "" app \

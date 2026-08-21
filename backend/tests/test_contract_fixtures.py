@@ -7,7 +7,15 @@ from app.finmind import _broker_report_contract
 from app.scoring import BROKER_ROW_CONTRACT_VERSION, HOLDING_CANONICAL_LEVELS, HOLDING_SCHEMA_VERSION, holding_schema_state
 
 
-FIXTURES = Path(__file__).parents[2] / "fixtures"
+def _fixtures_root() -> Path:
+    for root in (Path(__file__).resolve().parents[2], Path(__file__).resolve().parents[1]):
+        candidate = root / "fixtures"
+        if candidate.is_dir():
+            return candidate
+    raise RuntimeError("contract fixtures are missing from the source or container layout")
+
+
+FIXTURES = _fixtures_root()
 
 
 def test_holding_contract_fixture_matches_executable_schema() -> None:
