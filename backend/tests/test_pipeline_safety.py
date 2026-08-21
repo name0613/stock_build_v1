@@ -8,8 +8,9 @@ from sqlalchemy.orm import Session
 
 from app.calendar import CalendarUnknownError, expected_trading_sessions
 from app.finmind import FinMindClient, FinMindError
-from app.ingestion import _model_rows, _natural_key, calculate_stock_features_and_score, ingest_records, normalize_institutional, normalize_stock, sync_universe
-from app.models import AccumulationFeature, AccumulationScore, Base, BrokerDaily, DataSyncStatus, InstitutionalDaily, SourceRevision, Stock
+from app.ingestion import _model_rows, _natural_key, calculate_stock_features_and_score, ingest_records, normalize_institutional, normalize_stock, seed_score_version, sync_universe
+from app.models import AccumulationFeature, AccumulationScore, Base, BrokerDaily, DataSyncStatus, InstitutionalDaily, ScoreVersion, SourceRevision, Stock
+from app.scoring import FORMULA_HASH, SCORE_VERSION
 from app.scoring import BROKER_ROW_CONTRACT_VERSION, HOLDING_CANONICAL_LEVELS, parse_holding_level
 
 
@@ -17,6 +18,16 @@ def _db() -> tuple[Session, object]:
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
     return Session(engine), engine
+
+
+def test_score_version_seed_is_idempotent_and_hash_bound() -> None:
+    db, _ = _db()
+    seed_score_version(db)
+    seed_score_version(db)
+    rows = list(db.scalars(select(ScoreVersion)).all())
+    assert len(rows) == 1
+    assert rows[0].version == SCORE_VERSION
+    assert rows[0].manifest_hash == FORMULA_HASH
 
 
 def _complete_holding_rows(stock_id: str, day: date, base_percent: float = 10.0) -> list[dict[str, object]]:

@@ -7,6 +7,7 @@ import uuid
 from typing import Any, Callable
 
 from sqlalchemy import func, inspect, select, text, tuple_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .calendar import CALENDAR_HASH, CALENDAR_VERSION, expected_trading_sessions, missing_sessions
@@ -638,10 +639,19 @@ def seed_score_version(db: Session) -> None:
     current = db.get(ScoreVersion, SCORE_VERSION)
     if current is None:
         db.add(ScoreVersion(version=SCORE_VERSION, config=SCORE_MANIFEST, manifest_hash=FORMULA_HASH, explanation="Canonical S-only v1 manifest; price/volume is supporting only.", created_at=_now()))
-        db.commit()
-    elif current.manifest_hash not in {None, FORMULA_HASH}:
+        try:
+            db.commit()
+        except IntegrityError:
+            # API and worker may start simultaneously on a new score version.
+            # A unique-key loser must verify the committed winner rather than
+            # crash and rely on the container restart policy.
+            db.rollback()
+        current = db.get(ScoreVersion, SCORE_VERSION)
+        if current is None:
+            raise RuntimeError("score version seed disappeared after concurrent insert")
+    if current.manifest_hash not in {None, FORMULA_HASH}:
         raise RuntimeError("score version manifest mismatch; deploy a new score version before starting")
-    elif current.manifest_hash is None:
+    if current.manifest_hash is None:
         raise RuntimeError("score version manifest provenance is missing; create an explicit new score version")
 
 
