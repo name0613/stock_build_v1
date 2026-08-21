@@ -88,6 +88,8 @@ class BrokerDaily(Base):
     source_dataset: Mapped[str] = mapped_column(String(100))
     provider_report_complete: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     provider_contract_version: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    provider_row_validated: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    provider_row_contract_version: Mapped[str | None] = mapped_column(String(100), nullable=True)
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     __table_args__ = (
         UniqueConstraint("stock_id", "source_date", "securities_trader_id", name="uq_broker_stock_date_id"),

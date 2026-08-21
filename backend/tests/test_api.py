@@ -57,7 +57,7 @@ def test_api_contract_exposes_score_hash_filters_rankings_and_sync_counters() ->
     assert spec.status_code == 200
     assert len(spec.json()["formula_hash"]) == 64
     assert summary.status_code == 200
-    assert summary.json()["provider_state"]["score_policy"] in {"S_ONLY_V5", "FAIL_CLOSED"}
+    assert summary.json()["provider_state"]["score_policy"] in {"S_ONLY_V6", "FAIL_CLOSED"}
     assert summary.json()["provider_state"]["reason_code"] is None or isinstance(summary.json()["provider_state"]["reason_code"], str)
     assert ranking.status_code == 200
     assert ranking.json()["score_version"] == spec.json()["score_version"]

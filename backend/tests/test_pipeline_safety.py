@@ -10,7 +10,7 @@ from app.calendar import CalendarUnknownError, expected_trading_sessions
 from app.finmind import FinMindClient, FinMindError
 from app.ingestion import _model_rows, _natural_key, calculate_stock_features_and_score, ingest_records, normalize_institutional, normalize_stock, sync_universe
 from app.models import AccumulationFeature, AccumulationScore, Base, BrokerDaily, DataSyncStatus, InstitutionalDaily, SourceRevision, Stock
-from app.scoring import BROKER_REPORT_CONTRACT_VERSION, HOLDING_CANONICAL_LEVELS, parse_holding_level
+from app.scoring import BROKER_ROW_CONTRACT_VERSION, HOLDING_CANONICAL_LEVELS, parse_holding_level
 
 
 def _db() -> tuple[Session, object]:
@@ -27,7 +27,7 @@ def _complete_holding_rows(stock_id: str, day: date, base_percent: float = 10.0)
 
 
 def _complete_broker_row(stock_id: str, day: date, trader_id: str, *, buy: float = 100, sell: float = 10) -> dict[str, object]:
-    return {"stock_id": stock_id, "date": day, "securities_trader_id": trader_id, "buy_volume": buy, "sell_volume": sell, "provider_report_complete": True, "provider_contract_version": BROKER_REPORT_CONTRACT_VERSION}
+    return {"stock_id": stock_id, "date": day, "securities_trader_id": trader_id, "buy_volume": buy, "sell_volume": sell, "provider_row_validated": True, "provider_row_contract_version": BROKER_ROW_CONTRACT_VERSION}
 
 
 def test_raw_institutional_fallback_is_explicitly_rejected() -> None:
@@ -160,8 +160,21 @@ def test_holding_missing_relevant_boundary_is_unavailable() -> None:
 
 def test_broker_unproven_omission_does_not_become_zero() -> None:
     from app.features import broker_features
-    rows = [{"source_date": day, "securities_trader_id": "A", "net_volume": 10} for day in expected_trading_sessions(date(2026, 8, 20), 20)]
+    rows = [{"source_date": day, "securities_trader_id": "A", "net_volume": 10, "provider_report_complete": True, "provider_contract_version": "finmind-dedicated-stock-session-report-v1"} for day in expected_trading_sessions(date(2026, 8, 20), 20)]
     assert broker_features(rows)["BrokerPersistenceScore"] is None
+
+
+def test_omitting_validated_positive_rows_cannot_increase_broker_score() -> None:
+    from app.features import broker_features
+
+    dates = expected_trading_sessions(date(2026, 8, 20), 20)
+    complete = [
+        {"source_date": day, "securities_trader_id": broker, "net_volume": 100, "provider_row_validated": True, "provider_row_contract_version": BROKER_ROW_CONTRACT_VERSION}
+        for day in dates
+        for broker in ("A", "B")
+    ]
+    omitted = [row for row in complete if row["securities_trader_id"] != "B"]
+    assert broker_features(omitted)["BrokerPersistenceScore"] <= broker_features(complete)["BrokerPersistenceScore"]
 
 
 def test_broker_explicit_null_net_fails_closed_even_with_valid_same_session_row() -> None:
@@ -169,8 +182,8 @@ def test_broker_explicit_null_net_fails_closed_even_with_valid_same_session_row(
 
     rows = []
     for day in expected_trading_sessions(date(2026, 8, 20), 20):
-        rows.append({"source_date": day, "securities_trader_id": "VALID", "net_volume": 100, "provider_report_complete": True, "provider_contract_version": BROKER_REPORT_CONTRACT_VERSION})
-        rows.append({"source_date": day, "securities_trader_id": "NULL", "net_volume": None, "buy_volume": None, "sell_volume": None, "provider_report_complete": True, "provider_contract_version": BROKER_REPORT_CONTRACT_VERSION})
+        rows.append({"source_date": day, "securities_trader_id": "VALID", "net_volume": 100, "provider_row_validated": True, "provider_row_contract_version": BROKER_ROW_CONTRACT_VERSION})
+        rows.append({"source_date": day, "securities_trader_id": "NULL", "net_volume": None, "buy_volume": None, "sell_volume": None, "provider_row_validated": True, "provider_row_contract_version": BROKER_ROW_CONTRACT_VERSION})
 
     result = broker_features(rows)
     assert result["BrokerDataContract"] == {"available": False, "reason": "null_or_invalid_broker_net"}
@@ -178,12 +191,12 @@ def test_broker_explicit_null_net_fails_closed_even_with_valid_same_session_row(
     assert result["BrokerOneDaySpikeRatio20D"] is None
 
 
-def test_broker_omitted_branch_under_complete_report_retains_zero_absence_semantics() -> None:
+def test_broker_omitted_branch_remains_unknown_without_blocking_confirmed_events() -> None:
     from app.features import broker_features
 
-    rows = [{"source_date": day, "securities_trader_id": "VALID", "net_volume": 100, "provider_report_complete": True, "provider_contract_version": BROKER_REPORT_CONTRACT_VERSION} for day in expected_trading_sessions(date(2026, 8, 20), 20)]
+    rows = [{"source_date": day, "securities_trader_id": "VALID", "net_volume": 100, "provider_row_validated": True, "provider_row_contract_version": BROKER_ROW_CONTRACT_VERSION} for day in expected_trading_sessions(date(2026, 8, 20), 20)]
     result = broker_features(rows)
-    assert result["BrokerDataContract"] == {"available": True, "reason": None}
+    assert result["BrokerDataContract"]["omitted_branch_policy"] == "unknown_not_zero"
     assert result["BrokerPersistenceScore"] is not None
 
 
@@ -193,12 +206,12 @@ def test_broker_concentration_is_bounded_with_offsetting_sellers() -> None:
     rows = []
     for day in expected_trading_sessions(date(2026, 8, 20), 20):
         rows.extend([
-            {"source_date": day, "securities_trader_id": "BUY", "net_volume": 1000, "provider_report_complete": True, "provider_contract_version": BROKER_REPORT_CONTRACT_VERSION},
-            {"source_date": day, "securities_trader_id": "SELL", "net_volume": -1000, "provider_report_complete": True, "provider_contract_version": BROKER_REPORT_CONTRACT_VERSION},
+            {"source_date": day, "securities_trader_id": "BUY", "net_volume": 1000, "provider_row_validated": True, "provider_row_contract_version": BROKER_ROW_CONTRACT_VERSION},
+            {"source_date": day, "securities_trader_id": "SELL", "net_volume": -1000, "provider_row_validated": True, "provider_row_contract_version": BROKER_ROW_CONTRACT_VERSION},
         ])
     result = broker_features(rows)
-    assert result["Top3BrokerConcentration20D"] == pytest.approx(1.0)
-    assert 0 <= result["Top5BrokerConcentration20D"] <= 1
+    assert result["Top3BrokerConcentration20D"] is None
+    assert result["Top5BrokerConcentration20D"] is None
     assert result["PersistentBuyerCount5D"] == 1
     assert result["PersistentBuyerCount10D"] == 1
     assert result["PersistentBuyerCount20D"] == 1
@@ -308,8 +321,8 @@ def test_capability_broker_rows_cannot_change_s4_features_score_api_or_provenanc
         text(
             "INSERT INTO broker_daily "
             "(stock_id, source_date, securities_trader_id, buy_volume, sell_volume, net_volume, "
-            "source_dataset, provider_report_complete, fetched_at) "
-            "VALUES (:stock_id, :source_date, :trader, :buy, :sell, :net, :dataset, :complete, :fetched_at)"
+            "source_dataset, provider_report_complete, provider_row_validated, fetched_at) "
+            "VALUES (:stock_id, :source_date, :trader, :buy, :sell, :net, :dataset, :complete, :row_validated, :fetched_at)"
         ),
         {
             "stock_id": "2330",
@@ -320,6 +333,7 @@ def test_capability_broker_rows_cannot_change_s4_features_score_api_or_provenanc
             "net": 1_000_000,
             "dataset": "TaiwanStockTradingDailyReportSecIdAgg",
             "complete": True,
+            "row_validated": False,
             "fetched_at": first_cutoff,
         },
     )

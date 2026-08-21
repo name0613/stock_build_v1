@@ -9,7 +9,7 @@ from typing import Any, Iterable
 
 from .calendar import CALENDAR_HASH, CALENDAR_MANIFEST
 
-SCORE_VERSION = "s-only-v5"
+SCORE_VERSION = "s-only-v6"
 WEIGHTS = {"institutional_persistence": 0.35, "ownership_accumulation": 0.35, "broker_persistence": 0.30}
 HOLDING_METADATA_LEVELS = frozenset({"total", "all", "差異數調整（說明4）"})
 HOLDING_SCHEMA_VERSION = "finmind-holding-shares-level-v1"
@@ -34,7 +34,10 @@ HOLDING_CANONICAL_LEVELS = (
 )
 HOLDING_CANONICAL_THRESHOLDS = frozenset(threshold for _, threshold in HOLDING_CANONICAL_LEVELS)
 HOLDING_RELEVANT_THRESHOLDS = frozenset({400_001, 600_001, 800_001, 1_000_001})
-BROKER_REPORT_CONTRACT_VERSION = "finmind-dedicated-stock-session-report-v1"
+BROKER_ROW_CONTRACT_VERSION = "finmind-observed-stock-session-row-v1"
+# Kept as an import alias for older evidence helpers. It now identifies only
+# observed-row validity and must never be interpreted as report completeness.
+BROKER_REPORT_CONTRACT_VERSION = BROKER_ROW_CONTRACT_VERSION
 SCORE_SPEC = {
     "version": SCORE_VERSION,
     "policy": "S-level only; price/reference data is supporting only",
@@ -47,7 +50,6 @@ SCORE_SPEC = {
         "ForeignShareRatioChange20D": {"dataset": "TaiwanStockShareholding", "window": 21, "cadence": "trading_session"},
         "LargeHolder400Change4W": {"dataset": "TaiwanStockHoldingSharesPer", "window": 4, "cadence": "weekly_publication"},
         "BrokerPersistenceScore": {"dataset": "TaiwanStockTradingDailyReport", "window": 20, "cadence": "trading_session"},
-        "BrokerOneDaySpikeRatio20D": {"dataset": "TaiwanStockTradingDailyReport", "window": 20, "cadence": "trading_session"},
         "PriceReturn20D": {"dataset": "TaiwanStockPrice", "window": 21, "cadence": "trading_session", "role": "supporting_modifier"},
     },
     "windows": {"institutional": [5, 10, 20], "ownership": [5, 20], "holding": [1, 2, 4, 8], "broker": [5, 10, 20]},
@@ -59,7 +61,7 @@ SCORE_SPEC = {
     "formulas": {
         "institutional": {"positive_day_ratio": "ratio * 100 * 0.65", "slope": "clamp(slope / max(abs(InstitutionalNet20D), 1) * 1000, -35, 35)", "spike": "(1 - min(spike_ratio, 1)) * 25", "cap": [0, 100]},
         "ownership": {"formula": "clamp(50 + ForeignShareRatioChange20D * 2 + LargeHolder400Change4W * 2, 0, 100)"},
-        "broker": {"persistence": "min(persistent_buyer_count, 10) / 10 * 50 + sum(positive_days) / max(persistent_buyer_count * 20, 1) * 30", "concentration": "top_n_positive_broker_flow / gross_positive_broker_flow", "formula": "clamp(persistence + concentration * 20, 0, 100)", "spike_penalty": "broker_score * (1 - min(spike_ratio, 0.8) * 0.35)"},
+        "broker": {"confirmed_positive_events": "only provider rows whose stock, session, branch, buy and sell fields validate", "persistence": "min(confirmed_persistent_buyer_count, 10) / 10 * 70 + confirmed_positive_days / max(confirmed_persistent_buyer_count * 20, 1) * 30", "formula": "clamp(persistence, 0, 100)", "omitted_rows": "unknown and ignored; never imputed as zero", "concentration_and_spike": "not scored because omitted-row completeness is not independently proven"},
         "final": {"formula": "clamp(institutional * 0.35 + ownership * 0.35 + broker * 0.30 + low_profile_modifier, 0, 100)", "low_profile_modifier": "clamp(LowPriceImpactFactor * 10, -10, 10)", "rounding": "round(score, 2)"},
     },
     "thresholds": {"strong": 80, "accumulation": 65, "watch": 50},
@@ -68,9 +70,9 @@ SCORE_SPEC = {
     "calendar_version": "tw-exchange-2026-v1",
     "calendar_manifest": CALENDAR_MANIFEST,
     "calendar_hash": CALENDAR_HASH,
-    "semantic_versions": {"institutional_normalization": "dealer-components-v1", "broker_features": "gross-positive-flow-v5-provider-report-contract", "holding_parser": HOLDING_SCHEMA_VERSION, "holding_weekly_period": HOLDING_WEEKLY_PERIOD_VERSION, "missing_data": "fail-closed-v5-current-score-run-gate"},
+    "semantic_versions": {"institutional_normalization": "dealer-components-v1", "broker_features": "confirmed-positive-events-v6-no-omission-imputation", "holding_parser": HOLDING_SCHEMA_VERSION, "holding_weekly_period": HOLDING_WEEKLY_PERIOD_VERSION, "missing_data": "fail-closed-v6-current-score-run-gate"},
     "institutional_normalization": {"categories": ["foreign", "foreign_dealer_self", "investment_trust", "dealer_component"], "dealer_semantics": "Dealer_self + Dealer_Hedging are the non-overlapping dealer component when both are present; aggregate Dealer is fallback only when components are unavailable", "foreign_dealer_self_is_separate": True, "null_policy": "missing component does not become zero"},
-    "broker_semantics": {"provider_report_contract_version": BROKER_REPORT_CONTRACT_VERSION, "persistent_buyer": "positive_days >= 5 and positive_total > 0 within true window", "true_windows": {"5": "all five expected sessions present", "10": "all ten expected sessions present", "20": "all twenty expected sessions present"}, "absent_branch": "omitted branch is zero only for a response validated against the dedicated single-stock/single-session complete-report contract", "unproven_contract": "DATA_INSUFFICIENT", "concentration_denominator": "gross positive broker flow across the window", "spike": "max daily gross positive flow / total daily gross positive flow"},
+    "broker_semantics": {"provider_row_contract_version": BROKER_ROW_CONTRACT_VERSION, "persistent_buyer": "at least 5 directly observed positive-net sessions in the 20-session window", "session_coverage": "at least one schema-valid provider row must exist for every expected session", "absent_branch": "unknown; ignored and never represented as zero", "partial_report_safety": "omissions can only remove confirmed positive events and therefore cannot create a positive broker signal", "concentration": "not calculated", "spike": "not calculated"},
     "holding_semantics": {"boundaries": {"400": "lower bound >= 400001 shares; displayed as >400 lots", "1000": "lower bound >= 1000001 shares; displayed as >1000 lots"}, "weekly_period_version": HOLDING_WEEKLY_PERIOD_VERSION, "weekly_anchor": "Friday", "weekly_tolerance_days": HOLDING_WEEKLY_TOLERANCE_DAYS, "one_observation_per_period": True, "metadata_levels": sorted(HOLDING_METADATA_LEVELS)},
 }
 SCORE_MANIFEST = SCORE_SPEC
@@ -262,10 +264,9 @@ def calculate_score(features: dict[str, Any], coverage: dict[str, bool], score_v
         return ScoreResult(None, "DATA_INSUFFICIENT", {"InstitutionalPersistence": institutional, "OwnershipAccumulation": None, "BrokerPersistence": None, "LowProfileModifier": None}, [{"label": "資料不足", "value": 0, "detail": "Ownership required feature is missing or invalid"}])
     ownership = _bounded(50 + foreign_change * 2 + large_change * 2)
     broker_score = features.get("BrokerPersistenceScore")
-    broker_spike = features.get("BrokerOneDaySpikeRatio20D")
-    if broker_score is None or broker_spike is None:
+    if broker_score is None:
         return ScoreResult(None, "DATA_INSUFFICIENT", {"InstitutionalPersistence": institutional, "OwnershipAccumulation": ownership, "BrokerPersistence": None, "LowProfileModifier": None}, [{"label": "資料不足", "value": 0, "detail": "Broker required feature is missing or invalid"}])
-    broker = _bounded(broker_score * (1 - min(broker_spike, 0.8) * 0.35))
+    broker = _bounded(broker_score)
     base = institutional * WEIGHTS["institutional_persistence"] + ownership * WEIGHTS["ownership_accumulation"] + broker * WEIGHTS["broker_persistence"]
     low_profile = features.get("LowPriceImpactFactor")
     # An unavailable supporting modifier is explicitly neutral and marked in
@@ -275,7 +276,7 @@ def calculate_score(features: dict[str, Any], coverage: dict[str, bool], score_v
     explanation = [
         {"label": "法人持續性", "value": round(institutional, 2), "detail": f"20 日正值比例 {institutional_ratio:.0%}；單日集中度 {institutional_spike:.1%}"},
         {"label": "持股結構累積", "value": round(ownership, 2), "detail": f"外資持股比例 20D 變化 {foreign_change:.2f}；400 張級距 4W 變化 {large_change:.2f}"},
-        {"label": "分點持續性", "value": round(broker, 2), "detail": f"Persistence {broker_score:.2f}；分點單日集中度 {broker_spike:.1%}"},
+        {"label": "分點持續性", "value": round(broker, 2), "detail": f"已驗證正買超事件 Persistence {broker_score:.2f}；缺漏分點保持 unknown、不補零"},
         {"label": "低調修正", "value": round(modifier, 2), "detail": "價格影響僅作 -10 至 +10 modifier；若 unavailable 則明確不套用"},
     ]
     return ScoreResult(score, classify_score(score), {"InstitutionalPersistence": round(institutional, 2), "OwnershipAccumulation": round(ownership, 2), "BrokerPersistence": round(broker, 2), "LowProfileModifier": round(modifier, 2)}, explanation)

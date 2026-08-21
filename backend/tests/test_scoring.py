@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from app.features import broker_features, holding_distribution_features, institutional_features
-from app.scoring import BROKER_REPORT_CONTRACT_VERSION, HOLDING_CANONICAL_LEVELS, classify_score, calculate_score, holding_schema_state, is_holding_metadata_level, one_day_spike_ratio, parse_holding_level, positive_day_ratio, rolling_sum
+from app.scoring import BROKER_ROW_CONTRACT_VERSION, HOLDING_CANONICAL_LEVELS, classify_score, calculate_score, holding_schema_state, is_holding_metadata_level, one_day_spike_ratio, parse_holding_level, positive_day_ratio, rolling_sum
 
 
 def _holding_rows(day: str, relevant_percent: dict[int, float]) -> list[dict[str, object]]:
@@ -74,16 +74,17 @@ def test_broker_persistence_rewards_repeated_buying_over_single_spike() -> None:
     spiky = []
     for day in range(20):
         ds = f"2026-07-{day + 1:02d}"
-        persistent.extend([{"date": ds, "securities_trader_id": "A", "net_volume": 100, "provider_report_complete": True, "provider_contract_version": BROKER_REPORT_CONTRACT_VERSION}, {"date": ds, "securities_trader_id": "B", "net_volume": 50, "provider_report_complete": True, "provider_contract_version": BROKER_REPORT_CONTRACT_VERSION}])
-        spiky.extend([{"date": ds, "securities_trader_id": "A", "net_volume": 3000 if day == 19 else 0, "provider_report_complete": True, "provider_contract_version": BROKER_REPORT_CONTRACT_VERSION}, {"date": ds, "securities_trader_id": "B", "net_volume": 0, "provider_report_complete": True, "provider_contract_version": BROKER_REPORT_CONTRACT_VERSION}])
+        persistent.extend([{"date": ds, "securities_trader_id": "A", "net_volume": 100, "provider_row_validated": True, "provider_row_contract_version": BROKER_ROW_CONTRACT_VERSION}, {"date": ds, "securities_trader_id": "B", "net_volume": 50, "provider_row_validated": True, "provider_row_contract_version": BROKER_ROW_CONTRACT_VERSION}])
+        spiky.extend([{"date": ds, "securities_trader_id": "A", "net_volume": 3000 if day == 19 else 0, "provider_row_validated": True, "provider_row_contract_version": BROKER_ROW_CONTRACT_VERSION}, {"date": ds, "securities_trader_id": "B", "net_volume": 0, "provider_row_validated": True, "provider_row_contract_version": BROKER_ROW_CONTRACT_VERSION}])
     persistent_score = broker_features(persistent)
     spiky_score = broker_features(spiky)
     assert persistent_score["BrokerPersistenceScore"] > spiky_score["BrokerPersistenceScore"]
-    assert spiky_score["BrokerOneDaySpikeRatio20D"] > persistent_score["BrokerOneDaySpikeRatio20D"]
+    assert spiky_score["BrokerPersistenceScore"] == 0
+    assert persistent_score["BrokerDataContract"]["omitted_branch_policy"] == "unknown_not_zero"
 
 
 def full_features() -> dict[str, float]:
-    return {"InstitutionalPositiveDayRatio20D": 0.8, "InstitutionalNetSlope20D": 100, "InstitutionalNet20D": 2000, "InstitutionalOneDaySpikeRatio20D": 0.2, "ForeignShareRatioChange20D": 1.2, "LargeHolder400Change4W": 1.5, "BrokerPersistenceScore": 75, "BrokerOneDaySpikeRatio20D": 0.15, "LowPriceImpactFactor": 0.3}
+    return {"InstitutionalPositiveDayRatio20D": 0.8, "InstitutionalNetSlope20D": 100, "InstitutionalNet20D": 2000, "InstitutionalOneDaySpikeRatio20D": 0.2, "ForeignShareRatioChange20D": 1.2, "LargeHolder400Change4W": 1.5, "BrokerPersistenceScore": 75, "LowPriceImpactFactor": 0.3}
 
 
 def full_coverage() -> dict[str, bool]:
@@ -125,7 +126,7 @@ def test_score_golden_vector_and_complete_spec_hash() -> None:
     import json
 
     result = calculate_score(full_features(), full_coverage())
-    assert result.score == 78.71
+    assert result.score == 79.89
     mutated = dict(SCORE_MANIFEST)
     mutated["formulas"] = {**SCORE_MANIFEST["formulas"], "final": {**SCORE_MANIFEST["formulas"]["final"], "rounding": "round(score, 3)"}}
     mutated_hash = hashlib.sha256(json.dumps(mutated, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()

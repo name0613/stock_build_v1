@@ -5,7 +5,7 @@ from datetime import date, timedelta
 import math
 from typing import Any
 
-from .scoring import BROKER_REPORT_CONTRACT_VERSION, HOLDING_SCHEMA_VERSION, holding_period_anchor, holding_schema_state, one_day_spike_ratio, parse_holding_level, positive_day_ratio, rolling_sum, slope
+from .scoring import BROKER_ROW_CONTRACT_VERSION, HOLDING_SCHEMA_VERSION, holding_period_anchor, holding_schema_state, one_day_spike_ratio, parse_holding_level, positive_day_ratio, rolling_sum, slope
 
 
 def _ordered(rows: list[dict[str, Any]], date_key: str = "date") -> list[dict[str, Any]]:
@@ -144,8 +144,8 @@ def _holding_coverage(dates: list[str]) -> dict[str, Any]:
 def broker_features(rows: list[dict[str, Any]]) -> dict[str, Any]:
     if not rows:
         return _broker_unavailable("no_broker_rows")
-    if any(row.get("provider_report_complete") is not True or row.get("provider_contract_version") != BROKER_REPORT_CONTRACT_VERSION for row in rows):
-        return _broker_unavailable("provider_report_completeness_not_proven")
+    if any(row.get("provider_row_validated") is not True or row.get("provider_row_contract_version") != BROKER_ROW_CONTRACT_VERSION for row in rows):
+        return _broker_unavailable("provider_row_contract_not_proven")
     dates = sorted({str(row.get("date") or row.get("source_date") or "") for row in rows})
     broker_daily: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
     for row in rows:
@@ -164,42 +164,33 @@ def broker_features(rows: list[dict[str, Any]]) -> dict[str, Any]:
     last_dates = dates[-20:]
     positive_brokers = []
     for broker, daily in broker_daily.items():
-        positive_days = sum(1 for day in last_dates if daily.get(day) is not None and daily.get(day, 0) > 0)
-        total = sum(daily.get(day, 0) for day in last_dates if daily.get(day) is not None)
-        if positive_days >= 5 and total > 0:
-            positive_brokers.append((broker, positive_days, total))
-    gross_positive_by_day = {day: sum(max(daily.get(day, 0.0), 0.0) for daily in broker_daily.values()) for day in last_dates}
-    total_positive_flow = sum(gross_positive_by_day.values())
-    spike = max(gross_positive_by_day.values(), default=0.0) / total_positive_flow if total_positive_flow else 0.0
+        observed_positive = [daily[day] for day in last_dates if day in daily and daily[day] > 0]
+        positive_days = len(observed_positive)
+        if positive_days >= 5:
+            positive_brokers.append((broker, positive_days, sum(observed_positive)))
     persistent_count = len(positive_brokers)
-    true_20_score = (min(persistent_count, 10) / 10) * 50 + (sum(x[1] for x in positive_brokers) / max(persistent_count * 20, 1)) * 30
+    score = (min(persistent_count, 10) / 10) * 70 + (sum(x[1] for x in positive_brokers) / max(persistent_count * 20, 1)) * 30
     ranked = sorted(positive_brokers, key=lambda x: x[2], reverse=True)
-    # Gross positive flow is defined over broker-level positive totals, not
-    # signed market net; otherwise an equally large seller would force a
-    # zero denominator despite real buying concentration.
-    gross_positive20 = sum(max(sum(daily.get(day, 0.0) for day in last_dates), 0.0) for daily in broker_daily.values())
-    concentration = _concentration(ranked, 3, gross_positive20)
-    score = min(100.0, true_20_score + (concentration or 0.0) * 20)
     true_window_counts: dict[int, int | None] = {}
     for window in (5, 10, 20):
         window_dates = last_dates[-window:]
-        true_window_counts[window] = sum(1 for _, daily in broker_daily.items() if all(day in daily for day in window_dates) and sum(daily.get(day, 0.0) for day in window_dates) > 0 and sum(1 for day in window_dates if daily.get(day, 0.0) > 0) >= max(1, window // 2))
+        true_window_counts[window] = sum(1 for _, daily in broker_daily.items() if sum(1 for day in window_dates if day in daily and daily[day] > 0) >= max(1, window // 2))
     return {
         "TopBrokerNetBuy20D": ranked[0][2] if ranked else None,
         "Top3BrokerNet20D": sum(x[2] for x in ranked[:3]),
         "Top5BrokerNet20D": sum(x[2] for x in ranked[:5]),
         "Top10BrokerNet20D": sum(x[2] for x in ranked[:10]),
-        "Top3BrokerConcentration20D": concentration,
-        "Top5BrokerConcentration20D": _concentration(ranked, 5, gross_positive20),
-        "BrokerConcentrationDenominator20D": gross_positive20,
+        "Top3BrokerConcentration20D": None,
+        "Top5BrokerConcentration20D": None,
+        "BrokerConcentrationDenominator20D": None,
         "PersistentBuyerCount5D": true_window_counts[5],
         "PersistentBuyerCount10D": true_window_counts[10],
         "PersistentBuyerCount20D": true_window_counts[20],
         "TopBrokerPositiveDays20D": ranked[0][1] if ranked else None,
-        "BrokerPersistenceScore": score,
-        "BrokerOneDaySpikeRatio20D": spike,
-        "BrokerPositiveFlowSpikeRatio20D": spike,
-        "BrokerDataContract": {"available": True, "reason": None},
+        "BrokerPersistenceScore": min(100.0, score),
+        "BrokerOneDaySpikeRatio20D": None,
+        "BrokerPositiveFlowSpikeRatio20D": None,
+        "BrokerDataContract": {"available": True, "reason": None, "omitted_branch_policy": "unknown_not_zero", "report_completeness_required": False},
     }
 
 

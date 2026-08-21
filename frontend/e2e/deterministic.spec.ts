@@ -36,7 +36,7 @@ const stocks: FixtureStock[] = Array.from({ length: 55 }, (_, index) => {
     price_change: index / 10,
     score,
     status,
-    score_version: "s-only-v5",
+    score_version: "s-only-v6",
     features: { ForeignNet5D: 5, ForeignNet20D: 20, InvestmentTrustNet5D: 3, InvestmentTrustNet20D: 12, ForeignShareRatioChange20D: 0.2, LargeHolder400Change4W: 1.5, TopBrokerNetBuy20D: 100, BrokerPersistenceScore: 70 },
     coverage,
     latest_data: "2026-08-20",
@@ -49,7 +49,7 @@ function detail(stock: FixtureStock) {
     score: {
       score: stock.score,
       status: stock.status,
-      score_version: "s-only-v5",
+      score_version: "s-only-v6",
       formula_hash: formulaHash,
       coverage,
       source_date: "2026-08-20",
@@ -89,7 +89,7 @@ async function installApiFixtures(page: Page) {
   await page.route("**/api/**", async (route) => {
     const url = new URL(route.request().url());
     if (url.pathname === "/api/summary") {
-      return route.fulfill({ json: { stock_count: 55, strong_count: 21, accumulation_count: 15, watch_count: 15, data_insufficient_count: 3, no_strong_evidence_count: 1, status_invariant: true, score_version: "s-only-v5", formula_hash: formulaHash, latest_score_date: "2026-08-20", sync_status: [] } });
+      return route.fulfill({ json: { stock_count: 55, strong_count: 21, accumulation_count: 15, watch_count: 15, data_insufficient_count: 3, no_strong_evidence_count: 1, status_invariant: true, score_version: "s-only-v6", formula_hash: formulaHash, latest_score_date: "2026-08-20", sync_status: [] } });
     }
     if (url.pathname === "/api/stocks") {
       let filtered = [...stocks];
@@ -116,10 +116,10 @@ async function installApiFixtures(page: Page) {
     }
     if (url.pathname === "/api/rankings") {
       const limit = Number(url.searchParams.get("limit") || 50);
-      return route.fulfill({ json: { source_date: "2026-08-20", score_version: "s-only-v5", items: stocks.filter((stock) => stock.score != null).slice(0, limit) } });
+      return route.fulfill({ json: { source_date: "2026-08-20", score_version: "s-only-v6", items: stocks.filter((stock) => stock.score != null).slice(0, limit) } });
     }
     if (url.pathname === "/api/score-spec") {
-      return route.fulfill({ json: { score_version: "s-only-v5", formula_hash: formulaHash, spec: { weights: { institutional_persistence: 0.35, ownership_accumulation: 0.35, broker_persistence: 0.30 } } } });
+      return route.fulfill({ json: { score_version: "s-only-v6", formula_hash: formulaHash, spec: { weights: { institutional_persistence: 0.35, ownership_accumulation: 0.35, broker_persistence: 0.30 } } } });
     }
     const match = url.pathname.match(/^\/api\/stocks\/(\d+)$/);
     if (match) {

@@ -34,7 +34,7 @@ from app.models import (  # noqa: E402
     PriceDaily,
     Stock,
 )
-from app.scoring import BROKER_REPORT_CONTRACT_VERSION, FORMULA_HASH, HOLDING_CANONICAL_LEVELS, SCORE_VERSION  # noqa: E402
+from app.scoring import BROKER_ROW_CONTRACT_VERSION, FORMULA_HASH, HOLDING_CANONICAL_LEVELS, SCORE_VERSION  # noqa: E402
 
 
 def _seed_database() -> None:
@@ -67,7 +67,7 @@ def _seed_database() -> None:
             db.add(ForeignShareholdingDaily(stock_id="2330", source_date=day, foreign_investment_shares=100000 + offset, foreign_investment_shares_ratio=0.5 + offset / 100, number_of_shares_issued=200000, source_dataset="TaiwanStockShareholding", fetched_at=now))
             for level_index, (level, threshold) in enumerate(HOLDING_CANONICAL_LEVELS):
                 db.add(HoldingDistribution(stock_id="2330", source_date=day, holding_shares_level=level, holding_shares_threshold=threshold, people=10 + level_index, percent=1 + offset + level_index / 10, shares=threshold, unit="shares", source_dataset="TaiwanStockHoldingSharesPer", fetched_at=now))
-            db.add(BrokerDaily(stock_id="2330", source_date=day, securities_trader_id="A", securities_trader_name="fixture broker", buy_volume=100 + offset, sell_volume=20, net_volume=80 + offset, source_dataset="TaiwanStockTradingDailyReport", provider_report_complete=True, provider_contract_version=BROKER_REPORT_CONTRACT_VERSION, fetched_at=now))
+            db.add(BrokerDaily(stock_id="2330", source_date=day, securities_trader_id="A", securities_trader_name="fixture broker", buy_volume=100 + offset, sell_volume=20, net_volume=80 + offset, source_dataset="TaiwanStockTradingDailyReport", provider_row_validated=True, provider_row_contract_version=BROKER_ROW_CONTRACT_VERSION, fetched_at=now))
         db.commit()
 
 

@@ -1,5 +1,5 @@
 {
-  "contract_version": "finmind-dedicated-stock-session-report-v1",
+  "contract_version": "finmind-observed-stock-session-row-v1",
   "dataset": "TaiwanStockTradingDailyReport",
   "sanitized": true,
   "official_sources": [
@@ -18,7 +18,8 @@
     "all_rows_must_match_requested_stock_and_date": true,
     "empty_response_complete": false,
     "explicit_incomplete_pagination_complete": false,
-    "omitted_branch_is_zero_only_after_contract_validation": true
+    "report_completeness_claimed": false,
+    "omitted_branch_policy": "unknown_not_zero"
   },
   "positive_fixture": {
     "request": {"data_id": "2330", "date": "2026-08-20"},
@@ -27,8 +28,8 @@
       {"stock_id": "2330", "date": "2026-08-20", "securities_trader_id": "SYNTH-B", "buy": 0, "sell": 10}
     ],
     "known_omitted_synthetic_branch": "SYNTH-INACTIVE",
-    "expected_contract_complete": true,
-    "expected_omitted_branch_net": 0
+    "expected_rows_valid": true,
+    "omitted_branch_value": null
   },
   "negative_reasons": [
     "empty_report",

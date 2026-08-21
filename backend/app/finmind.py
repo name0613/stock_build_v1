@@ -22,7 +22,7 @@ except ImportError:  # pragma: no cover - production image installs pyarrow
 
 from .config import Settings, get_settings
 from .calendar import is_trading_session
-from .scoring import BROKER_REPORT_CONTRACT_VERSION, HOLDING_SCHEMA_VERSION, HOLDING_WEEKLY_PERIOD_VERSION, holding_period_anchor, holding_schema_state, is_holding_metadata_level, parse_holding_level
+from .scoring import BROKER_ROW_CONTRACT_VERSION, HOLDING_SCHEMA_VERSION, HOLDING_WEEKLY_PERIOD_VERSION, holding_period_anchor, holding_schema_state, is_holding_metadata_level, parse_holding_level
 
 logger = logging.getLogger(__name__)
 CHECKPOINT_SCHEMA_VERSION = "2026-08-21-v5-contract-bound"
@@ -115,7 +115,7 @@ def _record_observation_dates(dataset: str, stock_id: str, records: list[dict[st
 
 
 def _broker_report_contract(records: list[dict[str, Any]], stock_id: str | None, requested_date: str | None) -> tuple[bool, str]:
-    """Validate the dedicated endpoint's one-stock/one-session report shape."""
+    """Validate returned rows without claiming omitted-branch completeness."""
     if not records:
         return False, "empty_report"
     expected_stock = str(stock_id or "").strip()
@@ -130,7 +130,7 @@ def _broker_report_contract(records: list[dict[str, Any]], stock_id: str | None,
             return False, "required_report_field_missing"
         if row.get("buy") is None or row.get("sell") is None:
             return False, "null_buy_or_sell"
-    return True, BROKER_REPORT_CONTRACT_VERSION
+    return True, BROKER_ROW_CONTRACT_VERSION
 
 
 def classify_empty_response(dataset: str, meta: dict[str, Any]) -> tuple[bool, str]:
@@ -338,19 +338,14 @@ class FinMindClient:
                     raise SchemaMismatch("SCHEMA_MISMATCH", "FinMind response data field is not a list", response.status_code)
                 normalized = [self._normalize_record(dataset, record) for record in records]
                 pagination_complete = payload.get("pagination_complete") if isinstance(payload.get("pagination_complete"), bool) else None
-                broker_report_complete = None
+                broker_rows_validated = None
                 broker_contract_reason = None
                 if dataset == "TaiwanStockTradingDailyReport":
-                    broker_report_complete, broker_contract_reason = _broker_report_contract(normalized, data_id, end_date or start_date)
-                    if pagination_complete is False:
-                        broker_report_complete = False
-                        broker_contract_reason = "provider_declared_incomplete_pagination"
-                    elif broker_report_complete and pagination_complete is None:
-                        pagination_complete = True
-                    normalized = [{**record, "provider_report_complete": broker_report_complete, "provider_contract_version": BROKER_REPORT_CONTRACT_VERSION if broker_report_complete else None} for record in normalized]
+                    broker_rows_validated, broker_contract_reason = _broker_report_contract(normalized, data_id, end_date or start_date)
+                    normalized = [{**record, "provider_report_complete": False, "provider_contract_version": None, "provider_row_validated": broker_rows_validated, "provider_row_contract_version": BROKER_ROW_CONTRACT_VERSION if broker_rows_validated else None} for record in normalized]
                 source_date = self._latest_date(normalized)
                 evidence = self.store.write(dataset, normalized, safe_params, source_date) if persist_raw else {"records": len(normalized)}
-                return normalized, {"dataset": dataset, "parameters": safe_params, "source_date": source_date, "evidence": evidence, "attempt": attempt + 1, "pagination_complete": pagination_complete, "probe_only": capability_probe, "provider_report_complete": broker_report_complete, "provider_contract_version": BROKER_REPORT_CONTRACT_VERSION if broker_report_complete else None, "provider_contract_reason": broker_contract_reason}
+                return normalized, {"dataset": dataset, "parameters": safe_params, "source_date": source_date, "evidence": evidence, "attempt": attempt + 1, "pagination_complete": pagination_complete, "probe_only": capability_probe, "provider_report_complete": False if dataset == "TaiwanStockTradingDailyReport" else None, "provider_contract_version": None, "provider_row_validated": broker_rows_validated, "provider_row_contract_version": BROKER_ROW_CONTRACT_VERSION if broker_rows_validated else None, "provider_contract_reason": broker_contract_reason}
             except (httpx.TimeoutException, httpx.NetworkError) as exc:
                 last_error = FinMindError("TIMEOUT" if isinstance(exc, httpx.TimeoutException) else "NETWORK_ERROR", "FinMind network request failed")
             except FinMindError as exc:
@@ -474,8 +469,8 @@ class FinMindClient:
                 try:
                     metrics["physical_requests"] += 1
                     records, meta = await asyncio.to_thread(self.fetch, dataset, stock_id, requested_date, requested_date)
-                    if records and (meta.get("provider_report_complete") is not True or meta.get("provider_contract_version") != BROKER_REPORT_CONTRACT_VERSION):
-                        raise SchemaMismatch("SCHEMA_MISMATCH", "broker report completeness contract was not proven")
+                    if records and (meta.get("provider_row_validated") is not True or meta.get("provider_row_contract_version") != BROKER_ROW_CONTRACT_VERSION):
+                        raise SchemaMismatch("SCHEMA_MISMATCH", "broker observed-row contract was not proven")
                     if not records:
                         valid_empty, empty_reason = classify_empty_response(dataset, meta)
                         if not valid_empty:
