@@ -2,10 +2,16 @@ import { expect, test } from "@playwright/test";
 
 const statuses = ["STRONG_ACCUMULATION", "ACCUMULATION", "WATCH", "DATA_INSUFFICIENT", "NO_STRONG_EVIDENCE"];
 
-test("live health build metadata score specification and summary are coherent", async ({ page }) => {
+test("live health build metadata score specification and summary are coherent", async ({ page }, testInfo) => {
+  const started = performance.now();
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "低調持續建倉監控" })).toBeVisible();
   await expect(page.locator("body")).not.toContainText("API 尚未可用");
+  await expect(page.getByTestId("stock-row").first()).toBeVisible();
+  const dataReadyMs = Math.round((performance.now() - started) * 100) / 100;
+  testInfo.annotations.push({ type: "lan_data_ready_ms", description: String(dataReadyMs) });
+  testInfo.annotations.push({ type: "lan_data_ready_budget_ms", description: "2000" });
+  expect(dataReadyMs).toBeLessThanOrEqual(2000);
 
   const [healthResponse, buildResponse, specResponse, summaryResponse] = await Promise.all([
     page.request.get("/health"),
@@ -113,7 +119,7 @@ test("live detail renders exact provenance formula unavailable policy broker cav
   await row.click();
   await expect(page.getByText("Final = institutional 35% + ownership 35% + broker 30% + low-profile modifier。", { exact: false })).toBeVisible();
   await expect(page.getByText(`Formula hash ${detail.score.formula_hash}`)).toBeVisible();
-  await expect(page.getByText("只有通過完整單股／單日 report contract 才把未出現分點視為 0。", { exact: false })).toBeVisible();
+  await expect(page.getByText("v6 只計入逐列驗證的正買超事件，未出現分點保持 unknown，絕不補零。", { exact: false })).toBeVisible();
   await expect(page.getByTestId("source-major_shareholder_5pct")).toContainText("UNAVAILABLE_NOT_CONFIGURED");
   await expect(page.getByText(/分點資料 unavailable|持續承接證據/).first()).toBeVisible();
 

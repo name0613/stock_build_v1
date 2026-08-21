@@ -179,6 +179,23 @@ def main() -> None:
         remote(ssh, f"cd {shlex.quote(project)} && {compose} build --no-cache")
         print("cleanroom: images built", flush=True)
         evidence["build"] = {"status": "PASS", "no_cache": True, "backend_lock_sha256": backend_lock, "frontend_lock_sha256": frontend_lock}
+        backend_checks = remote(
+            ssh,
+            f"cd {shlex.quote(project)} && {compose} run --rm --no-deps "
+            "-e DATABASE_URL=sqlite:////tmp/cleanroom-tests.db api "
+            "sh -lc 'python -m pytest -q /app/tests && ruff check /app/app /app/scripts'",
+        )
+        frontend_checks = remote(
+            ssh,
+            f"docker run --rm -v {shlex.quote(project + '/frontend')}:/src -w /src node:20-alpine "
+            "sh -lc 'npm ci --no-audit --no-fund && npm run lint && npm run test && npm run build'",
+        )
+        evidence["cleanroom_checks"] = {
+            "status": "PASS",
+            "backend": {"pytest_and_ruff": "PASS", "output_tail": backend_checks.splitlines()[-5:]},
+            "frontend": {"npm_ci_lint_test_build": "PASS", "output_tail": frontend_checks.splitlines()[-8:]},
+        }
+        print("cleanroom: backend and frontend checks passed", flush=True)
         remote(ssh, f"cd {shlex.quote(project)} && {compose} up -d postgres")
         remote(ssh, wait_services_command(project, compose, "postgres"))
         remote(ssh, f"cd {shlex.quote(project)} && {compose} up -d api")

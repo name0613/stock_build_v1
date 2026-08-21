@@ -180,7 +180,7 @@ test("detail exposes provenance formula broker caveat 5-percent unavailable and 
   await page.getByTestId("stock-row").first().click();
   await expect(page.getByText("Final = institutional 35% + ownership 35% + broker 30% + low-profile modifier。", { exact: false })).toBeVisible();
   await expect(page.getByText(`Formula hash ${formulaHash}`)).toBeVisible();
-  await expect(page.getByText("只有通過完整單股／單日 report contract 才把未出現分點視為 0。", { exact: false })).toBeVisible();
+  await expect(page.getByText("v6 只計入逐列驗證的正買超事件，未出現分點保持 unknown，絕不補零。", { exact: false })).toBeVisible();
   await expect(page.getByText("分點資料 unavailable")).toBeVisible();
   await expect(page.getByTestId("source-major_shareholder_5pct")).toContainText("持股超過 5% 股東");
   await expect(page.getByTestId("source-major_shareholder_5pct")).toContainText("UNAVAILABLE_NOT_CONFIGURED");
