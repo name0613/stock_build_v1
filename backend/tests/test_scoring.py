@@ -48,8 +48,8 @@ def test_broker_persistence_rewards_repeated_buying_over_single_spike() -> None:
     spiky = []
     for day in range(20):
         ds = f"2026-07-{day + 1:02d}"
-        persistent.extend([{"date": ds, "securities_trader_id": "A", "net_volume": 100}, {"date": ds, "securities_trader_id": "B", "net_volume": 50}])
-        spiky.extend([{"date": ds, "securities_trader_id": "A", "net_volume": 3000 if day == 19 else 0}, {"date": ds, "securities_trader_id": "B", "net_volume": 0}])
+        persistent.extend([{"date": ds, "securities_trader_id": "A", "net_volume": 100, "provider_report_complete": True}, {"date": ds, "securities_trader_id": "B", "net_volume": 50, "provider_report_complete": True}])
+        spiky.extend([{"date": ds, "securities_trader_id": "A", "net_volume": 3000 if day == 19 else 0, "provider_report_complete": True}, {"date": ds, "securities_trader_id": "B", "net_volume": 0, "provider_report_complete": True}])
     persistent_score = broker_features(persistent)
     spiky_score = broker_features(spiky)
     assert persistent_score["BrokerPersistenceScore"] > spiky_score["BrokerPersistenceScore"]

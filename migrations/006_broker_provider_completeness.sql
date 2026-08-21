@@ -1,0 +1,1 @@
+ALTER TABLE broker_daily ADD COLUMN IF NOT EXISTS provider_report_complete BOOLEAN NOT NULL DEFAULT FALSE;

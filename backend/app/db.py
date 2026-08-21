@@ -57,6 +57,7 @@ def _apply_sqlite_compatibility_migrations() -> None:
         "data_sync_status": {"last_attempt_at": "DATETIME", "last_fetch_at": "DATETIME", "last_http_success_at": "DATETIME", "last_fully_successful_sync": "DATETIME", "last_usable_data_at": "DATETIME", "usable_records": "INTEGER DEFAULT 0", "stored_records": "INTEGER DEFAULT 0", "staleness_state": "VARCHAR(32)", "attempt_latest_source_date": "DATE", "expected_latest_source_date": "DATE", "source_age_days": "INTEGER", "rows_received_this_attempt": "INTEGER DEFAULT 0", "rows_accepted_this_attempt": "INTEGER DEFAULT 0", "rows_rejected_this_attempt": "INTEGER DEFAULT 0", "rows_versioned_this_attempt": "INTEGER DEFAULT 0", "stored_rows_total": "INTEGER DEFAULT 0"},
         "job_runs": {"requested_start_date": "DATE", "requested_end_date": "DATE", "error_code": "VARCHAR(64)", "stocks_attempted": "INTEGER DEFAULT 0", "stocks_completed": "INTEGER DEFAULT 0", "stocks_failed": "INTEGER DEFAULT 0", "checkpoint_state": "JSON"},
         "score_versions": {"manifest_hash": "VARCHAR(64)"},
+        "broker_daily": {"provider_report_complete": "BOOLEAN DEFAULT FALSE"},
     }
     inspector = inspect(engine)
     with engine.begin() as connection:

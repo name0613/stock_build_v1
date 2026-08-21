@@ -82,7 +82,7 @@ def normalize_stock(row: dict[str, Any], fetched_at: datetime | None = None) -> 
     security_type = str(_v(row, "security_type", "證券類別") or "").strip()
     industry = str(_v(row, "industry_category", "industry", "產業類別") or "").strip()
     excluded_terms = ("ETF", "ETN", "權證", "牛熊", "特別股", "認購權利", "可轉債")
-    common_type = security_type in {"股票", "普通股", "Common Stock", ""}
+    common_type = security_type.lower() in {"股票", "普通股", "common stock", "stock", "common_stock", ""}
     supported_market = market in {"上市", "上櫃", "興櫃", "TWSE", "TPEx", "ESB"}
     if not stock_id.isdigit() or len(stock_id) != 4 or not supported_market or not common_type or any(term.lower() in f"{name} {security_type} {industry}".lower() for term in excluded_terms):
         return None
@@ -101,7 +101,7 @@ def classify_stock_rejection(row: dict[str, Any]) -> str:
         return "invalid_identifier"
     if market not in {"上市", "上櫃", "興櫃", "TWSE", "TPEx", "ESB"}:
         return "unsupported_market"
-    if security_type not in {"股票", "普通股", "Common Stock", ""}:
+    if security_type.lower() not in {"股票", "普通股", "common stock", "stock", "common_stock", ""}:
         return "unsupported_security_type"
     lowered = f"{name} {security_type} {industry}".lower()
     for term, category in (("etf", "etf"), ("etn", "etn"), ("權證", "warrant"), ("牛熊", "warrant"), ("特別股", "preferred"), ("認購權利", "subscription_right"), ("可轉債", "convertible")):
@@ -175,7 +175,7 @@ def normalize_broker(row: dict[str, Any], fetched_at: datetime | None = None, da
         net_value = buy - sell
     avg_buy = _num(_v(row, "avg_buy_price"))
     avg_sell = _num(_v(row, "avg_sell_price"))
-    return {"stock_id": stock_id, "source_date": source_date, "securities_trader_id": trader_id, "securities_trader_name": _v(row, "securities_trader_name", "securities_trader", "券商名稱"), "buy_volume": buy, "sell_volume": sell, "net_volume": net_value, "buy_amount": buy * price if buy is not None and price is not None else _num(_v(row, "buy_amount", "買進金額")), "sell_amount": sell * price if sell is not None and price is not None else _num(_v(row, "sell_amount", "賣出金額")), "avg_buy_price": avg_buy if avg_buy is not None else price, "avg_sell_price": avg_sell if avg_sell is not None else price, "source_dataset": dataset, "fetched_at": fetched_at or _now()}
+    return {"stock_id": stock_id, "source_date": source_date, "securities_trader_id": trader_id, "securities_trader_name": _v(row, "securities_trader_name", "securities_trader", "券商名稱"), "buy_volume": buy, "sell_volume": sell, "net_volume": net_value, "buy_amount": buy * price if buy is not None and price is not None else _num(_v(row, "buy_amount", "買進金額")), "sell_amount": sell * price if sell is not None and price is not None else _num(_v(row, "sell_amount", "賣出金額")), "avg_buy_price": avg_buy if avg_buy is not None else price, "avg_sell_price": avg_sell if avg_sell is not None else price, "source_dataset": dataset, "provider_report_complete": _v(row, "provider_report_complete") is True, "fetched_at": fetched_at or _now()}
 
 
 def normalize_price(row: dict[str, Any], fetched_at: datetime | None = None) -> dict[str, Any] | None:
@@ -211,6 +211,8 @@ def _net_field(row: dict[str, Any], buy_keys: tuple[str, ...], sell_keys: tuple[
 def ingest_records(db: Session, dataset: str, records: list[dict[str, Any]]) -> int:
     if dataset == "TaiwanStockHoldingSharesPer":
         seen_buckets: set[tuple[str, str, str]] = set()
+        existing_rows = db.scalars(select(HoldingDistribution)).all()
+        existing_by_bucket = {(row.stock_id, row.source_date.isoformat(), row.holding_shares_threshold): row for row in existing_rows if row.holding_shares_threshold is not None}
         for row in records:
             level = _v(row, "HoldingSharesLevel", "holding_shares_level")
             if level is not None and str(level).strip().lower() not in {"total", "all"} and _v(row, "holding_shares_threshold") is None:
@@ -227,6 +229,10 @@ def ingest_records(db: Session, dataset: str, records: list[dict[str, Any]]) -> 
                 raise SchemaMismatch("SCHEMA_MISMATCH", "holding source returned a duplicate bucket for a stock/date")
             if bucket:
                 seen_buckets.add(key)
+                if parsed_threshold is not None:
+                    existing = existing_by_bucket.get((stock, source_day, parsed_threshold))
+                    if existing is not None and existing.holding_shares_level != str(level):
+                        raise SchemaMismatch("SCHEMA_MISMATCH", "holding source returned a duplicate normalized bucket across fetches")
     if dataset == "TaiwanStockInfo":
         latest_by_stock: dict[str, dict[str, Any]] = {}
         for row in records:
@@ -377,13 +383,13 @@ def _mark_sync(db: Session, dataset: str, status: str, records: int, latest: dat
     item.rows_rejected_this_attempt = rows_rejected or 0
     item.rows_versioned_this_attempt = rows_versioned if rows_versioned is not None else records
     item.stored_rows_total = item.stored_records
-    if status in {"SUCCESS", "PARTIAL", "NO_DATA"}:
+    if status in {"SUCCESS", "REUSED", "PARTIAL", "NO_DATA"}:
         item.last_http_success_at = fetched_at or _now()
         item.last_fetch_at = fetched_at or _now()
-    if status == "SUCCESS":
+    if status in {"SUCCESS", "REUSED"}:
         item.last_successful_sync = fetched_at or _now()
         item.last_fully_successful_sync = fetched_at or _now()
-    if status in {"SUCCESS", "PARTIAL"} and records > 0:
+    if status in {"SUCCESS", "REUSED", "PARTIAL"} and records > 0:
         item.last_usable_data_at = fetched_at or _now()
     if status == "FAILED":
         item.staleness_state = "ERROR"
@@ -486,8 +492,8 @@ def calculate_stock_features_and_score(db: Session, stock_id: str, as_of: date |
         "InstitutionalOneDaySpikeRatio20D": {"expected_window": 20, "cadence": "trading_session", "present": features.get("InstitutionalOneDaySpikeRatio20D") is not None, "valid": inst_ok and features.get("InstitutionalOneDaySpikeRatio20D") is not None, "reason": "20 trading sessions" if inst_ok and features.get("InstitutionalOneDaySpikeRatio20D") is not None else "missing institutional session or null net"},
         "ForeignShareRatioChange20D": {"expected_window": 21, "cadence": "trading_session", "present": features.get("ForeignShareRatioChange20D") is not None, "valid": foreign_ok and features.get("ForeignShareRatioChange20D") is not None, "reason": "21 trading sessions required for a 20-session change" if foreign_ok and features.get("ForeignShareRatioChange20D") is not None else "missing foreign holding session or ratio"},
         "LargeHolder400Change4W": {"expected_window": 4, "cadence": "weekly_publication", "present": features.get("LargeHolder400Change4W") is not None, "valid": bool(holding_coverage.get("available")) and features.get("LargeHolder400Change4W") is not None, "reason": "4-week holding observation" if bool(holding_coverage.get("available")) and features.get("LargeHolder400Change4W") is not None else "missing 4-week holding bucket"},
-        "BrokerPersistenceScore": {"expected_window": 20, "cadence": "trading_session", "present": features.get("BrokerPersistenceScore") is not None, "valid": not broker_missing and features.get("BrokerPersistenceScore") is not None, "reason": "20 trading sessions with complete broker rows" if not broker_missing and features.get("BrokerPersistenceScore") is not None else "missing broker session or null net"},
-        "BrokerOneDaySpikeRatio20D": {"expected_window": 20, "cadence": "trading_session", "present": features.get("BrokerOneDaySpikeRatio20D") is not None, "valid": not broker_missing and features.get("BrokerOneDaySpikeRatio20D") is not None, "reason": "20 trading sessions" if not broker_missing and features.get("BrokerOneDaySpikeRatio20D") is not None else "missing broker session or null net"},
+        "BrokerPersistenceScore": {"expected_window": 20, "cadence": "trading_session", "present": features.get("BrokerPersistenceScore") is not None, "valid": not broker_missing and features.get("BrokerPersistenceScore") is not None and features.get("BrokerDataContract", {}).get("available", True), "reason": "20 trading sessions with complete broker rows" if not broker_missing and features.get("BrokerPersistenceScore") is not None and features.get("BrokerDataContract", {}).get("available", True) else "missing broker session, null net, or unproven provider completeness"},
+        "BrokerOneDaySpikeRatio20D": {"expected_window": 20, "cadence": "trading_session", "present": features.get("BrokerOneDaySpikeRatio20D") is not None, "valid": not broker_missing and features.get("BrokerOneDaySpikeRatio20D") is not None and features.get("BrokerDataContract", {}).get("available", True), "reason": "20 trading sessions" if not broker_missing and features.get("BrokerOneDaySpikeRatio20D") is not None and features.get("BrokerDataContract", {}).get("available", True) else "missing broker session, null net, or unproven provider completeness"},
         "PriceReturn20D": {"expected_window": 21, "cadence": "trading_session", "present": features.get("PriceReturn20D") is not None, "valid": price_ok and features.get("PriceReturn20D") is not None, "reason": "21 trading sessions required for a 20-session return" if price_ok and features.get("PriceReturn20D") is not None else "missing price session or close"},
     }
     coverage = {
@@ -564,11 +570,17 @@ async def catch_up(db: Session, client: FinMindClient, end_date: date | None = N
                 received = int(metrics.get("rows", 0))
                 latest_dates = [_as_date(item.get("last_source_date")) for item in metrics.get("per_stock", {}).values() if item.get("last_source_date")]
                 latest = max(latest_dates, default=None)
-                failed = int(metrics.get("failed", 0)) + int(metrics.get("no_data", 0))
-                usable_success = int(metrics.get("usable_success", metrics.get("success", 0)))
-                status = "FAILED" if metrics.get("fatal_code") else ("SUCCESS" if failed == 0 and usable_success == len(stock_ids) and received > 0 else "PARTIAL")
-                code = metrics.get("fatal_code") or ("NO_DATA" if received == 0 else ("STOCK_PARTIAL" if failed else None))
-                coverage = {"requested": len(stock_ids), "success": usable_success, "no_data": metrics.get("no_data", 0), "failed": failed, "rows": received, "fatal_code": metrics.get("fatal_code")}
+                newly_fetched = int(metrics.get("newly_fetched", metrics.get("success", 0)))
+                reused_complete = int(metrics.get("reused_complete", 0))
+                reused_valid_no_data = int(metrics.get("reused_valid_no_data", 0))
+                valid_no_data = int(metrics.get("no_data", 0))
+                retryable_pending = int(metrics.get("retryable_pending", 0))
+                permanent_failed = int(metrics.get("permanent_failed", 0))
+                physical_requests = int(metrics.get("physical_requests", 0))
+                satisfied = not metrics.get("fatal_code") and retryable_pending == 0 and permanent_failed == 0 and int(metrics.get("success", 0)) >= len(stock_ids)
+                status = "FAILED" if metrics.get("fatal_code") else ("REUSED" if satisfied and physical_requests == 0 and len(stock_ids) > 0 else ("SUCCESS" if satisfied else "PARTIAL"))
+                code = metrics.get("fatal_code") or ("STOCK_PARTIAL" if not satisfied and (retryable_pending or permanent_failed) else None)
+                coverage = {"requested": len(stock_ids), "success": int(metrics.get("success", 0)), "newly_fetched": newly_fetched, "reused_complete": reused_complete, "reused_valid_no_data": reused_valid_no_data, "valid_no_data": valid_no_data, "retryable_pending": retryable_pending, "permanent_failed": permanent_failed, "physical_requests": physical_requests, "failed": int(metrics.get("failed", 0)), "rows": received, "fatal_code": metrics.get("fatal_code"), "checkpoint_state": metrics.get("checkpoint_state"), "selection_policy": metrics.get("selection_policy")}
             else:
                 records, meta = client.fetch(dataset, start_date=(start - timedelta(days=30)).isoformat(), end_date=end.isoformat())
                 received = len(records)
@@ -582,7 +594,7 @@ async def catch_up(db: Session, client: FinMindClient, end_date: date | None = N
             _job_finish(db, job, status, records=accepted, stocks_completed=coverage.get("success", 0), stocks_failed=coverage.get("failed", 0), error_code=code, checkpoint_state=coverage)
             result["datasets"][dataset] = {"status": status, "records_received": received, "records_accepted": accepted, "stored_rows_total": _stored_rows_total(db, dataset), "coverage": coverage}
             result["source_coverage"][dataset] = coverage
-            if status != "SUCCESS":
+            if status not in {"SUCCESS", "REUSED"}:
                 result["status"] = "PARTIAL"
             if coverage.get("fatal_code"):
                 result["fatal_code"] = coverage["fatal_code"]
@@ -621,7 +633,7 @@ async def catch_up(db: Session, client: FinMindClient, end_date: date | None = N
         if broker_buffer:
             stored += ingest_records(db, "TaiwanStockTradingDailyReport", broker_buffer)
             broker_buffer.clear()
-        checkpoint_complete = broker_metrics.get("skipped_checkpoint", 0) >= len(stock_ids) * 20
+        checkpoint_complete = broker_metrics.get("skipped_checkpoint", 0) >= broker_metrics.get("requested_keys", len(stock_ids) * 20)
         no_work_reused = checkpoint_complete and broker_metrics.get("success", 0) == 0 and broker_metrics.get("rows", 0) == 0 and broker_metrics.get("failed", 0) == 0
         broker_status = "REUSED" if no_work_reused else ("SUCCESS" if broker_metrics.get("failed", 0) == 0 and (broker_metrics.get("rows", 0) > 0 or not stock_ids) else "PARTIAL")
         if no_work_reused:

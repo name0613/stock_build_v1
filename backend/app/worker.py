@@ -50,11 +50,16 @@ def _next_scheduled_run_at(now: datetime | None = None) -> str:
     """Return the next scheduled run for the worker health contract."""
     current = now or datetime.now(timezone.utc)
     local = current.astimezone(ZoneInfo(settings.timezone))
-    candidate = local.replace(hour=21, minute=30, second=0, microsecond=0)
-    if candidate <= local:
-        candidate += timedelta(days=1)
-    while candidate.weekday() >= 5:
-        candidate += timedelta(days=1)
+    candidates = []
+    for day_offset in range(0, 8):
+        day = local + timedelta(days=day_offset)
+        if day.weekday() >= 5:
+            continue
+        for hour, minute in ((21, 30), (23, 0)):
+            candidate = day.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            if candidate > local:
+                candidates.append(candidate)
+    candidate = min(candidates)
     return candidate.astimezone(timezone.utc).isoformat()
 
 
@@ -71,7 +76,12 @@ def _heartbeat_pulse() -> None:
     while True:
         time.sleep(30)
         try:
-            _heartbeat()
+            path = Path(settings.worker_heartbeat_file)
+            payload = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+            if payload.get("scheduler_ready"):
+                _heartbeat(last_scheduler_heartbeat_at=datetime.now(timezone.utc).isoformat(), next_expected_run_at=_next_scheduled_run_at())
+            else:
+                _heartbeat()
         except OSError:
             logger.warning("worker heartbeat write failed")
 

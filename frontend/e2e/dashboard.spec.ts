@@ -5,16 +5,36 @@ test("dashboard loads and exposes evidence controls", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "低調持續建倉監控" })).toBeVisible();
   await expect(page.getByLabel("股票代碼或名稱搜尋")).toBeVisible();
   await expect(page.getByRole("button", { name: "只看 Strong" })).toBeVisible();
+  const health = await page.request.get("/health");
+  expect(health.status()).toBe(200);
+  const stocks = await page.request.get("/api/stocks?page=1&page_size=50");
+  expect(stocks.status()).toBe(200);
+  const stocksJson = await stocks.json();
+  expect(Array.isArray(stocksJson.items)).toBeTruthy();
+  expect(stocksJson.total).toBeGreaterThan(0);
 });
 
 test("search and insufficient-data state are visible", async ({ page }) => {
   await page.goto("/");
   await page.getByLabel("股票代碼或名稱搜尋").fill("2330");
-  await expect(page.locator("body")).toContainText(/全部普通股|DATA_INSUFFICIENT|API 尚未可用/);
+  const filtered = await page.request.get("/api/stocks?page=1&page_size=50&search=2330");
+  expect(filtered.status()).toBe(200);
+  const filteredJson = await filtered.json();
+  expect(filteredJson.items.length).toBeGreaterThan(0);
+  expect(filteredJson.items.some((item: { stock_id: string }) => item.stock_id === "2330")).toBeTruthy();
+  await expect(page.locator("tbody tr.clickable").filter({ hasText: "2330" })).toBeVisible();
+  await expect(page.locator("body")).not.toContainText("API 尚未可用");
 });
 
 test("NAS detail exposes S-level charts, provenance and missing-data gaps", async ({ page }) => {
   await page.goto("/");
+  const detailResponse = await page.request.get("/api/stocks/2330?limit=200");
+  expect(detailResponse.status()).toBe(200);
+  const detailJson = await detailResponse.json();
+  expect(detailJson.stock.stock_id).toBe("2330");
+  expect(detailJson.sources).toBeTruthy();
+  expect(detailJson.calendar_version).toMatch(/^tw-exchange-/);
+  expect(detailJson.holding_series).toBeTruthy();
   await page.getByLabel("股票代碼或名稱搜尋").fill("2330");
   const row = page.locator("tbody tr.clickable").first();
   await expect(row).toBeVisible();
@@ -36,6 +56,8 @@ test("filters, rankings, freshness and score hash are exposed", async ({ page })
   expect(rankings.ok()).toBeTruthy();
   const rankingJson = await rankings.json();
   expect(rankingJson.score_version).toBe(summaryJson.score_version);
+  expect(Array.isArray(rankingJson.items)).toBeTruthy();
+  expect(rankingJson.items.some((item: { score: number | null }) => item.score !== null)).toBeTruthy();
   for (let i = 1; i < rankingJson.items.length; i += 1) {
     expect(rankingJson.items[i - 1].score).toBeGreaterThanOrEqual(rankingJson.items[i].score);
   }

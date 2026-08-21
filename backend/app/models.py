@@ -86,6 +86,7 @@ class BrokerDaily(Base):
     avg_buy_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     avg_sell_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     source_dataset: Mapped[str] = mapped_column(String(100))
+    provider_report_complete: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     __table_args__ = (UniqueConstraint("stock_id", "source_date", "securities_trader_id", name="uq_broker_stock_date_id"),)
 

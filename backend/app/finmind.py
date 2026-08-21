@@ -25,8 +25,25 @@ from .scoring import is_holding_metadata_level, parse_holding_level
 
 logger = logging.getLogger(__name__)
 CHECKPOINT_SCHEMA_VERSION = "2026-08-21-v2"
+INCREMENTAL_CHECKPOINT_VERSION = "2026-08-21-incremental-v3"
 NORMALIZATION_POLICY_VERSION = "s-only-normalization-v3"
 REQUEST_POLICY_VERSION = "finmind-request-policy-v3"
+
+
+def _date_range(start: date, end: date) -> list[date]:
+    """Return an inclusive calendar-date range for checkpoint coverage."""
+    if end < start:
+        return []
+    return [start + timedelta(days=offset) for offset in range((end - start).days + 1)]
+
+
+def classify_empty_response(dataset: str, meta: dict[str, Any]) -> tuple[bool, str]:
+    """Only accept empty data when a source-specific semantic reason is explicit."""
+    reason = str(meta.get("empty_reason") or "").strip().lower()
+    valid_reasons = {"pre_listing", "market_closed", "no_provider_observation"}
+    if meta.get("empty_is_valid") is True and reason in valid_reasons:
+        return True, f"{dataset}:{reason}"
+    return False, f"{dataset}:empty_response_semantics_unverified"
 # httpx's INFO request logger includes the complete URL.  FinMind carries the
 # token as a query parameter for compatibility, so request URLs must never be
 # emitted by application or worker logs.
@@ -210,6 +227,11 @@ class FinMindClient:
                 if not isinstance(records, list):
                     raise SchemaMismatch("SCHEMA_MISMATCH", "FinMind response data field is not a list", response.status_code)
                 normalized = [self._normalize_record(dataset, record) for record in records]
+                if dataset == "TaiwanStockTradingDailyReport":
+                    # A per-stock report is complete only when the provider
+                    # returned a successful report list. Legacy rows without
+                    # this marker remain unavailable during scoring.
+                    normalized = [{**record, "provider_report_complete": True} for record in normalized]
                 source_date = self._latest_date(normalized)
                 evidence = self.store.write(dataset, normalized, safe_params, source_date) if persist_raw else {"records": len(normalized)}
                 return normalized, {"dataset": dataset, "parameters": safe_params, "source_date": source_date, "evidence": evidence, "attempt": attempt + 1}
@@ -293,10 +315,10 @@ class FinMindClient:
         requested_keys = {f"{stock_id}:{requested_date}" for stock_id in stock_ids for requested_date in days}
         universe_hash = hashlib.sha256(json.dumps(sorted(set(stock_ids)), separators=(",", ":")).encode()).hexdigest()
         session_hash = hashlib.sha256(json.dumps(days, separators=(",", ":")).encode()).hexdigest()
-        manifest = {"dataset": dataset, "start_date": start_date, "end_date": end_date, "universe_hash": universe_hash, "session_set_hash": session_hash, "schema_version": CHECKPOINT_SCHEMA_VERSION, "normalization_version": NORMALIZATION_POLICY_VERSION, "request_policy_version": REQUEST_POLICY_VERSION, "query_mode": "per_stock_per_session"}
+        manifest = {"dataset": dataset, "checkpoint_version": INCREMENTAL_CHECKPOINT_VERSION, "schema_version": CHECKPOINT_SCHEMA_VERSION, "normalization_version": NORMALIZATION_POLICY_VERSION, "request_policy_version": REQUEST_POLICY_VERSION, "query_mode": "per_stock_per_session"}
         manifest_hash = hashlib.sha256(json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-        checkpoint_file = checkpoint_dir / f"{dataset}-{start_date}-{end_date}-{manifest_hash[:16]}.json"
-        checkpoint: dict[str, Any] = {"manifest": manifest, "manifest_hash": manifest_hash, "completed": [], "failed": [], "permanent_failed": []}
+        checkpoint_file = checkpoint_dir / f"{dataset}-incremental-v3.json"
+        checkpoint: dict[str, Any] = {"manifest": manifest, "manifest_hash": manifest_hash, "completed": [], "failed": [], "permanent_failed": [], "last_request": {}}
         checkpoint_state = "new"
         if checkpoint_file.exists():
             try:
@@ -314,7 +336,7 @@ class FinMindClient:
         checkpoint_lock = asyncio.Lock()
         sink_lock = asyncio.Lock()
         fatal_event = asyncio.Event()
-        metrics = {"requested": len(stock_ids), "requested_keys": len(requested_keys), "skipped_checkpoint": len(completed), "checkpoint_state": checkpoint_state, "checkpoint_manifest_hash": manifest_hash, "success": 0, "failed": 0, "stocks_completed": 0, "stocks_failed": 0, "retryable_failed": 0, "permanent_failed": len(permanent_failed), "rows": 0, "retries": 0, "fatal_code": None}
+        metrics = {"requested": len(stock_ids), "requested_keys": len(requested_keys), "skipped_checkpoint": len(completed), "reused_complete": len(completed), "reused_valid_no_data": 0, "newly_fetched": 0, "physical_requests": 0, "checkpoint_state": checkpoint_state, "checkpoint_manifest_hash": manifest_hash, "requested_start_date": start_date, "requested_end_date": end_date, "session_set_hash": session_hash, "universe_hash": universe_hash, "selection_policy": "date_major_round_robin", "success": len(completed), "failed": 0, "stocks_completed": 0, "stocks_failed": 0, "retryable_failed": 0, "permanent_failed": len(permanent_failed), "rows": 0, "retries": 0, "fatal_code": None}
         completed_stocks: set[str] = set()
         failed_stocks: set[str] = set()
 
@@ -322,6 +344,7 @@ class FinMindClient:
             temporary = checkpoint_file.with_suffix(".tmp")
             checkpoint["manifest"] = manifest
             checkpoint["manifest_hash"] = manifest_hash
+            checkpoint["last_request"] = {"start_date": start_date, "end_date": end_date, "session_set_hash": session_hash, "universe_hash": universe_hash}
             temporary.write_text(json.dumps(checkpoint, ensure_ascii=False, indent=2), encoding="utf-8")
             temporary.replace(checkpoint_file)
 
@@ -333,17 +356,23 @@ class FinMindClient:
                 return
             async with semaphore:
                 try:
+                    metrics["physical_requests"] += 1
                     records, meta = await asyncio.to_thread(self.fetch, dataset, stock_id, requested_date, requested_date)
+                    if not records:
+                        valid_empty, empty_reason = classify_empty_response(dataset, meta)
+                        if not valid_empty:
+                            raise FinMindError("EMPTY_RESPONSE_UNVERIFIED", empty_reason)
                     async with checkpoint_lock:
                         if checkpoint_key not in completed:
                             checkpoint["completed"].append(checkpoint_key)
                         completed.add(checkpoint_key)
                         metrics["success"] += 1
+                        metrics["newly_fetched"] += 1
                         completed_stocks.add(stock_id)
                         metrics["stocks_completed"] = len(completed_stocks)
                         metrics["rows"] += len(records)
                         metrics["retries"] += max(0, int(meta.get("attempt", 1)) - 1)
-                        if record_sink:
+                        if records and record_sink:
                             # The provider calls remain concurrent, but the
                             # shared SQLAlchemy sink must be serialized.
                             async with sink_lock:
@@ -383,24 +412,30 @@ class FinMindClient:
                     queue.task_done()
 
         workers = [asyncio.create_task(worker()) for _ in range(max(1, self.settings.broker_concurrency))]
-        for stock_id in stock_ids:
-            for requested_date in days:
+        # Date-major ordering gives each stock a fair opportunity in every
+        # newly opened trading session instead of draining one stock's full
+        # rolling window before starting the next stock.
+        for requested_date in days:
+            for stock_id in stock_ids:
                 await queue.put((stock_id, requested_date))
         await queue.join()
         for _ in workers:
             await queue.put(None)
         await asyncio.gather(*workers)
+        metrics["retryable_pending"] = sum(1 for item in checkpoint.get("failed", []) if item.get("key") in requested_keys and item.get("classification") == "retryable_failed")
+        metrics["permanent_failed"] = len(set(checkpoint.get("permanent_failed", [])) & requested_keys)
         return metrics
 
     async def fetch_stocks_dataset(self, stock_ids: list[str], dataset: str, start_date: str, end_date: str, *, record_sink: Callable[[list[dict[str, Any]]], int] | None = None) -> dict[str, Any]:
         """Fetch per-stock history with a durable, workload-bound checkpoint."""
         stock_ids = sorted(set(stock_ids))
-        manifest = {"dataset": dataset, "start_date": start_date, "end_date": end_date, "universe_hash": hashlib.sha256(json.dumps(stock_ids, separators=(",", ":")).encode()).hexdigest(), "query_mode": "per_stock_date_range", "schema_version": CHECKPOINT_SCHEMA_VERSION, "normalization_version": NORMALIZATION_POLICY_VERSION, "request_policy_version": REQUEST_POLICY_VERSION}
+        universe_hash = hashlib.sha256(json.dumps(stock_ids, separators=(",", ":")).encode()).hexdigest()
+        manifest = {"dataset": dataset, "checkpoint_version": INCREMENTAL_CHECKPOINT_VERSION, "query_mode": "per_stock_date_range", "schema_version": CHECKPOINT_SCHEMA_VERSION, "normalization_version": NORMALIZATION_POLICY_VERSION, "request_policy_version": REQUEST_POLICY_VERSION}
         manifest_hash = hashlib.sha256(json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         checkpoint_dir = self.settings.raw_root / "checkpoints"
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
-        checkpoint_file = checkpoint_dir / f"source-{dataset}-{manifest_hash[:16]}.json"
-        checkpoint: dict[str, Any] = {"manifest": manifest, "manifest_hash": manifest_hash, "completed": [], "no_data_but_valid": [], "failed": [], "permanent_failed": [], "global_fatal": None, "entries": {}}
+        checkpoint_file = checkpoint_dir / f"source-{dataset}-incremental-v3.json"
+        checkpoint: dict[str, Any] = {"manifest": manifest, "manifest_hash": manifest_hash, "completed": [], "no_data_but_valid": [], "failed": [], "permanent_failed": [], "global_fatal": None, "entries": {}, "last_request": {}}
         checkpoint_state = "new"
         if checkpoint_file.exists():
             try:
@@ -412,8 +447,18 @@ class FinMindClient:
                     checkpoint_state = "incompatible_ignored"
             except (OSError, ValueError, TypeError):
                 checkpoint_state = "corrupt_ignored"
-        done = set(checkpoint.get("completed", [])) | set(checkpoint.get("no_data_but_valid", [])) | set(checkpoint.get("permanent_failed", []))
-        pending = [stock_id for stock_id in stock_ids if stock_id not in done]
+        entries = checkpoint.setdefault("entries", {})
+        pending: list[str] = []
+        request_ranges: dict[str, tuple[str, str]] = {}
+        requested_days = {day.isoformat() for day in _date_range(date.fromisoformat(start_date), date.fromisoformat(end_date))}
+        for stock_id in stock_ids:
+            entry = entries.get(stock_id, {})
+            covered = set(entry.get("covered_dates", []))
+            missing = sorted(requested_days - covered)
+            if not missing:
+                continue
+            pending.append(stock_id)
+            request_ranges[stock_id] = (missing[0], missing[-1])
         # A quota/auth/schema failure is fatal for this invocation, not a
         # permanent block on the next scheduled cycle.  Keep the prior code
         # as history while allowing pending keys to retry after recovery.
@@ -421,15 +466,17 @@ class FinMindClient:
         checkpoint["last_global_fatal"] = previous_global_fatal
         checkpoint["global_fatal"] = None
         semaphore = asyncio.Semaphore(self.settings.source_concurrency)
-        queue: asyncio.Queue[str | None] = asyncio.Queue(maxsize=max(1, self.settings.source_concurrency * 2))
         fatal_event = asyncio.Event()
         checkpoint_lock = asyncio.Lock()
         sink_lock = asyncio.Lock()
-        metrics: dict[str, Any] = {"requested": len(stock_ids), "skipped_checkpoint": len(stock_ids) - len(pending), "checkpoint_state": checkpoint_state, "checkpoint_manifest_hash": manifest_hash, "success": 0, "usable_success": 0, "no_data": 0, "failed": 0, "rows": 0, "fatal_code": None, "previous_global_fatal": previous_global_fatal, "per_stock": {key: value for key, value in checkpoint.get("entries", {}).items() if key in done}}
+        reused_complete = sum(1 for stock_id in stock_ids if stock_id not in pending and entries.get(stock_id, {}).get("classification") in {"NEW_SUCCESS", "REUSED_COMPLETE"})
+        reused_valid_no_data = sum(1 for stock_id in stock_ids if stock_id not in pending and entries.get(stock_id, {}).get("classification") == "VALID_NO_DATA_FROM_PROVIDER")
+        metrics: dict[str, Any] = {"requested": len(stock_ids), "skipped_checkpoint": len(stock_ids) - len(pending), "reused_complete": reused_complete, "reused_valid_no_data": reused_valid_no_data, "newly_fetched": 0, "physical_requests": 0, "retryable_pending": 0, "permanent_failed": sum(1 for stock_id in stock_ids if entries.get(stock_id, {}).get("classification") == "permanent_failed"), "checkpoint_state": checkpoint_state, "checkpoint_manifest_hash": manifest_hash, "requested_start_date": start_date, "requested_end_date": end_date, "universe_hash": universe_hash, "selection_policy": "sorted_stock_id_round_robin", "success": reused_complete + reused_valid_no_data, "usable_success": reused_complete, "no_data": reused_valid_no_data, "failed": 0, "rows": 0, "fatal_code": None, "previous_global_fatal": previous_global_fatal, "per_stock": {key: value for key, value in entries.items() if key in stock_ids and key not in pending}}
 
         async def persist() -> None:
             checkpoint["manifest"] = manifest
             checkpoint["manifest_hash"] = manifest_hash
+            checkpoint["last_request"] = {"start_date": start_date, "end_date": end_date, "universe_hash": universe_hash, "pending_stock_count": len(pending)}
             temporary = checkpoint_file.with_suffix(".tmp")
             temporary.write_text(json.dumps(checkpoint, ensure_ascii=False, indent=2), encoding="utf-8")
             temporary.replace(checkpoint_file)
@@ -438,7 +485,7 @@ class FinMindClient:
             now = datetime.now(timezone.utc).isoformat()
             async with checkpoint_lock:
                 previous = checkpoint.get("entries", {}).get(stock_id, {})
-                entry = {"rows": 0, "error_code": code, "classification": classification, "retry_count": int(previous.get("retry_count", 0)) + 1, "last_attempt_at": now, "next_eligible_retry_at": now if classification == "retryable_failed" else None}
+                entry = {"rows": 0, "first_source_date": previous.get("first_source_date"), "last_source_date": previous.get("last_source_date"), "covered_dates": previous.get("covered_dates", []), "error_code": code, "classification": classification, "retry_count": int(previous.get("retry_count", 0)) + 1, "last_attempt_at": now, "next_eligible_retry_at": now if classification == "retryable_failed" else None}
                 checkpoint.setdefault("entries", {})[stock_id] = entry
                 checkpoint["failed"] = [item for item in checkpoint.get("failed", []) if item.get("stock_id") != stock_id] + [{"stock_id": stock_id, **entry}]
                 if classification == "permanent_failed":
@@ -455,8 +502,10 @@ class FinMindClient:
             if fatal_event.is_set():
                 return
             async with semaphore:
+                request_start, request_end = request_ranges[stock_id]
+                metrics["physical_requests"] += 1
                 try:
-                    records, meta = await asyncio.to_thread(self.fetch, dataset, stock_id, start_date, end_date)
+                    records, meta = await asyncio.to_thread(self.fetch, dataset, stock_id, request_start, request_end)
                 except FinMindError as exc:
                     global_fatal = exc.code in {"AUTHENTICATION_FAILED", "ACCESS_DENIED", "QUOTA_EXHAUSTED", "SCHEMA_MISMATCH"}
                     await mark_failure(stock_id, exc.code, "global_fatal" if global_fatal else ("permanent_failed" if exc.code == "NON_RETRYABLE_4XX" else "retryable_failed"), global_fatal=global_fatal)
@@ -471,36 +520,42 @@ class FinMindClient:
                     await mark_failure(stock_id, "STOCK_SCHEMA_MISMATCH", "permanent_failed")
                     return
                 dates = sorted({str(row.get("date") or row.get("source_date") or "")[:10] for row in records if row.get("date") or row.get("source_date")})
-                entry = {"rows": len(records), "first_source_date": dates[0] if dates else None, "last_source_date": dates[-1] if dates else None, "classification": "usable" if records else "no_data_but_valid", "attempt": int(meta.get("attempt", 1))}
+                if not records:
+                    valid_empty, empty_reason = classify_empty_response(dataset, meta)
+                    if not valid_empty:
+                        await mark_failure(stock_id, "EMPTY_RESPONSE_UNVERIFIED", "retryable_failed")
+                    return
+                else:
+                    empty_reason = None
+                previous = entries.get(stock_id, {})
+                covered_dates = sorted(set(previous.get("covered_dates", [])) | {day.isoformat() for day in _date_range(date.fromisoformat(request_start), date.fromisoformat(request_end))} | set(dates))
+                classification = "NEW_SUCCESS" if records else "VALID_NO_DATA_FROM_PROVIDER"
+                entry = {"rows": len(records), "first_source_date": dates[0] if dates else previous.get("first_source_date"), "last_source_date": dates[-1] if dates else previous.get("last_source_date"), "request_start": request_start, "request_end": request_end, "covered_dates": covered_dates, "classification": classification, "empty_reason": empty_reason, "attempt": int(meta.get("attempt", 1))}
                 async with checkpoint_lock:
                     metrics["success"] += 1
+                    metrics["newly_fetched"] += 1
                     metrics["rows"] += len(records)
                     metrics["usable_success"] += bool(records)
                     metrics["no_data"] += not records
                     metrics["per_stock"][stock_id] = entry
-                    checkpoint.setdefault("entries", {})[stock_id] = entry
+                    entries[stock_id] = entry
                     bucket = "completed" if records else "no_data_but_valid"
                     checkpoint[bucket] = sorted(set(checkpoint.get(bucket, [])) | {stock_id})
                     checkpoint["failed"] = [item for item in checkpoint.get("failed", []) if item.get("stock_id") != stock_id]
                     await persist()
 
-        async def worker() -> None:
-            while True:
-                stock_id = await queue.get()
-                try:
-                    if stock_id is None:
-                        return
-                    await one(stock_id)
-                finally:
-                    queue.task_done()
-
-        workers = [asyncio.create_task(worker()) for _ in range(max(1, self.settings.source_concurrency))]
-        for stock_id in pending:
-            await queue.put(stock_id)
-        await queue.join()
-        for _ in workers:
-            await queue.put(None)
-        await asyncio.gather(*workers)
+        # One task per pending stock keeps scheduling deterministic while the
+        # semaphore bounds provider concurrency.  Unlike a sentinel queue,
+        # this cannot leave unfinished queue items behind after a global fatal.
+        await asyncio.gather(*(one(stock_id) for stock_id in pending))
+        metrics["retryable_pending"] = sum(1 for stock_id in stock_ids if entries.get(stock_id, {}).get("classification") == "retryable_failed")
+        metrics["permanent_failed"] = sum(1 for stock_id in stock_ids if entries.get(stock_id, {}).get("classification") == "permanent_failed")
+        metrics["reused_complete"] = sum(1 for stock_id in stock_ids if stock_id not in pending and entries.get(stock_id, {}).get("classification") in {"NEW_SUCCESS", "REUSED_COMPLETE"})
+        metrics["reused_valid_no_data"] = sum(1 for stock_id in stock_ids if stock_id not in pending and entries.get(stock_id, {}).get("classification") == "VALID_NO_DATA_FROM_PROVIDER")
+        metrics["success"] = metrics["reused_complete"] + metrics["reused_valid_no_data"] + metrics["newly_fetched"]
+        metrics["usable_success"] = metrics["reused_complete"] + sum(1 for stock_id in stock_ids if entries.get(stock_id, {}).get("classification") == "NEW_SUCCESS" and stock_id in pending)
+        metrics["no_data"] = metrics["reused_valid_no_data"] + sum(1 for stock_id in stock_ids if entries.get(stock_id, {}).get("classification") == "VALID_NO_DATA_FROM_PROVIDER" and stock_id in pending)
+        metrics["per_stock"] = {key: value for key, value in entries.items() if key in stock_ids}
         return metrics
 
 

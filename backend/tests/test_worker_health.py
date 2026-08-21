@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from app.worker_health import evaluate_health
+from app.worker import _next_scheduled_run_at
 
 
 def _payload(now: datetime) -> dict[str, object]:
@@ -36,3 +37,17 @@ def test_running_job_requires_actual_phase_progress_not_only_process_pulse() -> 
     assert evaluate_health(running, now)["stale"] is True
     running["last_job_progress_at"] = (now - timedelta(seconds=30)).isoformat()
     assert evaluate_health(running, now)["ready"] is True
+
+
+def test_idle_health_is_degraded_when_scheduler_heartbeat_misses_180_seconds() -> None:
+    now = datetime(2026, 8, 21, 16, 0, tzinfo=timezone.utc)
+    payload = _payload(now - timedelta(seconds=181))
+    assert evaluate_health(payload, now)["scheduler_age_seconds"] >= 181
+    assert evaluate_health(payload, now)["ready"] is False
+
+
+def test_next_run_includes_main_and_retry_schedule() -> None:
+    # 22:00 Taipei on Friday should select the same day's 23:00 retry.
+    now = datetime(2026, 8, 21, 14, 0, tzinfo=timezone.utc)
+    next_run = datetime.fromisoformat(_next_scheduled_run_at(now))
+    assert next_run == datetime(2026, 8, 21, 15, 0, tzinfo=timezone.utc)

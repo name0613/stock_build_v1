@@ -39,22 +39,45 @@ def create_bundle() -> tuple[Path, str]:
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     bundle_dir = ROOT / f"review_bundle_{timestamp}"
     bundle_dir.mkdir()
-    for relative in [
+    source_files = [
         "backend/app", "backend/tests", "backend/Dockerfile", "backend/requirements.txt",
+        "backend/requirements.lock",
         "frontend/src", "frontend/e2e", "frontend/Dockerfile", "frontend/package.json",
         "frontend/package-lock.json", "frontend/playwright.config.ts", "frontend/vite.config.ts",
         "frontend/tsconfig.json", "frontend/index.html", "migrations", "nginx", "scripts",
         "README.md", "ARCHITECTURE.md", "DATA_SOURCES.md", "SCORING.md", "DEPLOYMENT.md",
         "OPERATIONS.md", "SECURITY.md", "REVIEW_INSTRUCTIONS.md", "docker-compose.yml", ".env.example",
-    ]:
+    ]
+    required_build_inputs = [
+        "backend/Dockerfile", "backend/requirements.lock", "frontend/Dockerfile",
+        "frontend/package-lock.json", "docker-compose.yml",
+    ]
+    missing = [relative for relative in required_build_inputs if not (ROOT / relative).exists()]
+    if missing:
+        raise RuntimeError(f"required reviewer build inputs are missing: {', '.join(missing)}")
+    for relative in ("ARCHITECTURE.md", "SCORING.md", "OPERATIONS.md"):
+        content = (ROOT / relative).read_text(encoding="utf-8")
+        if "s-only-v2" in content:
+            raise RuntimeError(f"stale score-version reference remains in {relative}")
+    for relative in source_files:
         copy_tree(relative, bundle_dir / "source")
-    for folder in ["test_results", "deployment_evidence", "screenshots", "sanitized_sample_data"]:
+    for folder in ["test_results", "screenshots", "sanitized_sample_data"]:
         source = ROOT / folder
         destination = bundle_dir / folder
         if source.is_dir():
             shutil.copytree(source, destination, dirs_exist_ok=True, ignore=COPY_IGNORE)
         else:
             destination.mkdir(exist_ok=True)
+    # Keep the submitted run unambiguous. Older runtime attempts are retained
+    # only as explicitly labelled history and can never be mistaken for the
+    # current deployment evidence.
+    historical = ROOT / "deployment_evidence"
+    if historical.is_dir():
+        shutil.copytree(historical, bundle_dir / "historical_evidence" / "deployment_evidence", dirs_exist_ok=True, ignore=COPY_IGNORE)
+    current = ROOT / "current_acceptance"
+    if not current.is_dir():
+        raise RuntimeError("current_acceptance is missing; create a complete current run before bundling")
+    shutil.copytree(current, bundle_dir / "current_acceptance", dirs_exist_ok=True, ignore=COPY_IGNORE)
     manifest = []
     for path in sorted(p for p in bundle_dir.rglob("*") if p.is_file()):
         rel = path.relative_to(bundle_dir).as_posix()

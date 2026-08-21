@@ -8,7 +8,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 from app.config import Settings
-from app.finmind import FORBIDDEN_DATASETS, FinMindClient, FinMindError
+from app.finmind import FORBIDDEN_DATASETS, FinMindClient, FinMindError, classify_empty_response
 from app.ingestion import ingest_records, normalize_stock
 from app.models import Base, InstitutionalDaily, Stock
 
@@ -214,12 +214,39 @@ def test_broker_checkpoint_manifest_rejects_changed_universe_and_corruption(tmp_
     corrupt = asyncio.run(client.fetch_broker_stocks(["2330"], "2026-08-20", "2026-08-20"))
     assert corrupt["checkpoint_state"] == "corrupt_ignored"
     changed = asyncio.run(client.fetch_broker_stocks(["2330", "2317"], "2026-08-20", "2026-08-20"))
-    assert changed["checkpoint_state"] == "new"
-    assert changed["skipped_checkpoint"] == 0
+    assert changed["checkpoint_state"] == "resumed"
+    assert changed["skipped_checkpoint"] == 1
     valid_manifests = []
     for path in (tmp_path / "checkpoints").glob("TaiwanStockTradingDailyReport-*.json"):
         try:
             valid_manifests.append(json.loads(path.read_text(encoding="utf-8"))["manifest"])
         except json.JSONDecodeError:
             continue
-    assert any(manifest["universe_hash"] != first["checkpoint_manifest_hash"] for manifest in valid_manifests)
+    assert valid_manifests
+    assert all(manifest["checkpoint_version"] == "2026-08-21-incremental-v3" for manifest in valid_manifests)
+
+
+def test_source_checkpoint_reuses_covered_history_when_window_moves_forward(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+
+    settings = Settings(raw_root=tmp_path, broker_max_retries=0, source_concurrency=1)
+    client = FinMindClient(settings)
+    calls: list[tuple[str, str]] = []
+
+    def fetch(_dataset: str, stock_id: str, start: str, end: str, **_kwargs):
+        calls.append((stock_id, f"{start}:{end}"))
+        return ([{"stock_id": stock_id, "date": end}], {"attempt": 1})
+
+    monkeypatch.setattr(client, "fetch", fetch)
+    first = asyncio.run(client.fetch_stocks_dataset(["2330"], "TaiwanStockPrice", "2026-08-01", "2026-08-03"))
+    second = asyncio.run(client.fetch_stocks_dataset(["2330"], "TaiwanStockPrice", "2026-08-01", "2026-08-04"))
+    assert first["success"] == 1
+    assert second["skipped_checkpoint"] == 0
+    assert calls == [("2330", "2026-08-01:2026-08-03"), ("2330", "2026-08-04:2026-08-04")]
+
+
+def test_empty_response_requires_explicit_source_semantics() -> None:
+    assert classify_empty_response("TaiwanStockPrice", {"empty_is_valid": True, "empty_reason": "pre_listing"})[0] is True
+    assert classify_empty_response("TaiwanStockPrice", {"empty_is_valid": True, "empty_reason": "market_closed"})[0] is True
+    assert classify_empty_response("TaiwanStockPrice", {"empty_is_valid": False, "empty_reason": "quota"})[0] is False
+    assert classify_empty_response("TaiwanStockPrice", {})[0] is False

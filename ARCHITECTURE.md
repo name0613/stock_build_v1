@@ -10,7 +10,9 @@ Services are `postgres`, `api`, `worker`, `frontend`, `nginx`. The Compose netwo
 
 The database stores `source_date`, `fetched_at`, `calculated_at`, and `score_version` separately. Raw broker rows stay in date-partitioned Parquet; PostgreSQL stores normalized rows, aggregation, query-ready features, explanations and health evidence.
 
-Score calculation is pure Python and deterministic. The current release uses configuration `s-only-v2`; it has no black-box ML. The API only sorts a whitelist of columns and uses SQLAlchemy parameters for filters. The complete score specification and formula hash are exposed by `/api/score-spec` and persisted in `score_versions`.
+Score calculation is pure Python and deterministic. The current release uses configuration `s-only-v3`; it has no black-box ML. The API only sorts a whitelist of columns and uses SQLAlchemy parameters for filters. The complete score specification and formula hash are exposed by `/api/score-spec` and persisted in `score_versions`.
+
+Each source and broker dataset has a durable incremental checkpoint. A run records requested keys, newly fetched keys, reused complete keys, valid provider no-data, retryable/permanent failures and physical provider requests. Reuse is a successful terminal state; an unverified empty provider response remains retryable. Broker features require the sanitized provider completeness marker, and holding features require both relevant normalized bucket boundaries with valid numeric fields.
 
 ## Failure boundaries
 

@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.calendar import CalendarUnknownError, expected_trading_sessions
 from app.finmind import FinMindClient, FinMindError
-from app.ingestion import _model_rows, _natural_key, calculate_stock_features_and_score, ingest_records, normalize_institutional, sync_universe
+from app.ingestion import _model_rows, _natural_key, calculate_stock_features_and_score, ingest_records, normalize_institutional, normalize_stock, sync_universe
 from app.models import AccumulationScore, Base, BrokerDaily, DataSyncStatus, InstitutionalDaily, SourceRevision, Stock
 from app.scoring import parse_holding_level
 
@@ -60,6 +60,11 @@ def test_universe_reconciliation_is_raw_duplicate_rejection_and_accepted_exact()
     assert universe["market_counts"] == {"上市": 1}
 
 
+def test_universe_accepts_provider_stock_security_type_but_excludes_instruments() -> None:
+    assert normalize_stock({"stock_id": "2330", "stock_name": "Test", "type": "twse", "security_type": "stock"})["is_common_stock"] is True
+    assert normalize_stock({"stock_id": "0050", "stock_name": "ETF", "type": "twse", "security_type": "ETF", "industry_category": "ETF"}) is None
+
+
 def test_holding_schema_unknown_duplicate_and_null_are_explicit() -> None:
     db, _ = _db()
     db.add(Stock(stock_id="2330", stock_name="Test", market="上市", security_type="股票", is_common_stock=True))
@@ -80,9 +85,9 @@ def test_holding_real_bucket_boundaries_and_weekly_gap_fail_closed() -> None:
     from app.features import holding_distribution_features
 
     rows = [
-        {"source_date": "2026-08-20", "HoldingSharesLevel": "400,001-600,000", "holding_shares_threshold": 400001, "percent": 10.0, "people": 3},
-        {"source_date": "2026-08-20", "HoldingSharesLevel": "1,000,001-2,000,000", "holding_shares_threshold": 1000001, "percent": 4.0, "people": 1},
-        {"source_date": "2026-07-16", "HoldingSharesLevel": "400,001-600,000", "holding_shares_threshold": 400001, "percent": 8.0, "people": 2},
+        {"source_date": "2026-08-20", "HoldingSharesLevel": "400,001-600,000", "holding_shares_threshold": 400001, "percent": 10.0, "people": 3, "shares": 500000},
+        {"source_date": "2026-08-20", "HoldingSharesLevel": "1,000,001-2,000,000", "holding_shares_threshold": 1000001, "percent": 4.0, "people": 1, "shares": 1500000},
+        {"source_date": "2026-07-16", "HoldingSharesLevel": "400,001-600,000", "holding_shares_threshold": 400001, "percent": 8.0, "people": 2, "shares": 500000},
     ]
     result = holding_distribution_features(rows)
     assert result["LargeHolder400LotsPercent"] == 14.0
@@ -91,14 +96,27 @@ def test_holding_real_bucket_boundaries_and_weekly_gap_fail_closed() -> None:
     assert result["HoldingBoundarySemantics"]["400"] == ">400 lots"
 
 
+def test_holding_missing_relevant_boundary_is_unavailable() -> None:
+    from app.features import holding_distribution_features
+    result = holding_distribution_features([{"source_date": "2026-08-20", "holding_shares_threshold": 400001, "percent": 10, "people": 2, "shares": 500000}])
+    assert result["LargeHolder400LotsPercent"] is None
+    assert result["HoldingDistributionCoverage"]["available"] is False
+
+
+def test_broker_unproven_omission_does_not_become_zero() -> None:
+    from app.features import broker_features
+    rows = [{"source_date": day, "securities_trader_id": "A", "net_volume": 10} for day in expected_trading_sessions(date(2026, 8, 20), 20)]
+    assert broker_features(rows)["BrokerPersistenceScore"] is None
+
+
 def test_broker_concentration_is_bounded_with_offsetting_sellers() -> None:
     from app.features import broker_features
 
     rows = []
     for day in expected_trading_sessions(date(2026, 8, 20), 20):
         rows.extend([
-            {"source_date": day, "securities_trader_id": "BUY", "net_volume": 1000},
-            {"source_date": day, "securities_trader_id": "SELL", "net_volume": -1000},
+            {"source_date": day, "securities_trader_id": "BUY", "net_volume": 1000, "provider_report_complete": True},
+            {"source_date": day, "securities_trader_id": "SELL", "net_volume": -1000, "provider_report_complete": True},
         ])
     result = broker_features(rows)
     assert result["Top3BrokerConcentration20D"] == pytest.approx(1.0)
