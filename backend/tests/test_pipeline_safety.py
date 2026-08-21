@@ -432,7 +432,7 @@ def test_quota_at_first_required_source_defers_all_later_provider_requests() -> 
         async def fetch_stocks_dataset(self, stock_ids, dataset, *_args, **_kwargs):
             self.calls.append(dataset)
             assert dataset == "TaiwanStockInstitutionalInvestorsBuySellWide"
-            return {"requested": len(stock_ids), "success": 0, "usable_success": 0, "no_data": 0, "failed": 1, "rows": 0, "fatal_code": "QUOTA_EXHAUSTED", "per_stock": {}}
+            return {"requested": len(stock_ids), "success": 0, "usable_success": 0, "no_data": 0, "failed": 1, "rows": 0, "fatal_code": "QUOTA_EXHAUSTED", "provider_missing_observations": 3, "provider_missing_observations_reused": 2, "missing_values_imputed_as_zero": 0, "checkpoint_manifest_hash": "a" * 64, "checkpoint_content_hash_before": "b" * 64, "checkpoint_content_hash_after": "c" * 64, "per_stock": {}}
 
         async def fetch_broker_stocks(self, *_args, **_kwargs):
             raise AssertionError("broker requests must be deferred after global quota failure")
@@ -441,4 +441,11 @@ def test_quota_at_first_required_source_defers_all_later_provider_requests() -> 
     result = asyncio.run(catch_up(db, client, end_date=end))
     assert result["fatal_code"] == "QUOTA_EXHAUSTED"
     assert result["provider_work_deferred"]["error_code"] == "QUOTA_EXHAUSTED"
+    coverage = result["source_coverage"]["TaiwanStockInstitutionalInvestorsBuySellWide"]
+    assert coverage["provider_missing_observations"] == 3
+    assert coverage["provider_missing_observations_reused"] == 2
+    assert coverage["missing_values_imputed_as_zero"] == 0
+    assert coverage["checkpoint_manifest_hash"] == "a" * 64
+    assert coverage["checkpoint_content_hash_before"] == "b" * 64
+    assert coverage["checkpoint_content_hash_after"] == "c" * 64
     assert client.calls == ["TaiwanStockInfo", "TaiwanStockInstitutionalInvestorsBuySellWide"]
