@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from app.worker_health import evaluate_health
-from app.worker import _next_scheduled_run_at
+from app.worker import _next_job_fire_at, _next_scheduled_run_at, run_open_market_sync
 from app.calendar import completed_source_end_date, market_session_state, source_publication_window_open
 from app.worker import _startup_catch_up_allowed
 
@@ -19,9 +19,9 @@ def _payload(now: datetime) -> dict[str, object]:
             "last_event_at": stamp,
             "last_error_code": None,
         }
-        for job_id in ("main-sync", "retry-sync")
+        for job_id in ("main-sync", "retry-sync", "market-open-sync")
     }
-    return {"status": "idle", "ready": True, "scheduler_ready": True, "last_heartbeat_at": stamp, "last_scheduler_heartbeat_at": stamp, "scheduler_started_at": stamp, "next_expected_run_at": (now + timedelta(hours=1)).isoformat(), "registered_scheduler_job_ids": ["main-sync", "retry-sync"], "scheduler_jobs": job_state}
+    return {"status": "idle", "ready": True, "scheduler_ready": True, "last_heartbeat_at": stamp, "last_scheduler_heartbeat_at": stamp, "scheduler_started_at": stamp, "next_expected_run_at": (now + timedelta(hours=1)).isoformat(), "registered_scheduler_job_ids": ["main-sync", "retry-sync", "market-open-sync"], "scheduler_jobs": job_state}
 
 
 def test_health_requires_scheduler_contract_not_only_pulse() -> None:
@@ -64,6 +64,32 @@ def test_next_run_includes_main_and_retry_schedule() -> None:
     now = datetime(2026, 8, 21, 14, 0, tzinfo=timezone.utc)
     next_run = datetime.fromisoformat(_next_scheduled_run_at(now))
     assert next_run == datetime(2026, 8, 21, 15, 0, tzinfo=timezone.utc)
+
+
+def test_open_market_schedule_runs_every_thirty_minutes_inside_session() -> None:
+    during_session = datetime(2026, 8, 21, 1, 10, tzinfo=timezone.utc)  # 09:10 Taipei
+    after_session = datetime(2026, 8, 21, 6, 0, tzinfo=timezone.utc)  # 14:00 Taipei
+    assert datetime.fromisoformat(_next_job_fire_at("market-open-sync", during_session)) == datetime(2026, 8, 21, 1, 30, tzinfo=timezone.utc)
+    assert datetime.fromisoformat(_next_job_fire_at("market-open-sync", after_session)) == datetime(2026, 8, 24, 1, 0, tzinfo=timezone.utc)
+
+
+def test_open_market_sync_skips_closed_market(monkeypatch) -> None:
+    calls: list[str] = []
+    heartbeat: dict[str, object] = {}
+    monkeypatch.setattr("app.worker.market_session_state", lambda: {"state": "CLOSED", "monitoring_active": False})
+    monkeypatch.setattr("app.worker._heartbeat", lambda **updates: heartbeat.update(updates))
+    monkeypatch.setattr("app.worker.run_catch_up", lambda: calls.append("run"))
+    run_open_market_sync()
+    assert calls == []
+    assert heartbeat["last_job_status"] == "SKIPPED_MARKET_CLOSED"
+
+
+def test_open_market_sync_runs_when_market_is_open(monkeypatch) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr("app.worker.market_session_state", lambda: {"state": "OPEN", "monitoring_active": True})
+    monkeypatch.setattr("app.worker.run_catch_up", lambda: calls.append("run"))
+    run_open_market_sync()
+    assert calls == ["run"]
 
 
 def test_health_detects_due_fire_that_never_started_while_pulse_is_fresh() -> None:

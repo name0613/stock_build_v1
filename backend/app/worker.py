@@ -11,20 +11,22 @@ from typing import Any
 from zoneinfo import ZoneInfo
 from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_EXECUTED, EVENT_JOB_MISSED, EVENT_JOB_SUBMITTED
 from apscheduler.schedulers.blocking import BlockingScheduler
+from apscheduler.triggers.combining import OrTrigger
 from apscheduler.triggers.cron import CronTrigger
 
 from .config import get_settings
 from .db import SessionLocal, init_db
 from .finmind import FinMindClient
 from .ingestion import catch_up, seed_score_version
-from .calendar import completed_source_end_date, market_session_state, source_publication_window_open
+from .calendar import MARKET_CLOSE_TIME, MARKET_OPEN_TIME, completed_source_end_date, is_trading_session, market_session_state, source_publication_window_open
 from .models import JobRun
 from .worker_health import start_health_server
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger(__name__)
 settings = get_settings()
-SCHEDULE_CONTRACT = {"main-sync": (21, 30), "retry-sync": (23, 0)}
+OPEN_MARKET_SYNC_JOB_ID = "market-open-sync"
+SCHEDULE_CONTRACT = {"main-sync": (21, 30), "retry-sync": (23, 0), OPEN_MARKET_SYNC_JOB_ID: (9, 0)}
 _heartbeat_lock = Lock()
 _scheduler_state_lock = Lock()
 _scheduler_runtime: BlockingScheduler | None = None
@@ -57,27 +59,37 @@ def _startup_catch_up_allowed(now: datetime | None = None) -> bool:
     return source_publication_window_open(now or datetime.now(ZoneInfo(settings.timezone)))
 
 
+def _next_open_market_fire_at(now: datetime | None = None) -> str:
+    """Return the next 30-minute fire inside a valid Taiwan trading session."""
+    current = now or datetime.now(timezone.utc)
+    market_tz = ZoneInfo(settings.timezone)
+    local = current.astimezone(market_tz)
+    for day_offset in range(0, 8):
+        day = (local + timedelta(days=day_offset)).date()
+        if not is_trading_session(day):
+            continue
+        candidate = datetime.combine(day, MARKET_OPEN_TIME, tzinfo=market_tz)
+        close_at = datetime.combine(day, MARKET_CLOSE_TIME, tzinfo=market_tz)
+        while candidate < close_at:
+            if candidate > local:
+                return candidate.astimezone(timezone.utc).isoformat()
+            candidate += timedelta(minutes=30)
+    raise RuntimeError("unable to calculate next open-market scheduled fire")
+
+
 def _next_scheduled_run_at(now: datetime | None = None) -> str:
     """Return the next scheduled run for the worker health contract."""
     current = now or datetime.now(timezone.utc)
-    local = current.astimezone(ZoneInfo(settings.timezone))
-    candidates = []
-    for day_offset in range(0, 8):
-        day = local + timedelta(days=day_offset)
-        if day.weekday() >= 5:
-            continue
-        for hour, minute in ((21, 30), (23, 0)):
-            candidate = day.replace(hour=hour, minute=minute, second=0, microsecond=0)
-            if candidate > local:
-                candidates.append(candidate)
-    candidate = min(candidates)
-    return candidate.astimezone(timezone.utc).isoformat()
+    candidates = [datetime.fromisoformat(_next_job_fire_at(job_id, current)) for job_id in SCHEDULE_CONTRACT]
+    return min(candidates).astimezone(timezone.utc).isoformat()
 
 
 def _next_job_fire_at(job_id: str, now: datetime | None = None) -> str:
     """Return the next fire for one registered job in the canonical schedule."""
     if job_id not in SCHEDULE_CONTRACT:
         raise ValueError(f"unknown scheduled job: {job_id}")
+    if job_id == OPEN_MARKET_SYNC_JOB_ID:
+        return _next_open_market_fire_at(now)
     current = now or datetime.now(timezone.utc)
     local = current.astimezone(ZoneInfo(settings.timezone))
     hour, minute = SCHEDULE_CONTRACT[job_id]
@@ -183,6 +195,23 @@ def run_catch_up() -> None:
         db.close()
 
 
+def run_open_market_sync() -> None:
+    """Run the regular pipeline only while the Taiwan market is open."""
+    session = market_session_state()
+    if session.get("state") != "OPEN":
+        _heartbeat(
+            status="idle",
+            ready=True,
+            scheduler_ready=bool(_scheduler_runtime and _scheduler_runtime.running),
+            market_session=session,
+            last_job_status="SKIPPED_MARKET_CLOSED",
+            last_error_code=None,
+            current_job_run_id=None,
+        )
+        return
+    run_catch_up()
+
+
 def main() -> None:
     global _scheduler_runtime, _scheduler_job_state
     _heartbeat(status="starting", ready=False, scheduler_ready=False, market_session=market_session_state(), scheduler_started_at=None)
@@ -212,6 +241,18 @@ def main() -> None:
     scheduler = BlockingScheduler(timezone=settings.timezone)
     scheduler.add_job(run_catch_up, CronTrigger(day_of_week="mon-fri", hour=21, minute=30, timezone=settings.timezone), id="main-sync", replace_existing=True, misfire_grace_time=300)
     scheduler.add_job(run_catch_up, CronTrigger(day_of_week="mon-fri", hour=23, minute=0, timezone=settings.timezone), id="retry-sync", replace_existing=True, misfire_grace_time=300)
+    scheduler.add_job(
+        run_open_market_sync,
+        OrTrigger(
+            [
+                CronTrigger(day_of_week="mon-fri", hour="9-12", minute="0,30", timezone=settings.timezone),
+                CronTrigger(day_of_week="mon-fri", hour=13, minute=0, timezone=settings.timezone),
+            ]
+        ),
+        id=OPEN_MARKET_SYNC_JOB_ID,
+        replace_existing=True,
+        misfire_grace_time=300,
+    )
     scheduler.add_listener(_scheduler_listener, EVENT_JOB_SUBMITTED | EVENT_JOB_EXECUTED | EVENT_JOB_ERROR | EVENT_JOB_MISSED)
     _scheduler_runtime = scheduler
     logger.info("worker scheduled timezone=%s", settings.timezone)

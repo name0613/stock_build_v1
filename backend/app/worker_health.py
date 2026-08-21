@@ -8,7 +8,7 @@ from threading import Thread
 from typing import Any
 
 
-REQUIRED_SCHEDULED_JOB_IDS = frozenset({"main-sync", "retry-sync"})
+REQUIRED_SCHEDULED_JOB_IDS = frozenset({"main-sync", "retry-sync", "market-open-sync"})
 SCHEDULED_FIRE_GRACE_SECONDS = 300
 
 

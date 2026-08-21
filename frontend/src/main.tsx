@@ -6,11 +6,13 @@ type Summary = { stock_count: number; strong_count: number; accumulation_count: 
 type SyncStatus = { dataset: string; status: string; latest_source_date?: string; last_successful_sync?: string; last_fetch_at?: string; records: number; usable_records?: number; stored_records?: number; staleness?: string; error_code?: string };
 type HoldingStatus = { stock_id: string; stock_name: string; market: string; latest_source_date?: string; status: string; large_holder_400_lots_percent?: number; large_holder_400_lots_people?: number; large_holder_1000_lots_percent?: number; large_holder_1000_lots_people?: number };
 type HoldingStatusSnapshot = { dataset: string; market_session_required: boolean; total: number; available_count: number; items: HoldingStatus[] };
+type WorkerHealth = { heartbeat?: { market_session?: { state?: string } } };
 type Stock = { stock_id: string; stock_name: string; market: string; industry?: string; price?: number; price_change?: number; score?: number; status: string; score_version?: string; features: Record<string, any>; coverage: Record<string, boolean>; latest_data?: string };
 type Detail = { stock: Stock; score: { score?: number; status: string; score_version?: string; formula_hash?: string; components?: Record<string, number>; explanation?: { label: string; value: number; detail: string }[]; coverage?: Record<string, boolean>; source_date?: string; calculated_at?: string; knowledge_cutoff?: string; input_snapshot_hash?: string }; sources: Record<string, { provider?: string; dataset?: string; status?: string; latest_source_date?: string; fetched_at?: string; last_successful_fetch?: string; row_count?: number; staleness?: string }>; institutional: any[]; foreign_holding: any[]; holding_distribution: any[]; holding_series: Record<string, { source_date: string; value: number | null }[]>; brokers: any[]; prices: any[]; score_history: any[] };
 
 const statusLabel: Record<string, string> = { STRONG_ACCUMULATION: "Strong Accumulation", ACCUMULATION: "Accumulation", WATCH: "Watch", NO_STRONG_EVIDENCE: "No Strong Evidence", DATA_INSUFFICIENT: "Data Insufficient" };
 const datasetLabels: Record<string, string> = { institutional: "三大法人", foreign_holding: "外資持股", holding_distribution: "集保持股", broker: "分點", price: "股價／成交量", major_shareholder_5pct: "持股超過 5% 股東" };
+const MARKET_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
 
 function App() {
   const [summary, setSummary] = useState<Summary | null>(null);
@@ -30,11 +32,13 @@ function App() {
   const [holdingStatusError, setHoldingStatusError] = useState(false);
   const stocksRequestId = useRef(0);
   const holdingStatusRequest = useRef<Promise<void>>(Promise.resolve());
+  const refreshInFlight = useRef(false);
 
-  async function loadSummary() { try { setSummary(await fetchJson<Summary>("/api/summary")); } catch { setError("API 尚未可用，請確認服務與資料庫狀態。"); } }
+  async function loadSummary() { try { setSummary(await fetchJson<Summary>("/api/summary", undefined, { cache: "no-store" })); } catch { setError("API 尚未可用，請確認服務與資料庫狀態。"); } }
   async function loadHoldingStatus() {
     try {
       setHoldingStatus(await fetchJson<HoldingStatusSnapshot>("/api/holdings/status", undefined, { cache: "no-store" }));
+      setHoldingStatusError(false);
     } catch {
       setHoldingStatusError(true);
     }
@@ -46,7 +50,7 @@ function App() {
       if (signal.aborted) return;
       const params = new URLSearchParams({ page: String(page), page_size: "50", sort, order: "desc" });
       if (search) params.set("search", search); if (market) params.set("market", market); if (status) params.set("status", status); if (minScore) params.set("min_score", minScore);
-      const response = await fetchJson<{ items: Stock[]; total: number }>(`/api/stocks?${params}`, signal);
+      const response = await fetchJson<{ items: Stock[]; total: number }>(`/api/stocks?${params}`, signal, { cache: "no-store" });
       if (requestId !== stocksRequestId.current) return;
       setItems(response.items); setTotal(response.total); setError(null);
     } catch (error) {
@@ -54,6 +58,32 @@ function App() {
       setError("無法讀取股票清單；資料不足時系統會維持 DATA_INSUFFICIENT，不會補成 0。");
     } finally {
       if (requestId === stocksRequestId.current) setLoading(false);
+    }
+  }
+  async function loadDetail(stockId: string) {
+    try {
+      setDetail(await fetchJson<Detail>(`/api/stocks/${stockId}`, undefined, { cache: "no-store" }));
+    } catch {
+      setError("個股資料讀取失敗。");
+    }
+  }
+  async function refreshOpenMarketData() {
+    if (refreshInFlight.current) return;
+    refreshInFlight.current = true;
+    try {
+      const health = await fetchJson<WorkerHealth>("/api/worker-health", undefined, { cache: "no-store" });
+      if (health.heartbeat?.market_session?.state !== "OPEN") return;
+      holdingStatusRequest.current = loadHoldingStatus();
+      await holdingStatusRequest.current;
+      await loadSummary();
+      const controller = new AbortController();
+      const requestId = ++stocksRequestId.current;
+      await loadStocks(controller.signal, requestId);
+      if (selected) await loadDetail(selected);
+    } catch {
+      // Keep the last rendered snapshot when the worker health endpoint is unavailable.
+    } finally {
+      refreshInFlight.current = false;
     }
   }
   useEffect(() => { holdingStatusRequest.current = loadHoldingStatus(); }, []);
@@ -64,7 +94,11 @@ function App() {
     void loadStocks(controller.signal, requestId);
     return () => controller.abort();
   }, [page, search, market, status, minScore, sort]);
-  useEffect(() => { if (!selected) return; void fetchJson<Detail>(`/api/stocks/${selected}`).then(setDetail).catch(() => setError("個股資料讀取失敗。")); }, [selected]);
+  useEffect(() => { if (!selected) return; void loadDetail(selected); }, [selected]);
+  useEffect(() => {
+    const interval = window.setInterval(() => { void refreshOpenMarketData(); }, MARKET_REFRESH_INTERVAL_MS);
+    return () => window.clearInterval(interval);
+  }, [page, search, market, status, minScore, sort, selected]);
 
   const filtered = useMemo(() => items, [items]);
   if (detail && selected) return <DetailPage detail={detail} onBack={() => { setSelected(null); setDetail(null); }} />;
