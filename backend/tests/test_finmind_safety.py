@@ -268,7 +268,7 @@ def test_global_broker_fatal_stops_queue_promptly(monkeypatch: pytest.MonkeyPatc
     assert len(calls) == 1
 
 
-def test_unverified_empty_broker_response_stops_queue_promptly(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_unverified_empty_broker_response_is_per_stock_retryable_and_does_not_stop_queue(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import asyncio
 
     calls: list[str] = []
@@ -280,8 +280,14 @@ def test_unverified_empty_broker_response_stops_queue_promptly(monkeypatch: pyte
 
     monkeypatch.setattr(client, "fetch", empty)
     result = asyncio.run(client.fetch_broker_stocks([str(index) for index in range(100)], "2026-08-20", "2026-08-20"))
-    assert result["fatal_code"] == "EMPTY_RESPONSE_UNVERIFIED"
-    assert len(calls) == 1
+    assert result["fatal_code"] is None
+    assert result["retryable_failed"] == 100
+    assert len(calls) == 100
+    checkpoint = next((tmp_path / "checkpoints").glob("*.json"))
+    failures = __import__("json").loads(checkpoint.read_text(encoding="utf-8"))["failed"]
+    assert len(failures) == 100
+    assert {failure["code"] for failure in failures} == {"EMPTY_RESPONSE_UNVERIFIED"}
+    assert {failure["classification"] for failure in failures} == {"retryable_failed"}
 
 
 def test_source_checkpoint_resumes_finite_quota_without_repeating_completed_stock(tmp_path: Path) -> None:
