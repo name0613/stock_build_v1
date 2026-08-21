@@ -25,4 +25,4 @@ if __name__ == "__main__":
     evidence["secrets_included"] = False
     target = ROOT / "deployment_evidence/PIT_POSTGRES_EVIDENCE.json"
     target.write_text(json.dumps(evidence, ensure_ascii=False, indent=2, default=str) + "\n", encoding="utf-8")
-    print(json.dumps({"path": str(target), "historical_identical": evidence["historical_identical"], "later_cutoff_distinct": evidence["later_cutoff_distinct"], "secrets_included": False}, ensure_ascii=False))
+    print(json.dumps({"path": str(target), "historical_bit_for_bit_identical": evidence["historical_bit_for_bit_identical"], "later_calculation_distinct": evidence["later_calculation_distinct"], "non_null_initial_score": evidence["non_null_initial_score"], "secrets_included": False}, ensure_ascii=False))
