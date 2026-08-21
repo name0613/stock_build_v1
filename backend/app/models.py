@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any
 
-from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, Date, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -88,7 +88,10 @@ class BrokerDaily(Base):
     source_dataset: Mapped[str] = mapped_column(String(100))
     provider_report_complete: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    __table_args__ = (UniqueConstraint("stock_id", "source_date", "securities_trader_id", name="uq_broker_stock_date_id"),)
+    __table_args__ = (
+        UniqueConstraint("stock_id", "source_date", "securities_trader_id", name="uq_broker_stock_date_id"),
+        CheckConstraint("source_dataset = 'TaiwanStockTradingDailyReport'", name="ck_broker_daily_official_source"),
+    )
 
 
 class PriceDaily(Base):

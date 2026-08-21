@@ -187,8 +187,8 @@ def main() -> None:
         print("cleanroom: stack started behind explicit dependency gates", flush=True)
         ps_output = remote(ssh, stack_wait_command(project, compose))
         migration_count = remote(ssh, f"cd {shlex.quote(project)} && {compose} exec -T postgres psql -U accumulation -d accumulation -Atc 'SELECT count(*) FROM schema_migrations;'")
-        api_health = remote(ssh, f"curl -fsS http://127.0.0.1:18082/health")
-        proxy_metadata = remote(ssh, f"curl -fsS http://127.0.0.1:18082/api/build-metadata")
+        api_health = remote(ssh, "curl -fsS http://127.0.0.1:18082/health")
+        proxy_metadata = remote(ssh, "curl -fsS http://127.0.0.1:18082/api/build-metadata")
         worker_health = remote(ssh, f"cd {shlex.quote(project)} && {compose} exec -T worker python -c 'import urllib.request; print(urllib.request.urlopen(\"http://127.0.0.1:8001/health\", timeout=5).read().decode())'")
         image_rows = {}
         for service in ("api", "worker", "frontend"):

@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
 import pytest
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.calendar import CalendarUnknownError, expected_trading_sessions
 from app.finmind import FinMindClient, FinMindError
 from app.ingestion import _model_rows, _natural_key, calculate_stock_features_and_score, ingest_records, normalize_institutional, normalize_stock, sync_universe
-from app.models import AccumulationScore, Base, BrokerDaily, DataSyncStatus, InstitutionalDaily, SourceRevision, Stock
+from app.models import AccumulationFeature, AccumulationScore, Base, BrokerDaily, DataSyncStatus, InstitutionalDaily, SourceRevision, Stock
 from app.scoring import parse_holding_level
 
 
@@ -257,6 +258,89 @@ def test_broker_rows_are_bounded_by_sessions_not_broker_count() -> None:
 
     assert len({str(row["source_date"])[:10] for row in rows}) == 20
     assert len(rows) == 60
+
+
+def test_broker_table_constraint_rejects_capability_only_source() -> None:
+    db, _ = _db()
+    db.add(Stock(stock_id="2330", stock_name="Test", market="上市", security_type="股票", is_common_stock=True))
+    db.commit()
+    db.add(BrokerDaily(stock_id="2330", source_date=date(2026, 8, 20), securities_trader_id="CAP", net_volume=999, source_dataset="TaiwanStockTradingDailyReportSecIdAgg", provider_report_complete=True, fetched_at=datetime.now(timezone.utc)))
+    with pytest.raises(IntegrityError):
+        db.commit()
+    db.rollback()
+
+
+def test_capability_broker_rows_cannot_change_s4_features_score_api_or_provenance() -> None:
+    from app.main import _broker_summary, _source_status
+
+    db, _ = _db()
+    db.add(Stock(stock_id="2330", stock_name="Test", market="上市", security_type="股票", is_common_stock=True))
+    db.commit()
+    end = date(2026, 8, 20)
+    sessions = expected_trading_sessions(end, 21)
+    for index, day in enumerate(sessions):
+        ingest_records(db, "TaiwanStockInstitutionalInvestorsBuySellWide", [{"stock_id": "2330", "date": day, "Foreign_Investor_Net": 100 + index, "Foreign_Dealer_Self_Net": 10, "Investment_Trust_Net": 20, "Dealer_Net": 30}])
+        ingest_records(db, "TaiwanStockShareholding", [{"stock_id": "2330", "date": day, "ForeignInvestmentShares": 1000 + index, "ForeignInvestmentSharesRatio": 40 + index / 10}])
+        ingest_records(db, "TaiwanStockPrice", [{"stock_id": "2330", "date": day, "close": 100 + index, "TradingVolume": 100000}])
+        if day in sessions[-20:]:
+            ingest_records(db, "TaiwanStockTradingDailyReport", [{"stock_id": "2330", "date": day, "securities_trader_id": "OFF", "buy_volume": 100, "sell_volume": 10, "provider_report_complete": True}])
+    for offset in (28, 21, 14, 7, 0):
+        holding_day = end - timedelta(days=offset)
+        ingest_records(db, "TaiwanStockHoldingSharesPer", [
+            {"stock_id": "2330", "date": holding_day, "HoldingSharesLevel": "400,001-600,000", "percent": 10 + (28 - offset) / 28, "people": 3, "shares": 500000},
+            {"stock_id": "2330", "date": holding_day, "HoldingSharesLevel": "1,000,001-2,000,000", "percent": 5, "people": 1, "shares": 1500000},
+        ])
+
+    first_cutoff = datetime.now(timezone.utc) + timedelta(seconds=1)
+    official_score = calculate_stock_features_and_score(db, "2330", end, first_cutoff)
+    official_feature = db.scalar(select(AccumulationFeature).where(AccumulationFeature.stock_id == "2330", AccumulationFeature.knowledge_cutoff == first_cutoff))
+    assert official_score.score is not None
+    assert official_feature is not None
+
+    # Emulate a legacy database that predates the CHECK constraint.  The row
+    # has no official SourceRevision and must still be excluded by every
+    # production read path.
+    db.execute(text("PRAGMA ignore_check_constraints = ON"))
+    db.execute(
+        text(
+            "INSERT INTO broker_daily "
+            "(stock_id, source_date, securities_trader_id, buy_volume, sell_volume, net_volume, "
+            "source_dataset, provider_report_complete, fetched_at) "
+            "VALUES (:stock_id, :source_date, :trader, :buy, :sell, :net, :dataset, :complete, :fetched_at)"
+        ),
+        {
+            "stock_id": "2330",
+            "source_date": end,
+            "trader": "CAP",
+            "buy": 1_000_000,
+            "sell": 0,
+            "net": 1_000_000,
+            "dataset": "TaiwanStockTradingDailyReportSecIdAgg",
+            "complete": True,
+            "fetched_at": first_cutoff,
+        },
+    )
+    db.add(SourceRevision(dataset="TaiwanStockTradingDailyReportSecIdAgg", stock_id="2330", source_date=end, natural_key="capability-only", payload={"stock_id": "2330", "source_date": end.isoformat(), "securities_trader_id": "CAP", "net_volume": 1_000_000}, content_hash="f" * 64, fetched_at=first_cutoff))
+    db.commit()
+
+    rows, _ = _model_rows(db, BrokerDaily, "2330", end, first_cutoff + timedelta(seconds=1), "TaiwanStockTradingDailyReport", 2000)
+    assert rows
+    assert {row["source_dataset"] for row in rows} == {"TaiwanStockTradingDailyReport"}
+    assert "CAP" not in {row["securities_trader_id"] for row in rows}
+    assert "CAP" not in {row["securities_trader_id"] for row in _broker_summary(db, "2330")}
+    assert _source_status(db, "2330")["broker"]["row_count"] == 20
+
+    second_cutoff = first_cutoff + timedelta(seconds=2)
+    mixed_score = calculate_stock_features_and_score(db, "2330", end, second_cutoff)
+    mixed_feature = db.scalar(select(AccumulationFeature).where(AccumulationFeature.stock_id == "2330", AccumulationFeature.knowledge_cutoff == second_cutoff))
+    assert mixed_feature is not None
+    assert mixed_feature.values == official_feature.values
+    assert mixed_feature.coverage == official_feature.coverage
+    assert mixed_score.score == official_score.score
+    assert mixed_score.status == official_score.status
+    assert mixed_score.components == official_score.components
+    assert mixed_score.input_snapshot_hash == official_score.input_snapshot_hash
+    assert mixed_score.input_source_hashes == official_score.input_source_hashes
 
 
 def test_scheduled_catch_up_runs_all_phases_for_dynamic_multi_stock_universe() -> None:

@@ -21,13 +21,14 @@ except ImportError:  # pragma: no cover - production image installs pyarrow
     pq = None
 
 from .config import Settings, get_settings
+from .calendar import is_trading_session
 from .scoring import is_holding_metadata_level, parse_holding_level
 
 logger = logging.getLogger(__name__)
-CHECKPOINT_SCHEMA_VERSION = "2026-08-21-v2"
-INCREMENTAL_CHECKPOINT_VERSION = "2026-08-21-incremental-v3"
-NORMALIZATION_POLICY_VERSION = "s-only-normalization-v3"
-REQUEST_POLICY_VERSION = "finmind-request-policy-v3"
+CHECKPOINT_SCHEMA_VERSION = "2026-08-21-v3-observation-bound"
+INCREMENTAL_CHECKPOINT_VERSION = "2026-08-21-incremental-v4"
+NORMALIZATION_POLICY_VERSION = "s-only-normalization-v4-probe-isolated"
+REQUEST_POLICY_VERSION = "finmind-request-policy-v4-observation-coverage"
 GLOBAL_PROVIDER_FAILURE_CODES = frozenset({
     "AUTHENTICATION_FAILED",
     "ACCESS_DENIED",
@@ -38,10 +39,78 @@ GLOBAL_PROVIDER_FAILURE_CODES = frozenset({
 
 
 def _date_range(start: date, end: date) -> list[date]:
-    """Return an inclusive calendar-date range for checkpoint coverage."""
+    """Return an inclusive calendar-date range for policy calculations."""
     if end < start:
         return []
     return [start + timedelta(days=offset) for offset in range((end - start).days + 1)]
+
+
+DAILY_OBSERVATION_DATASETS = frozenset({
+    "TaiwanStockInstitutionalInvestorsBuySellWide",
+    "TaiwanStockShareholding",
+    "TaiwanStockPrice",
+})
+WEEKLY_OBSERVATION_DATASETS = frozenset({"TaiwanStockHoldingSharesPer"})
+
+
+def expected_observation_dates(dataset: str, start: date, end: date) -> list[date]:
+    """Return the source-specific observations that a checkpoint must prove."""
+    if dataset in DAILY_OBSERVATION_DATASETS:
+        return [day for day in _date_range(start, end) if is_trading_session(day)]
+    if dataset in WEEKLY_OBSERVATION_DATASETS:
+        return [day for day in _date_range(start, end) if day.weekday() == 4]
+    raise FinMindError("UNSUPPORTED_OBSERVATION_CONTRACT", f"no checkpoint observation contract for {dataset}")
+
+
+def _validated_no_data_dates(dataset: str, meta: dict[str, Any], expected: set[str]) -> tuple[set[str], str | None]:
+    valid_empty, reason = classify_empty_response(dataset, meta)
+    if not valid_empty:
+        return set(), None
+    raw_dates = meta.get("empty_observation_dates")
+    if not isinstance(raw_dates, list):
+        return set(), None
+    dates = {str(value)[:10] for value in raw_dates if str(value)[:10] in expected}
+    return dates, reason if dates else None
+
+
+def _record_observation_dates(dataset: str, stock_id: str, records: list[dict[str, Any]], expected: set[str]) -> set[str]:
+    by_date: dict[str, list[dict[str, Any]]] = {}
+    for row in records:
+        row_stock = str(row.get("stock_id") or "").strip()
+        source_day = str(row.get("date") or row.get("source_date") or "")[:10]
+        if row_stock == stock_id and source_day in expected:
+            by_date.setdefault(source_day, []).append(row)
+    if dataset != "TaiwanStockHoldingSharesPer":
+        return set(by_date)
+
+    verified: set[str] = set()
+    for source_day, rows in by_date.items():
+        thresholds: dict[int, list[dict[str, Any]]] = {}
+        invalid_schema = False
+        for row in rows:
+            level = row.get("HoldingSharesLevel") or row.get("holding_shares_level")
+            if is_holding_metadata_level(level):
+                continue
+            threshold = row.get("holding_shares_threshold")
+            if threshold is None:
+                threshold = parse_holding_level(level)
+            if threshold is None:
+                invalid_schema = True
+                continue
+            thresholds.setdefault(int(threshold), []).append(row)
+        relevant = {threshold: values for threshold, values in thresholds.items() if threshold >= 400_000}
+        boundary_400 = any(400_000 <= threshold < 1_000_000 for threshold in relevant)
+        boundary_1000 = any(threshold >= 1_000_000 for threshold in relevant)
+        complete = (
+            not invalid_schema
+            and boundary_400
+            and boundary_1000
+            and all(len(values) == 1 for values in relevant.values())
+            and all(all(row.get(field) is not None for field in ("percent", "people", "shares")) for values in relevant.values() for row in values)
+        )
+        if complete:
+            verified.add(source_day)
+    return verified
 
 
 def classify_empty_response(dataset: str, meta: dict[str, Any]) -> tuple[bool, str]:
@@ -57,14 +126,17 @@ def classify_empty_response(dataset: str, meta: dict[str, Any]) -> tuple[bool, s
 for _http_logger_name in ("httpx", "httpcore"):
     logging.getLogger(_http_logger_name).setLevel(logging.WARNING)
 
-ALLOWED_S_DATASETS = {
+PRODUCTION_S_DATASETS = frozenset({
     "TaiwanStockInstitutionalInvestorsBuySellWide",
     "TaiwanStockShareholding",
     "TaiwanStockHoldingSharesPer",
     "TaiwanStockTradingDailyReport",
-    "TaiwanStockTradingDailyReportSecIdAgg",
-}
-REFERENCE_DATASETS = {"TaiwanStockInfo", "TaiwanStockPrice", "TaiwanSecuritiesTraderInfo"}
+})
+CAPABILITY_ONLY_DATASETS = frozenset({"TaiwanStockTradingDailyReportSecIdAgg"})
+REFERENCE_DATASETS = frozenset({"TaiwanStockInfo", "TaiwanStockPrice", "TaiwanSecuritiesTraderInfo"})
+# Backward-compatible name used by evidence/tests. It now means production S
+# data only and intentionally excludes every capability-probe-only dataset.
+ALLOWED_S_DATASETS = PRODUCTION_S_DATASETS
 FORBIDDEN_DATASETS = {
     "TaiwanStockBlockTradingDailyReport", "TaiwanStockBlockTrade", "TaiwanStockActiveETFHolding",
     "TaiwanStockActiveETFHoldingChange", "TaiwanStockMarginPurchaseShortSale", "TaiwanStockMarginMaintenance",
@@ -199,9 +271,20 @@ class FinMindClient:
         return endpoint, params
 
     def fetch(self, dataset: str, data_id: str | None = None, start_date: str | None = None, end_date: str | None = None, *, persist_raw: bool = True, securities_trader_id: str | None = None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        """Production fetch path; capability-only datasets are rejected."""
+        return self._fetch_provider(dataset, data_id, start_date, end_date, persist_raw=persist_raw, securities_trader_id=securities_trader_id, capability_probe=False)
+
+    def _fetch_capability_probe(self, dataset: str, data_id: str | None = None, start_date: str | None = None, end_date: str | None = None, *, securities_trader_id: str | None = None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        """Probe-only provider path; it never invokes production ingestion."""
+        return self._fetch_provider(dataset, data_id, start_date, end_date, persist_raw=True, securities_trader_id=securities_trader_id, capability_probe=True)
+
+    def _fetch_provider(self, dataset: str, data_id: str | None, start_date: str | None, end_date: str | None, *, persist_raw: bool, securities_trader_id: str | None, capability_probe: bool) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         if dataset in FORBIDDEN_DATASETS:
             raise FinMindError("FORBIDDEN_DATASET", f"dataset is excluded by S-only policy: {dataset}")
-        if dataset not in ALLOWED_S_DATASETS | REFERENCE_DATASETS:
+        allowed = PRODUCTION_S_DATASETS | REFERENCE_DATASETS
+        if capability_probe:
+            allowed |= CAPABILITY_ONLY_DATASETS
+        if dataset not in allowed:
             raise FinMindError("DATASET_NOT_ALLOWLISTED", f"dataset is not allowlisted: {dataset}")
         endpoint, params = self._request_spec(dataset, data_id, start_date, end_date, securities_trader_id)
         safe_params = {key: value for key, value in params.items() if key != "token"}
@@ -241,7 +324,8 @@ class FinMindClient:
                     normalized = [{**record, "provider_report_complete": True} for record in normalized]
                 source_date = self._latest_date(normalized)
                 evidence = self.store.write(dataset, normalized, safe_params, source_date) if persist_raw else {"records": len(normalized)}
-                return normalized, {"dataset": dataset, "parameters": safe_params, "source_date": source_date, "evidence": evidence, "attempt": attempt + 1}
+                pagination_complete = payload.get("pagination_complete") if isinstance(payload.get("pagination_complete"), bool) else None
+                return normalized, {"dataset": dataset, "parameters": safe_params, "source_date": source_date, "evidence": evidence, "attempt": attempt + 1, "pagination_complete": pagination_complete, "probe_only": capability_probe}
             except (httpx.TimeoutException, httpx.NetworkError) as exc:
                 last_error = FinMindError("TIMEOUT" if isinstance(exc, httpx.TimeoutException) else "NETWORK_ERROR", "FinMind network request failed")
             except FinMindError as exc:
@@ -283,7 +367,7 @@ class FinMindClient:
                 start_date = end_date
             data_id = None if dataset == "TaiwanStockInfo" or mode == "broad" else "2330"
             trader_id = "075T" if dataset == "TaiwanStockTradingDailyReportSecIdAgg" else None
-            records, meta = self.fetch(dataset, data_id=data_id, start_date=None if dataset == "TaiwanStockInfo" else start_date, end_date=None if dataset == "TaiwanStockInfo" else end_date, securities_trader_id=trader_id)
+            records, meta = self._fetch_capability_probe(dataset, data_id=data_id, start_date=None if dataset == "TaiwanStockInfo" else start_date, end_date=None if dataset == "TaiwanStockInfo" else end_date, securities_trader_id=trader_id)
             method = "GET /api/v4/data" if dataset not in {"TaiwanStockTradingDailyReport", "TaiwanStockTradingDailyReportSecIdAgg"} else f"GET /api/v4/{'taiwan_stock_trading_daily_report' if dataset.endswith('Report') else 'taiwan_stock_trading_daily_report_secid_agg'}"
             fields = sorted({key for row in records[:3] for key in row})
             dates = sorted({str(row.get("date") or row.get("source_date"))[:10] for row in records if row.get("date") or row.get("source_date")})
@@ -324,7 +408,7 @@ class FinMindClient:
         session_hash = hashlib.sha256(json.dumps(days, separators=(",", ":")).encode()).hexdigest()
         manifest = {"dataset": dataset, "checkpoint_version": INCREMENTAL_CHECKPOINT_VERSION, "schema_version": CHECKPOINT_SCHEMA_VERSION, "normalization_version": NORMALIZATION_POLICY_VERSION, "request_policy_version": REQUEST_POLICY_VERSION, "query_mode": "per_stock_per_session"}
         manifest_hash = hashlib.sha256(json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-        checkpoint_file = checkpoint_dir / f"{dataset}-incremental-v3.json"
+        checkpoint_file = checkpoint_dir / f"{dataset}-incremental-v4.json"
         checkpoint: dict[str, Any] = {"manifest": manifest, "manifest_hash": manifest_hash, "completed": [], "failed": [], "permanent_failed": [], "last_request": {}}
         checkpoint_state = "new"
         if checkpoint_file.exists():
@@ -436,15 +520,27 @@ class FinMindClient:
         metrics["permanent_failed"] = len(set(checkpoint.get("permanent_failed", [])) & requested_keys)
         return metrics
 
-    async def fetch_stocks_dataset(self, stock_ids: list[str], dataset: str, start_date: str, end_date: str, *, record_sink: Callable[[list[dict[str, Any]]], int] | None = None, progress_callback: Callable[[str], None] | None = None) -> dict[str, Any]:
-        """Fetch per-stock history with a durable, workload-bound checkpoint."""
+    async def fetch_stocks_dataset(self, stock_ids: list[str], dataset: str, start_date: str, end_date: str, *, record_sink: Callable[[list[dict[str, Any]]], int | dict[str, Any]] | None = None, progress_callback: Callable[[str], None] | None = None) -> dict[str, Any]:
+        """Fetch per-stock history with observation-verified checkpoint coverage."""
         stock_ids = sorted(set(stock_ids))
         universe_hash = hashlib.sha256(json.dumps(stock_ids, separators=(",", ":")).encode()).hexdigest()
-        manifest = {"dataset": dataset, "checkpoint_version": INCREMENTAL_CHECKPOINT_VERSION, "query_mode": "per_stock_date_range", "schema_version": CHECKPOINT_SCHEMA_VERSION, "normalization_version": NORMALIZATION_POLICY_VERSION, "request_policy_version": REQUEST_POLICY_VERSION}
+        expected_days = expected_observation_dates(dataset, date.fromisoformat(start_date), date.fromisoformat(end_date))
+        expected_strings = [day.isoformat() for day in expected_days]
+        requested_observations = set(expected_strings)
+        cadence = "weekly_publication" if dataset in WEEKLY_OBSERVATION_DATASETS else "trading_session"
+        manifest = {
+            "dataset": dataset,
+            "checkpoint_version": INCREMENTAL_CHECKPOINT_VERSION,
+            "query_mode": "per_stock_date_range",
+            "schema_version": CHECKPOINT_SCHEMA_VERSION,
+            "normalization_version": NORMALIZATION_POLICY_VERSION,
+            "request_policy_version": REQUEST_POLICY_VERSION,
+            "observation_cadence": cadence,
+        }
         manifest_hash = hashlib.sha256(json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         checkpoint_dir = self.settings.raw_root / "checkpoints"
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
-        checkpoint_file = checkpoint_dir / f"source-{dataset}-incremental-v3.json"
+        checkpoint_file = checkpoint_dir / f"source-{dataset}-incremental-v4.json"
         checkpoint: dict[str, Any] = {"manifest": manifest, "manifest_hash": manifest_hash, "completed": [], "no_data_but_valid": [], "failed": [], "permanent_failed": [], "global_fatal": None, "entries": {}, "last_request": {}}
         checkpoint_state = "new"
         if checkpoint_file.exists():
@@ -457,21 +553,26 @@ class FinMindClient:
                     checkpoint_state = "incompatible_ignored"
             except (OSError, ValueError, TypeError):
                 checkpoint_state = "corrupt_ignored"
+
         entries = checkpoint.setdefault("entries", {})
         pending: list[str] = []
         request_ranges: dict[str, tuple[str, str]] = {}
-        requested_days = {day.isoformat() for day in _date_range(date.fromisoformat(start_date), date.fromisoformat(end_date))}
+        initial_complete: set[str] = set()
         for stock_id in stock_ids:
-            entry = entries.get(stock_id, {})
-            covered = set(entry.get("covered_dates", []))
-            missing = sorted(requested_days - covered)
+            covered = set(entries.get(stock_id, {}).get("covered_dates", [])) & requested_observations
+            missing = [day for day in expected_strings if day not in covered]
             if not missing:
+                initial_complete.add(stock_id)
                 continue
             pending.append(stock_id)
-            request_ranges[stock_id] = (missing[0], missing[-1])
-        # A quota/auth/schema failure is fatal for this invocation, not a
-        # permanent block on the next scheduled cycle.  Keep the prior code
-        # as history while allowing pending keys to retry after recovery.
+            first_index = expected_strings.index(missing[0])
+            block = [missing[0]]
+            for source_day in expected_strings[first_index + 1:]:
+                if source_day in covered:
+                    break
+                block.append(source_day)
+            request_ranges[stock_id] = (block[0], block[-1])
+
         previous_global_fatal = checkpoint.get("global_fatal")
         checkpoint["last_global_fatal"] = previous_global_fatal
         checkpoint["global_fatal"] = None
@@ -479,24 +580,70 @@ class FinMindClient:
         fatal_event = asyncio.Event()
         checkpoint_lock = asyncio.Lock()
         sink_lock = asyncio.Lock()
-        reused_complete = sum(1 for stock_id in stock_ids if stock_id not in pending and entries.get(stock_id, {}).get("classification") in {"NEW_SUCCESS", "REUSED_COMPLETE"})
-        reused_valid_no_data = sum(1 for stock_id in stock_ids if stock_id not in pending and entries.get(stock_id, {}).get("classification") == "VALID_NO_DATA_FROM_PROVIDER")
-        metrics: dict[str, Any] = {"requested": len(stock_ids), "skipped_checkpoint": len(stock_ids) - len(pending), "reused_complete": reused_complete, "reused_valid_no_data": reused_valid_no_data, "newly_fetched": 0, "physical_requests": 0, "retryable_pending": 0, "permanent_failed": sum(1 for stock_id in stock_ids if entries.get(stock_id, {}).get("classification") == "permanent_failed"), "checkpoint_state": checkpoint_state, "checkpoint_manifest_hash": manifest_hash, "requested_start_date": start_date, "requested_end_date": end_date, "universe_hash": universe_hash, "selection_policy": "sorted_stock_id_round_robin", "success": reused_complete + reused_valid_no_data, "usable_success": reused_complete, "no_data": reused_valid_no_data, "failed": 0, "rows": 0, "fatal_code": None, "previous_global_fatal": previous_global_fatal, "per_stock": {key: value for key, value in entries.items() if key in stock_ids and key not in pending}}
+        metrics: dict[str, Any] = {
+            "requested": len(stock_ids),
+            "expected_observations_per_stock": len(expected_strings),
+            "observation_cadence": cadence,
+            "skipped_checkpoint": len(initial_complete),
+            "reused_complete": 0,
+            "reused_valid_no_data": 0,
+            "newly_fetched": 0,
+            "partial_responses": 0,
+            "physical_requests": 0,
+            "retryable_pending": 0,
+            "permanent_failed": 0,
+            "checkpoint_state": checkpoint_state,
+            "checkpoint_manifest_hash": manifest_hash,
+            "requested_start_date": start_date,
+            "requested_end_date": end_date,
+            "universe_hash": universe_hash,
+            "selection_policy": "sorted_stock_id_observation_resume",
+            "success": 0,
+            "usable_success": 0,
+            "no_data": 0,
+            "failed": 0,
+            "rows": 0,
+            "fatal_code": None,
+            "previous_global_fatal": previous_global_fatal,
+            "per_stock": {key: value for key, value in entries.items() if key in initial_complete},
+        }
 
         async def persist() -> None:
             checkpoint["manifest"] = manifest
             checkpoint["manifest_hash"] = manifest_hash
-            checkpoint["last_request"] = {"start_date": start_date, "end_date": end_date, "universe_hash": universe_hash, "pending_stock_count": len(pending)}
+            checkpoint["last_request"] = {"start_date": start_date, "end_date": end_date, "universe_hash": universe_hash, "pending_stock_count": len(pending), "expected_observation_count": len(expected_strings)}
             temporary = checkpoint_file.with_suffix(".tmp")
             temporary.write_text(json.dumps(checkpoint, ensure_ascii=False, indent=2), encoding="utf-8")
             temporary.replace(checkpoint_file)
 
+        def coverage_fields(previous: dict[str, Any]) -> dict[str, Any]:
+            covered = sorted(set(previous.get("covered_dates", [])) & requested_observations)
+            unresolved = [day for day in expected_strings if day not in covered]
+            return {
+                "covered_dates": covered,
+                "expected_observation_count": len(expected_strings),
+                "verified_observation_count": len(covered),
+                "unresolved_dates": unresolved,
+                "observation_cadence": cadence,
+            }
+
         async def mark_failure(stock_id: str, code: str, classification: str, *, global_fatal: bool = False) -> None:
             now = datetime.now(timezone.utc).isoformat()
             async with checkpoint_lock:
-                previous = checkpoint.get("entries", {}).get(stock_id, {})
-                entry = {"rows": 0, "first_source_date": previous.get("first_source_date"), "last_source_date": previous.get("last_source_date"), "covered_dates": previous.get("covered_dates", []), "error_code": code, "classification": classification, "retry_count": int(previous.get("retry_count", 0)) + 1, "last_attempt_at": now, "next_eligible_retry_at": now if classification == "retryable_failed" else None}
-                checkpoint.setdefault("entries", {})[stock_id] = entry
+                previous = entries.get(stock_id, {})
+                entry = {
+                    **previous,
+                    **coverage_fields(previous),
+                    "rows": int(previous.get("rows", 0)),
+                    "error_code": code,
+                    "classification": classification,
+                    "retry_count": int(previous.get("retry_count", 0)) + 1,
+                    "last_attempt_at": now,
+                    "next_eligible_retry_at": now if classification != "permanent_failed" else None,
+                }
+                entries[stock_id] = entry
+                checkpoint["completed"] = sorted(set(checkpoint.get("completed", [])) - {stock_id})
+                checkpoint["no_data_but_valid"] = sorted(set(checkpoint.get("no_data_but_valid", [])) - {stock_id})
                 checkpoint["failed"] = [item for item in checkpoint.get("failed", []) if item.get("stock_id") != stock_id] + [{"stock_id": stock_id, **entry}]
                 if classification == "permanent_failed":
                     checkpoint["permanent_failed"] = sorted(set(checkpoint.get("permanent_failed", [])) | {stock_id})
@@ -512,65 +659,113 @@ class FinMindClient:
             if fatal_event.is_set():
                 return
             async with semaphore:
+                if fatal_event.is_set():
+                    return
                 request_start, request_end = request_ranges[stock_id]
+                request_expected = {day for day in expected_strings if request_start <= day <= request_end}
                 metrics["physical_requests"] += 1
                 try:
                     records, meta = await asyncio.to_thread(self.fetch, dataset, stock_id, request_start, request_end)
                 except FinMindError as exc:
                     global_fatal = exc.code in GLOBAL_PROVIDER_FAILURE_CODES
-                    await mark_failure(stock_id, exc.code, "global_fatal" if global_fatal else ("permanent_failed" if exc.code == "NON_RETRYABLE_4XX" else "retryable_failed"), global_fatal=global_fatal)
+                    classification = "global_fatal" if global_fatal else ("permanent_failed" if exc.code == "NON_RETRYABLE_4XX" else "retryable_failed")
+                    await mark_failure(stock_id, exc.code, classification, global_fatal=global_fatal)
                     if progress_callback:
                         progress_callback(f"{dataset} completed={metrics['newly_fetched'] + metrics['failed']}/{len(pending)}")
                     return
+                if meta.get("pagination_complete") is False:
+                    await mark_failure(stock_id, "INCOMPLETE_PROVIDER_COVERAGE", "retryable_failed")
+                    if progress_callback:
+                        progress_callback(f"{dataset} completed={metrics['newly_fetched'] + metrics['failed']}/{len(pending)}")
+                    return
+
+                verified_record_dates = _record_observation_dates(dataset, stock_id, records, request_expected)
+                valid_no_data_dates, empty_reason = _validated_no_data_dates(dataset, meta, request_expected)
                 try:
-                    # Sink per stock so an isolated provider bucket/schema row
-                    # cannot abort an otherwise valid full-market batch.
-                    if record_sink:
+                    if record_sink and records:
                         async with sink_lock:
-                            record_sink(records)
+                            sink_result = record_sink(records)
+                        if isinstance(sink_result, dict):
+                            sink_dates = {str(value)[:10] for value in sink_result.get("accepted_dates", [])}
+                            verified_record_dates &= sink_dates
+                        elif int(sink_result) <= 0:
+                            verified_record_dates.clear()
                 except SchemaMismatch:
                     await mark_failure(stock_id, "STOCK_SCHEMA_MISMATCH", "permanent_failed")
                     if progress_callback:
                         progress_callback(f"{dataset} completed={metrics['newly_fetched'] + metrics['failed']}/{len(pending)}")
                     return
-                dates = sorted({str(row.get("date") or row.get("source_date") or "")[:10] for row in records if row.get("date") or row.get("source_date")})
-                if not records:
-                    valid_empty, empty_reason = classify_empty_response(dataset, meta)
-                    if not valid_empty:
-                        await mark_failure(stock_id, "EMPTY_RESPONSE_UNVERIFIED", "retryable_failed")
-                    return
-                else:
-                    empty_reason = None
+
                 previous = entries.get(stock_id, {})
-                covered_dates = sorted(set(previous.get("covered_dates", [])) | {day.isoformat() for day in _date_range(date.fromisoformat(request_start), date.fromisoformat(request_end))} | set(dates))
-                classification = "NEW_SUCCESS" if records else "VALID_NO_DATA_FROM_PROVIDER"
-                entry = {"rows": len(records), "first_source_date": dates[0] if dates else previous.get("first_source_date"), "last_source_date": dates[-1] if dates else previous.get("last_source_date"), "request_start": request_start, "request_end": request_end, "covered_dates": covered_dates, "classification": classification, "empty_reason": empty_reason, "attempt": int(meta.get("attempt", 1))}
+                previous_covered = set(previous.get("covered_dates", [])) & requested_observations
+                newly_verified = (verified_record_dates | valid_no_data_dates) - previous_covered
+                if not newly_verified:
+                    code = "EMPTY_RESPONSE_UNVERIFIED" if not records else "PARTIAL_RESPONSE_UNVERIFIED"
+                    await mark_failure(stock_id, code, "retryable_failed")
+                    if progress_callback:
+                        progress_callback(f"{dataset} completed={metrics['newly_fetched'] + metrics['failed']}/{len(pending)}")
+                    return
+
+                covered = previous_covered | verified_record_dates | valid_no_data_dates
+                unresolved = [day for day in expected_strings if day not in covered]
+                all_record_dates = set(previous.get("verified_record_dates", [])) | verified_record_dates
+                all_no_data_dates = set(previous.get("verified_no_data_dates", [])) | valid_no_data_dates
+                complete = not unresolved
+                classification = ("NEW_SUCCESS" if all_record_dates else "VALID_NO_DATA_FROM_PROVIDER") if complete else "PARTIAL_RETRYABLE"
+                entry = {
+                    "rows": int(previous.get("rows", 0)) + len(records),
+                    "first_source_date": min(all_record_dates) if all_record_dates else previous.get("first_source_date"),
+                    "last_source_date": max(all_record_dates) if all_record_dates else previous.get("last_source_date"),
+                    "request_start": request_start,
+                    "request_end": request_end,
+                    "covered_dates": sorted(covered),
+                    "verified_record_dates": sorted(all_record_dates),
+                    "verified_no_data_dates": sorted(all_no_data_dates),
+                    "expected_observation_count": len(expected_strings),
+                    "verified_observation_count": len(covered),
+                    "unresolved_dates": unresolved,
+                    "observation_cadence": cadence,
+                    "classification": classification,
+                    "empty_reason": empty_reason,
+                    "attempt": int(meta.get("attempt", 1)),
+                    "pagination_complete": meta.get("pagination_complete"),
+                    "retry_count": int(previous.get("retry_count", 0)) + (0 if complete else 1),
+                }
                 async with checkpoint_lock:
-                    metrics["success"] += 1
-                    metrics["newly_fetched"] += 1
-                    metrics["rows"] += len(records)
-                    metrics["usable_success"] += bool(records)
-                    metrics["no_data"] += not records
-                    metrics["per_stock"][stock_id] = entry
                     entries[stock_id] = entry
-                    bucket = "completed" if records else "no_data_but_valid"
-                    checkpoint[bucket] = sorted(set(checkpoint.get(bucket, [])) | {stock_id})
+                    metrics["rows"] += len(records)
+                    metrics["per_stock"][stock_id] = entry
                     checkpoint["failed"] = [item for item in checkpoint.get("failed", []) if item.get("stock_id") != stock_id]
+                    checkpoint["completed"] = sorted(set(checkpoint.get("completed", [])) - {stock_id})
+                    checkpoint["no_data_but_valid"] = sorted(set(checkpoint.get("no_data_but_valid", [])) - {stock_id})
+                    if complete:
+                        metrics["newly_fetched"] += 1
+                        bucket = "completed" if all_record_dates else "no_data_but_valid"
+                        checkpoint[bucket] = sorted(set(checkpoint.get(bucket, [])) | {stock_id})
+                    else:
+                        metrics["partial_responses"] += 1
+                        metrics["failed"] += 1
+                        checkpoint["failed"].append({"stock_id": stock_id, **entry, "error_code": "PARTIAL_OBSERVATION_COVERAGE"})
                     await persist()
                 if progress_callback:
                     progress_callback(f"{dataset} completed={metrics['newly_fetched'] + metrics['failed']}/{len(pending)}")
 
-        # One task per pending stock keeps scheduling deterministic while the
-        # semaphore bounds provider concurrency.  Unlike a sentinel queue,
-        # this cannot leave unfinished queue items behind after a global fatal.
         await asyncio.gather(*(one(stock_id) for stock_id in pending))
-        metrics["retryable_pending"] = sum(1 for stock_id in stock_ids if entries.get(stock_id, {}).get("classification") == "retryable_failed")
-        metrics["permanent_failed"] = sum(1 for stock_id in stock_ids if entries.get(stock_id, {}).get("classification") == "permanent_failed")
-        metrics["reused_complete"] = sum(1 for stock_id in stock_ids if stock_id not in pending and entries.get(stock_id, {}).get("classification") in {"NEW_SUCCESS", "REUSED_COMPLETE"})
-        metrics["reused_valid_no_data"] = sum(1 for stock_id in stock_ids if stock_id not in pending and entries.get(stock_id, {}).get("classification") == "VALID_NO_DATA_FROM_PROVIDER")
-        metrics["success"] = metrics["reused_complete"] + metrics["reused_valid_no_data"] + metrics["newly_fetched"]
-        metrics["usable_success"] = metrics["reused_complete"] + sum(1 for stock_id in stock_ids if entries.get(stock_id, {}).get("classification") == "NEW_SUCCESS" and stock_id in pending)
-        metrics["no_data"] = metrics["reused_valid_no_data"] + sum(1 for stock_id in stock_ids if entries.get(stock_id, {}).get("classification") == "VALID_NO_DATA_FROM_PROVIDER" and stock_id in pending)
+
+        def is_complete(stock_id: str) -> bool:
+            covered = set(entries.get(stock_id, {}).get("covered_dates", []))
+            return requested_observations <= covered
+
+        complete_stocks = {stock_id for stock_id in stock_ids if is_complete(stock_id)}
+        metrics["reused_complete"] = sum(1 for stock_id in initial_complete if entries.get(stock_id, {}).get("classification") != "VALID_NO_DATA_FROM_PROVIDER")
+        metrics["reused_valid_no_data"] = sum(1 for stock_id in initial_complete if entries.get(stock_id, {}).get("classification") == "VALID_NO_DATA_FROM_PROVIDER")
+        metrics["success"] = len(complete_stocks)
+        metrics["usable_success"] = sum(1 for stock_id in complete_stocks if entries.get(stock_id, {}).get("verified_record_dates"))
+        metrics["no_data"] = sum(1 for stock_id in complete_stocks if not entries.get(stock_id, {}).get("verified_record_dates"))
+        metrics["permanent_failed"] = sum(1 for stock_id in stock_ids if not is_complete(stock_id) and entries.get(stock_id, {}).get("classification") == "permanent_failed")
+        metrics["retryable_pending"] = sum(1 for stock_id in stock_ids if not is_complete(stock_id) and entries.get(stock_id, {}).get("classification") != "permanent_failed")
+        metrics["verified_observations"] = sum(len(set(entries.get(stock_id, {}).get("covered_dates", [])) & requested_observations) for stock_id in stock_ids)
+        metrics["unresolved_observations"] = len(stock_ids) * len(expected_strings) - metrics["verified_observations"]
         metrics["per_stock"] = {key: value for key, value in entries.items() if key in stock_ids}
         return metrics
 
@@ -584,7 +779,11 @@ def _parse_retry_after(value: str | None) -> float | None:
         return None
 
 
-def capability_evidence(client: FinMindClient) -> dict[str, Any]:
+def _policy_hash(payload: dict[str, Any]) -> str:
+    return hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def capability_evidence(client: FinMindClient, *, source_revision: str) -> dict[str, Any]:
     datasets = [
         "TaiwanStockInstitutionalInvestorsBuySellWide",
         "TaiwanStockShareholding",
@@ -592,9 +791,53 @@ def capability_evidence(client: FinMindClient) -> dict[str, Any]:
         "TaiwanStockTradingDailyReport",
         "TaiwanStockTradingDailyReportSecIdAgg",
     ]
-    results = []
+    results: list[dict[str, Any]] = []
+
+    def append_probe(dataset: str, mode: str, production_used: bool) -> None:
+        result = asdict(client.probe(dataset, mode=mode, production_used=production_used))
+        result.update({
+            "probe_only": True,
+            "sanitized_request_mode": True,
+            "secret_values_included": False,
+        })
+        results.append(result)
+
     for dataset in datasets:
-        results.append(asdict(client.probe(dataset, mode="broad", production_used=False)))
+        append_probe(dataset, "broad", False)
         if dataset != "TaiwanStockInfo":
-            results.append(asdict(client.probe(dataset, mode="per_stock", production_used=dataset != "TaiwanStockTradingDailyReportSecIdAgg")))
-    return {"generated_at": datetime.now(timezone.utc).isoformat(), "policy": {"approved_datasets": sorted(ALLOWED_S_DATASETS), "raw_institutional_fallback": "disabled", "zero_rows_are_usable": False}, "results": results}
+            append_probe(dataset, "per_stock", dataset != "TaiwanStockTradingDailyReportSecIdAgg")
+    dataset_policy = {
+        "production_s_datasets": sorted(PRODUCTION_S_DATASETS),
+        "reference_datasets": sorted(REFERENCE_DATASETS),
+        "capability_only_datasets": sorted(CAPABILITY_ONLY_DATASETS),
+        "forbidden_datasets": sorted(FORBIDDEN_DATASETS),
+    }
+    provider_policy = {
+        "request_policy_version": REQUEST_POLICY_VERSION,
+        "normalization_policy_version": NORMALIZATION_POLICY_VERSION,
+        "checkpoint_schema_version": CHECKPOINT_SCHEMA_VERSION,
+        "incremental_checkpoint_version": INCREMENTAL_CHECKPOINT_VERSION,
+        "empty_data_requires_exact_observation_dates": True,
+        "pagination_false_fails_closed": True,
+    }
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "probe_time": datetime.now(timezone.utc).isoformat(),
+        "source_revision": source_revision,
+        "request_policy_version": REQUEST_POLICY_VERSION,
+        "normalization_policy_version": NORMALIZATION_POLICY_VERSION,
+        "dataset_policy_sha256": _policy_hash(dataset_policy),
+        "provider_policy_sha256": _policy_hash(provider_policy),
+        "dataset_policy": dataset_policy,
+        "provider_policy": provider_policy,
+        "policy": {
+            "approved_datasets": sorted(PRODUCTION_S_DATASETS),
+            "capability_only_datasets": sorted(CAPABILITY_ONLY_DATASETS),
+            "raw_institutional_fallback": "disabled",
+            "zero_rows_are_usable": False,
+            "probe_path_can_ingest": False,
+        },
+        "results": results,
+        "sanitized_request_mode": True,
+        "secret_values_included": False,
+    }

@@ -153,22 +153,22 @@ def stock_detail(stock_id: str, limit: int = Query(365, ge=1, le=1000), db: Sess
         raise HTTPException(status_code=404, detail="stock not found")
     provider_state = _provider_state(db.scalars(select(DataSyncStatus).order_by(DataSyncStatus.dataset)).all())
     latest = _current_score_date(db, provider_state)
-    return {"stock": {"stock_id": stock.stock_id, "stock_name": stock.stock_name, "market": stock.market, "industry": stock.industry}, "score": _score_dict(db, stock_id, latest), "sources": _source_status(db, stock_id), "institutional": _rows(db, InstitutionalDaily, stock_id, min(limit, 365)), "foreign_holding": _rows(db, ForeignShareholdingDaily, stock_id, min(limit, 365)), "holding_distribution": _rows(db, HoldingDistribution, stock_id, min(limit, 200)), "holding_series": _holding_chart_series(db, stock_id, min(limit, 200)), "brokers": _broker_summary(db, stock_id), "prices": _rows(db, PriceDaily, stock_id, min(limit, 365)), "score_history": _score_history(db, stock_id, min(limit, 365)), "calendar_version": CALENDAR_VERSION}
+    return {"stock": {"stock_id": stock.stock_id, "stock_name": stock.stock_name, "market": stock.market, "industry": stock.industry}, "score": _score_dict(db, stock_id, latest), "sources": _source_status(db, stock_id), "institutional": _rows(db, InstitutionalDaily, stock_id, min(limit, 365), "TaiwanStockInstitutionalInvestorsBuySellWide"), "foreign_holding": _rows(db, ForeignShareholdingDaily, stock_id, min(limit, 365), "TaiwanStockShareholding"), "holding_distribution": _rows(db, HoldingDistribution, stock_id, min(limit, 200), "TaiwanStockHoldingSharesPer"), "holding_series": _holding_chart_series(db, stock_id, min(limit, 200)), "brokers": _broker_summary(db, stock_id), "prices": _rows(db, PriceDaily, stock_id, min(limit, 365), "TaiwanStockPrice"), "score_history": _score_history(db, stock_id, min(limit, 365)), "calendar_version": CALENDAR_VERSION}
 
 
 @app.get("/api/stocks/{stock_id}/institutional")
 def institutional(stock_id: str, limit: int = Query(365, ge=1, le=1000), db: Session = Depends(get_db)) -> list[dict[str, Any]]:
-    return _rows(db, InstitutionalDaily, stock_id, limit)
+    return _rows(db, InstitutionalDaily, stock_id, limit, "TaiwanStockInstitutionalInvestorsBuySellWide")
 
 
 @app.get("/api/stocks/{stock_id}/foreign-holding")
 def foreign_holding(stock_id: str, limit: int = Query(365, ge=1, le=1000), db: Session = Depends(get_db)) -> list[dict[str, Any]]:
-    return _rows(db, ForeignShareholdingDaily, stock_id, limit)
+    return _rows(db, ForeignShareholdingDaily, stock_id, limit, "TaiwanStockShareholding")
 
 
 @app.get("/api/stocks/{stock_id}/holding-distribution")
 def holding_distribution(stock_id: str, limit: int = Query(200, ge=1, le=500), db: Session = Depends(get_db)) -> list[dict[str, Any]]:
-    return _rows(db, HoldingDistribution, stock_id, limit)
+    return _rows(db, HoldingDistribution, stock_id, limit, "TaiwanStockHoldingSharesPer")
 
 
 @app.get("/api/stocks/{stock_id}/brokers")
@@ -223,8 +223,9 @@ def _score_subqueries(latest: date | None, components: bool = False):
 
 
 def _price_subqueries():
-    latest_date = select(func.max(PriceDaily.source_date)).where(PriceDaily.stock_id == Stock.stock_id).correlate(Stock).scalar_subquery()
-    return (select(PriceDaily.close).where(PriceDaily.stock_id == Stock.stock_id, PriceDaily.source_date == latest_date).limit(1).correlate(Stock).scalar_subquery(), select(PriceDaily.change).where(PriceDaily.stock_id == Stock.stock_id, PriceDaily.source_date == latest_date).limit(1).correlate(Stock).scalar_subquery())
+    dataset = "TaiwanStockPrice"
+    latest_date = select(func.max(PriceDaily.source_date)).where(PriceDaily.stock_id == Stock.stock_id, PriceDaily.source_dataset == dataset).correlate(Stock).scalar_subquery()
+    return (select(PriceDaily.close).where(PriceDaily.stock_id == Stock.stock_id, PriceDaily.source_date == latest_date, PriceDaily.source_dataset == dataset).limit(1).correlate(Stock).scalar_subquery(), select(PriceDaily.change).where(PriceDaily.stock_id == Stock.stock_id, PriceDaily.source_date == latest_date, PriceDaily.source_dataset == dataset).limit(1).correlate(Stock).scalar_subquery())
 
 
 def _feature_subqueries(latest: date | None):
@@ -259,21 +260,21 @@ def _score_dict(db: Session, stock_id: str, latest: date | None) -> dict[str, An
     return {"score": score.score, "status": score.status, "score_version": score.score_version, "formula_hash": score.formula_hash or FORMULA_HASH, "components": score.components, "explanation": score.explanation, "coverage": score.coverage, "source_date": score.source_date, "calculated_at": score.calculated_at, "knowledge_cutoff": score.knowledge_cutoff, "input_snapshot_hash": score.input_snapshot_hash, "input_source_hashes": score.input_source_hashes}
 
 
-def _rows(db: Session, model: type[Any], stock_id: str, limit: int) -> list[dict[str, Any]]:
-    rows = db.scalars(select(model).where(model.stock_id == stock_id).order_by(model.source_date.desc()).limit(limit)).all()
+def _rows(db: Session, model: type[Any], stock_id: str, limit: int, source_dataset: str) -> list[dict[str, Any]]:
+    rows = db.scalars(select(model).where(model.stock_id == stock_id, model.source_dataset == source_dataset).order_by(model.source_date.desc()).limit(limit)).all()
     return [{key: getattr(row, key) for key in model.__table__.columns.keys() if key not in {"id", "stock_id"}} | {"stock_id": stock_id} for row in reversed(rows)]
 
 
 def _broker_summary(db: Session, stock_id: str) -> list[dict[str, Any]]:
     latest_dates = db.scalars(
         select(BrokerDaily.source_date)
-        .where(BrokerDaily.stock_id == stock_id)
+        .where(BrokerDaily.stock_id == stock_id, BrokerDaily.source_dataset == "TaiwanStockTradingDailyReport")
         .distinct()
         .order_by(BrokerDaily.source_date.desc())
         .limit(20)
     ).all()
     rows = db.scalars(
-        select(BrokerDaily).where(BrokerDaily.stock_id == stock_id, BrokerDaily.source_date.in_(latest_dates))
+        select(BrokerDaily).where(BrokerDaily.stock_id == stock_id, BrokerDaily.source_dataset == "TaiwanStockTradingDailyReport", BrokerDaily.source_date.in_(latest_dates))
     ).all()
     by_broker: dict[str, dict[str, Any]] = {}
     for row in rows:
@@ -313,18 +314,18 @@ def _source_status(db: Session, stock_id: str) -> dict[str, Any]:
     mapping = {"institutional": (InstitutionalDaily, "TaiwanStockInstitutionalInvestorsBuySellWide"), "foreign_holding": (ForeignShareholdingDaily, "TaiwanStockShareholding"), "holding_distribution": (HoldingDistribution, "TaiwanStockHoldingSharesPer"), "broker": (BrokerDaily, "TaiwanStockTradingDailyReport"), "price": (PriceDaily, "TaiwanStockPrice")}
     result: dict[str, Any] = {}
     for name, (model, dataset) in mapping.items():
-        latest = db.scalar(select(func.max(model.source_date)).where(model.stock_id == stock_id))
-        fetched = db.scalar(select(func.max(model.fetched_at)).where(model.stock_id == stock_id))
+        latest = db.scalar(select(func.max(model.source_date)).where(model.stock_id == stock_id, model.source_dataset == dataset))
+        fetched = db.scalar(select(func.max(model.fetched_at)).where(model.stock_id == stock_id, model.source_dataset == dataset))
         sync = db.get(DataSyncStatus, dataset)
         expected = sync.expected_latest_source_date if sync else None
         stock_staleness = "NO_DATA" if latest is None else ("STALE" if expected and latest < expected else "FRESH")
-        result[name] = {"provider": "FinMind", "dataset": dataset, "latest_source_date": latest, "fetched_at": fetched, "last_successful_fetch": sync.last_http_success_at if sync else None, "last_fully_successful_sync": sync.last_fully_successful_sync if sync else None, "last_usable_data_at": sync.last_usable_data_at if sync else None, "attempt_latest_source_date": sync.attempt_latest_source_date if sync else None, "expected_latest_source_date": expected, "source_age_days": (expected - latest).days if expected and latest else None, "row_count": db.scalar(select(func.count()).select_from(model).where(model.stock_id == stock_id)) or 0, "staleness": stock_staleness, "global_sync_staleness": sync.staleness_state if sync else "UNKNOWN", "fallback": "not_used"}
+        result[name] = {"provider": "FinMind", "dataset": dataset, "latest_source_date": latest, "fetched_at": fetched, "last_successful_fetch": sync.last_http_success_at if sync else None, "last_fully_successful_sync": sync.last_fully_successful_sync if sync else None, "last_usable_data_at": sync.last_usable_data_at if sync else None, "attempt_latest_source_date": sync.attempt_latest_source_date if sync else None, "expected_latest_source_date": expected, "source_age_days": (expected - latest).days if expected and latest else None, "row_count": db.scalar(select(func.count()).select_from(model).where(model.stock_id == stock_id, model.source_dataset == dataset)) or 0, "staleness": stock_staleness, "global_sync_staleness": sync.staleness_state if sync else "UNKNOWN", "fallback": "not_used"}
     result["major_shareholder_5pct"] = {"provider": "TWSE/TPEx/MOPS", "dataset": None, "status": "UNAVAILABLE_NOT_CONFIGURED", "fallback": "none"}
     return result
 
 
 def _holding_chart_series(db: Session, stock_id: str, limit: int) -> dict[str, list[dict[str, Any]]]:
-    rows = db.scalars(select(HoldingDistribution).where(HoldingDistribution.stock_id == stock_id).order_by(HoldingDistribution.source_date.desc()).limit(limit)).all()
+    rows = db.scalars(select(HoldingDistribution).where(HoldingDistribution.stock_id == stock_id, HoldingDistribution.source_dataset == "TaiwanStockHoldingSharesPer").order_by(HoldingDistribution.source_date.desc()).limit(limit)).all()
     by_date: dict[date, dict[str, float | None]] = {}
     for row in rows:
         day = by_date.setdefault(row.source_date, {"400": None, "1000": None})
