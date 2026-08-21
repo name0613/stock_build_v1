@@ -5,7 +5,7 @@ import hashlib
 import json
 from typing import Any, Callable
 
-from sqlalchemy import func, inspect, select, text
+from sqlalchemy import func, inspect, select, text, tuple_
 from sqlalchemy.orm import Session
 
 from .calendar import CALENDAR_VERSION, expected_trading_sessions, missing_sessions
@@ -215,8 +215,7 @@ def ingest_records(db: Session, dataset: str, records: list[dict[str, Any]]) -> 
         raise FinMindError("CAPABILITY_ONLY_DATASET", f"{dataset} is probe-only and cannot enter production ingestion")
     if dataset == "TaiwanStockHoldingSharesPer":
         seen_buckets: set[tuple[str, str, str]] = set()
-        existing_rows = db.scalars(select(HoldingDistribution)).all()
-        existing_by_bucket = {(row.stock_id, row.source_date.isoformat(), row.holding_shares_threshold): row for row in existing_rows if row.holding_shares_threshold is not None}
+        parsed_records: list[tuple[str, str, int | None, Any]] = []
         for row in records:
             level = _v(row, "HoldingSharesLevel", "holding_shares_level")
             if level is not None and str(level).strip().lower() not in {"total", "all"} and _v(row, "holding_shares_threshold") is None:
@@ -233,10 +232,20 @@ def ingest_records(db: Session, dataset: str, records: list[dict[str, Any]]) -> 
                 raise SchemaMismatch("SCHEMA_MISMATCH", "holding source returned a duplicate bucket for a stock/date")
             if bucket:
                 seen_buckets.add(key)
-                if parsed_threshold is not None:
-                    existing = existing_by_bucket.get((stock, source_day, parsed_threshold))
-                    if existing is not None and existing.holding_shares_level != str(level):
-                        raise SchemaMismatch("SCHEMA_MISMATCH", "holding source returned a duplicate normalized bucket across fetches")
+            parsed_records.append((stock, source_day, int(parsed_threshold) if parsed_threshold is not None else None, level))
+        scopes = {(stock, parsed_day) for stock, source_day, _, _ in parsed_records if stock and (parsed_day := _as_date(source_day)) is not None}
+        existing_rows = db.scalars(
+            select(HoldingDistribution).where(
+                tuple_(HoldingDistribution.stock_id, HoldingDistribution.source_date).in_(scopes)
+            )
+        ).all() if scopes else []
+        existing_by_bucket = {(row.stock_id, row.source_date.isoformat(), row.holding_shares_threshold): row for row in existing_rows if row.holding_shares_threshold is not None}
+        for stock, source_day, parsed_threshold, level in parsed_records:
+            if parsed_threshold is None:
+                continue
+            existing = existing_by_bucket.get((stock, source_day, parsed_threshold))
+            if existing is not None and existing.holding_shares_level != str(level):
+                raise SchemaMismatch("SCHEMA_MISMATCH", "holding source returned a duplicate normalized bucket across fetches")
     if dataset == "TaiwanStockInfo":
         latest_by_stock: dict[str, dict[str, Any]] = {}
         for row in records:
