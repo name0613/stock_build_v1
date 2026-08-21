@@ -287,7 +287,7 @@ def test_scheduled_catch_up_runs_all_phases_for_dynamic_multi_stock_universe() -
                         rows.append({"stock_id": stock_id, "date": day, "HoldingSharesLevel": "400,001-600,000", "percent": 10, "people": 1})
             return rows, {"source_date": end.isoformat()}
 
-        async def fetch_broker_stocks(self, stock_ids: list[str], start_date: str, end_date: str, record_sink=None):
+        async def fetch_broker_stocks(self, stock_ids: list[str], start_date: str, end_date: str, record_sink=None, progress_callback=None):
             rows = [{"stock_id": stock_id, "date": day, "securities_trader_id": "A", "buy_volume": 100, "sell_volume": 10} for stock_id in stock_ids for day in sessions]
             if record_sink:
                 record_sink(rows)

@@ -310,7 +310,7 @@ class FinMindClient:
         dates = [str(row.get("date") or row.get("Date") or row.get("source_date")) for row in records if row.get("date") or row.get("Date") or row.get("source_date")]
         return max(dates) if dates else None
 
-    async def fetch_broker_stocks(self, stock_ids: list[str], start_date: str, end_date: str, dataset: str = "TaiwanStockTradingDailyReport", *, record_sink: Callable[[list[dict[str, Any]]], int] | None = None) -> dict[str, Any]:
+    async def fetch_broker_stocks(self, stock_ids: list[str], start_date: str, end_date: str, dataset: str = "TaiwanStockTradingDailyReport", *, record_sink: Callable[[list[dict[str, Any]]], int] | None = None, progress_callback: Callable[[str], None] | None = None) -> dict[str, Any]:
         """Bounded async Sponsor-compatible path with checkpoint/resume semantics."""
         checkpoint_dir = self.settings.raw_root / "checkpoints"
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -407,6 +407,9 @@ class FinMindClient:
                         failed_stocks.add(stock_id)
                         metrics["stocks_failed"] = len(failed_stocks)
                         await persist()
+                finally:
+                    if progress_callback:
+                        progress_callback(f"{dataset} completed={metrics['stocks_completed']} failed={metrics['stocks_failed']}")
 
         async def worker() -> None:
             while True:
@@ -433,7 +436,7 @@ class FinMindClient:
         metrics["permanent_failed"] = len(set(checkpoint.get("permanent_failed", [])) & requested_keys)
         return metrics
 
-    async def fetch_stocks_dataset(self, stock_ids: list[str], dataset: str, start_date: str, end_date: str, *, record_sink: Callable[[list[dict[str, Any]]], int] | None = None) -> dict[str, Any]:
+    async def fetch_stocks_dataset(self, stock_ids: list[str], dataset: str, start_date: str, end_date: str, *, record_sink: Callable[[list[dict[str, Any]]], int] | None = None, progress_callback: Callable[[str], None] | None = None) -> dict[str, Any]:
         """Fetch per-stock history with a durable, workload-bound checkpoint."""
         stock_ids = sorted(set(stock_ids))
         universe_hash = hashlib.sha256(json.dumps(stock_ids, separators=(",", ":")).encode()).hexdigest()
@@ -516,6 +519,8 @@ class FinMindClient:
                 except FinMindError as exc:
                     global_fatal = exc.code in GLOBAL_PROVIDER_FAILURE_CODES
                     await mark_failure(stock_id, exc.code, "global_fatal" if global_fatal else ("permanent_failed" if exc.code == "NON_RETRYABLE_4XX" else "retryable_failed"), global_fatal=global_fatal)
+                    if progress_callback:
+                        progress_callback(f"{dataset} completed={metrics['newly_fetched'] + metrics['failed']}/{len(pending)}")
                     return
                 try:
                     # Sink per stock so an isolated provider bucket/schema row
@@ -525,6 +530,8 @@ class FinMindClient:
                             record_sink(records)
                 except SchemaMismatch:
                     await mark_failure(stock_id, "STOCK_SCHEMA_MISMATCH", "permanent_failed")
+                    if progress_callback:
+                        progress_callback(f"{dataset} completed={metrics['newly_fetched'] + metrics['failed']}/{len(pending)}")
                     return
                 dates = sorted({str(row.get("date") or row.get("source_date") or "")[:10] for row in records if row.get("date") or row.get("source_date")})
                 if not records:
@@ -550,6 +557,8 @@ class FinMindClient:
                     checkpoint[bucket] = sorted(set(checkpoint.get(bucket, [])) | {stock_id})
                     checkpoint["failed"] = [item for item in checkpoint.get("failed", []) if item.get("stock_id") != stock_id]
                     await persist()
+                if progress_callback:
+                    progress_callback(f"{dataset} completed={metrics['newly_fetched'] + metrics['failed']}/{len(pending)}")
 
         # One task per pending stock keeps scheduling deterministic while the
         # semaphore bounds provider concurrency.  Unlike a sentinel queue,

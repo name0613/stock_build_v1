@@ -589,7 +589,7 @@ async def catch_up(db: Session, client: FinMindClient, end_date: date | None = N
 
         try:
             if hasattr(client, "fetch_stocks_dataset"):
-                metrics = await client.fetch_stocks_dataset(stock_ids, dataset, (start - timedelta(days=30)).isoformat(), end.isoformat(), record_sink=sink)
+                metrics = await client.fetch_stocks_dataset(stock_ids, dataset, (start - timedelta(days=30)).isoformat(), end.isoformat(), record_sink=sink, progress_callback=progress)
                 received = int(metrics.get("rows", 0))
                 latest_dates = [_as_date(item.get("last_source_date")) for item in metrics.get("per_stock", {}).values() if item.get("last_source_date")]
                 latest = max(latest_dates, default=None)
@@ -652,7 +652,7 @@ async def catch_up(db: Session, client: FinMindClient, end_date: date | None = N
         return stored
 
     try:
-        broker_metrics = await client.fetch_broker_stocks(stock_ids, broker_start.isoformat(), end.isoformat(), record_sink=broker_sink)
+        broker_metrics = await client.fetch_broker_stocks(stock_ids, broker_start.isoformat(), end.isoformat(), record_sink=broker_sink, progress_callback=progress)
         if broker_buffer:
             stored += ingest_records(db, "TaiwanStockTradingDailyReport", broker_buffer)
             broker_buffer.clear()
