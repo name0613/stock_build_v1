@@ -203,6 +203,10 @@ def main() -> None:
             market_session=market_session_state(),
             last_job_status="DEFERRED_BEFORE_SOURCE_PUBLICATION",
             last_error_code=None,
+            last_job_started_at=None,
+            last_job_progress_at=None,
+            job_phase=None,
+            last_job_finished_at=datetime.now(timezone.utc).isoformat(),
             current_job_run_id=None,
         )
     scheduler = BlockingScheduler(timezone=settings.timezone)
