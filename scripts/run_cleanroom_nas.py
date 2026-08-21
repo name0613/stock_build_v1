@@ -68,8 +68,7 @@ def json_lines(value: str) -> list[dict[str, object]]:
     return rows
 
 
-def stack_wait_command(project: str, compose: str) -> str:
-    services = "postgres api worker frontend nginx"
+def wait_services_command(project: str, compose: str, services: str) -> str:
     return (
         f"cd {shlex.quote(project)} && "
         "for i in $(seq 1 60); do "
@@ -87,6 +86,10 @@ def stack_wait_command(project: str, compose: str) -> str:
         "done; "
         f"{compose} ps"
     )
+
+
+def stack_wait_command(project: str, compose: str) -> str:
+    return wait_services_command(project, compose, "postgres api worker frontend nginx")
 
 
 def main() -> None:
@@ -176,8 +179,12 @@ def main() -> None:
         remote(ssh, f"cd {shlex.quote(project)} && {compose} build --no-cache")
         print("cleanroom: images built", flush=True)
         evidence["build"] = {"status": "PASS", "no_cache": True, "backend_lock_sha256": backend_lock, "frontend_lock_sha256": frontend_lock}
-        remote(ssh, f"cd {shlex.quote(project)} && {compose} up -d")
-        print("cleanroom: stack started", flush=True)
+        remote(ssh, f"cd {shlex.quote(project)} && {compose} up -d postgres")
+        remote(ssh, wait_services_command(project, compose, "postgres"))
+        remote(ssh, f"cd {shlex.quote(project)} && {compose} up -d api")
+        remote(ssh, wait_services_command(project, compose, "api"))
+        remote(ssh, f"cd {shlex.quote(project)} && {compose} up -d worker frontend nginx")
+        print("cleanroom: stack started behind explicit dependency gates", flush=True)
         ps_output = remote(ssh, stack_wait_command(project, compose))
         migration_count = remote(ssh, f"cd {shlex.quote(project)} && {compose} exec -T postgres psql -U accumulation -d accumulation -Atc 'SELECT count(*) FROM schema_migrations;'")
         api_health = remote(ssh, f"curl -fsS http://127.0.0.1:18082/health")
