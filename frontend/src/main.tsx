@@ -13,6 +13,12 @@ type Detail = { stock: Stock; score: { score?: number; status: string; score_ver
 const statusLabel: Record<string, string> = { STRONG_ACCUMULATION: "Strong Accumulation", ACCUMULATION: "Accumulation", WATCH: "Watch", NO_STRONG_EVIDENCE: "No Strong Evidence", DATA_INSUFFICIENT: "Data Insufficient" };
 const datasetLabels: Record<string, string> = { institutional: "三大法人", foreign_holding: "外資持股", holding_distribution: "集保持股", broker: "分點", price: "股價／成交量", major_shareholder_5pct: "持股超過 5% 股東" };
 const MARKET_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
+const chartAxisMetadata: Record<string, { x: string; y: string; note?: string }> = {
+  "股價／Accumulation Score": { x: "來源日期（由左至右：舊 → 新）", y: "價格（元）／Score（0–100 分）", note: "Price 與 Score 單位不同，請分別看各自趨勢，不直接比較線條高度。" },
+  "法人每日 Net Buy": { x: "交易日（由左至右：舊 → 新）", y: "法人淨買超（股）" },
+  "外資實際持股比例": { x: "資料日期（由左至右：舊 → 新）", y: "外資持股比例（%）" },
+  ">400／>1000 lots 持股比例": { x: "週資料日期（由左至右：舊 → 新）", y: "持股比例（%）" },
+};
 
 function App() {
   const [summary, setSummary] = useState<Summary | null>(null);
@@ -124,7 +130,18 @@ function DetailPage({ detail, onBack }: { detail: Detail; onBack: () => void }) 
 
 function chartValues(rows: any[], field: string): (number | null)[] { return rows.map(row => row[field] == null ? null : Number.isFinite(Number(row[field])) ? Number(row[field]) : null); }
 
-function ChartCard({ title, children }: { title: string; children: React.ReactNode }) { return <section className="panel chart-card" aria-label={title}><h3>{title}</h3>{children}</section>; }
+function ChartCard({ title, children }: { title: string; children: React.ReactNode }) {
+  const axes = chartAxisMetadata[title] || { x: "資料序列（由左至右：舊 → 新）", y: "數值（依圖例）" };
+  return <section className="panel chart-card" aria-label={title}>
+    <h3>{title}</h3>
+    {children}
+    <div className="chart-axis-info" aria-label={`${title} 座標軸說明`}>
+      <span data-testid="chart-axis-x"><b>X 軸</b>{axes.x}</span>
+      <span data-testid="chart-axis-y"><b>Y 軸</b>{axes.y}</span>
+    </div>
+    {axes.note && <p className="chart-axis-note">{axes.note}</p>}
+  </section>;
+}
 function LineChart({ series }: { series: { name: string; color: string; values: (number | null)[] }[] }) { const all = series.flatMap(s => s.values).filter((value): value is number => value != null && Number.isFinite(value)); if (!all.length) return <div className="chart-empty">資料不足，無法繪製</div>; const min = Math.min(...all), max = Math.max(...all), range = max - min || 1; return <div><svg viewBox="0 0 500 180" role="img" aria-label="資料趨勢圖" className="line-chart">{series.flatMap(s => chartSegments(s.values, min, range).map((points, index) => <polyline key={`${s.name}-${index}`} fill="none" stroke={s.color} strokeWidth="2.5" points={points} />))}</svg><div className="legend">{series.map(s => <span key={s.name}><i style={{ background: s.color }} />{s.name}</span>)}</div></div>; }
 function chartSegments(values: (number | null)[], min: number, range: number): string[] { const segments: string[] = []; let current: string[] = []; values.forEach((value, index) => { if (value == null || !Number.isFinite(value)) { if (current.length > 1) segments.push(current.join(" ")); current = []; return; } current.push(`${(index / Math.max(values.length - 1, 1)) * 490 + 5},${170 - ((value - min) / range) * 150}`); }); if (current.length > 1) segments.push(current.join(" ")); return segments; }
 function Metric({ title, value, accent }: { title: string; value: number | string; accent: string }) { return <div className={`metric ${accent}`}><span>{title}</span><strong>{typeof value === "number" ? value.toLocaleString() : value}</strong></div>; }

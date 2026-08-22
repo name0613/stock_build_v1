@@ -220,6 +220,10 @@ test("detail exposes provenance formula broker caveat 5-percent unavailable and 
   await expect(page.getByText("分點資料 unavailable")).toBeVisible();
   await expect(page.getByTestId("source-major_shareholder_5pct")).toContainText("持股超過 5% 股東");
   await expect(page.getByTestId("source-major_shareholder_5pct")).toContainText("UNAVAILABLE_NOT_CONFIGURED");
+  await expect(page.getByTestId("chart-axis-x")).toHaveCount(4);
+  await expect(page.getByTestId("chart-axis-y")).toHaveCount(4);
+  await expect(page.getByText("法人淨買超（股）", { exact: false })).toBeVisible();
+  await expect(page.getByText("外資持股比例（%）", { exact: false })).toBeVisible();
   const holdingChart = page.getByRole("region", { name: ">400／>1000 lots 持股比例" });
   await expect(holdingChart.locator("polyline")).toHaveCount(4);
 });
