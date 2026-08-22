@@ -155,7 +155,7 @@ function LineChart({ series }: { series: ChartSeries[] }) {
   const height = 260;
   const leftDomain = chartDomain(leftValues);
   const rightDomain = axis.rightLabel === "Score（分）" ? { min: 0, max: 100 } : rightValues.length ? chartDomain(rightValues) : null;
-  const plot = { left: 66, right: width - (rightDomain ? 66 : 22), top: 18, bottom: height - 54 };
+  const plot = { left: 112, right: width - (rightDomain ? 90 : 22), top: 18, bottom: height - 58 };
   const leftTicks = chartTicks(leftDomain);
   const rightTicks = rightDomain ? chartTicks(rightDomain) : [];
   const timeline = [...(series.reduce((longest, item) => item.values.length > longest.length ? item.values : longest, [] as ChartPoint[]))];
@@ -185,8 +185,8 @@ function LineChart({ series }: { series: ChartSeries[] }) {
         </g>;
       })}
       <text x={(plot.left + plot.right) / 2} y={height - 7} textAnchor="middle" fill="#a9bde1" fontSize="11">X 軸：日期</text>
-      <text x="15" y={(plot.top + plot.bottom) / 2} textAnchor="middle" fill="#a9bde1" fontSize="11" transform={`rotate(-90 15 ${(plot.top + plot.bottom) / 2})`}>Y 軸：{axis.leftLabel}</text>
-      {rightDomain && <text x={width - 15} y={(plot.top + plot.bottom) / 2} textAnchor="middle" fill="#efb45f" fontSize="11" transform={`rotate(90 ${width - 15} ${(plot.top + plot.bottom) / 2})`}>Y 軸：{axis.rightLabel}</text>}
+      <text x="22" y={(plot.top + plot.bottom) / 2} textAnchor="middle" fill="#a9bde1" fontSize="11" transform={`rotate(-90 22 ${(plot.top + plot.bottom) / 2})`}>Y 軸：{axis.leftLabel}</text>
+      {rightDomain && <text x={width - 22} y={(plot.top + plot.bottom) / 2} textAnchor="middle" fill="#efb45f" fontSize="11" transform={`rotate(90 ${width - 22} ${(plot.top + plot.bottom) / 2})`}>Y 軸：{axis.rightLabel}</text>}
       {resolvedSeries.flatMap(item => chartSegments(item, item.axis, leftDomain, rightDomain, plot, timeline.length).map((points, index) => <polyline key={`${item.name}-${index}`} fill="none" stroke={item.color} strokeWidth="2.5" points={points} />))}
     </svg>
     <div className="legend">{series.map(item => <span key={item.name}><i style={{ background: item.color }} />{item.name}</span>)}</div>
