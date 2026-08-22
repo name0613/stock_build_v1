@@ -153,9 +153,9 @@ function LineChart({ series }: { series: ChartSeries[] }) {
   if (!leftValues.length && !rightValues.length) return <div className="chart-empty">資料不足，無法繪製</div>;
   const width = 640;
   const height = 260;
-  const plot = { left: 66, right: width - (rightValues.length ? 66 : 22), top: 18, bottom: height - 54 };
   const leftDomain = chartDomain(leftValues);
-  const rightDomain = rightValues.length ? chartDomain(rightValues) : null;
+  const rightDomain = axis.rightLabel === "Score（分）" ? { min: 0, max: 100 } : rightValues.length ? chartDomain(rightValues) : null;
+  const plot = { left: 66, right: width - (rightDomain ? 66 : 22), top: 18, bottom: height - 54 };
   const leftTicks = chartTicks(leftDomain);
   const rightTicks = rightDomain ? chartTicks(rightDomain) : [];
   const timeline = [...(series.reduce((longest, item) => item.values.length > longest.length ? item.values : longest, [] as ChartPoint[]))];
