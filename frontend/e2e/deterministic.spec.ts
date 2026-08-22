@@ -218,6 +218,12 @@ test("detail exposes provenance formula broker caveat 5-percent unavailable and 
   await expect(page.getByText(`Formula hash ${formulaHash}`)).toBeVisible();
   await expect(page.getByText("v6 只計入逐列驗證的正買超事件，未出現分點保持 unknown，絕不補零。", { exact: false })).toBeVisible();
   await expect(page.getByText("分點資料 unavailable")).toBeVisible();
+  await expect(page.getByRole("columnheader", { name: "買進（股）" })).toBeVisible();
+  await expect(page.getByRole("columnheader", { name: "賣出（股）" })).toBeVisible();
+  await expect(page.getByRole("columnheader", { name: "淨買（股）" })).toBeVisible();
+  await expect(page.getByRole("columnheader", { name: "正值天數（交易日）" })).toBeVisible();
+  await expect(page.getByRole("columnheader", { name: "負值天數（交易日）" })).toBeVisible();
+  await expect(page.getByText("買進、賣出、淨買皆為股數（股），不是張數；1 張 = 1,000 股。正值天數與負值天數以交易日計算。", { exact: true })).toBeVisible();
   await expect(page.getByTestId("source-major_shareholder_5pct")).toContainText("持股超過 5% 股東");
   await expect(page.getByTestId("source-major_shareholder_5pct")).toContainText("UNAVAILABLE_NOT_CONFIGURED");
   await expect(page.getByTestId("chart-axis-x")).toHaveCount(4);
