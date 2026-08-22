@@ -9,12 +9,15 @@ type HoldingStatusSnapshot = { dataset: string; market_session_required: boolean
 type WorkerHealth = { heartbeat?: { market_session?: { state?: string } } };
 type Stock = { stock_id: string; stock_name: string; market: string; industry?: string; price?: number; price_change?: number; score?: number; status: string; score_version?: string; features: Record<string, any>; coverage: Record<string, boolean>; latest_data?: string };
 type Detail = { stock: Stock; score: { score?: number; status: string; score_version?: string; formula_hash?: string; components?: Record<string, number>; explanation?: { label: string; value: number; detail: string }[]; coverage?: Record<string, boolean>; source_date?: string; calculated_at?: string; knowledge_cutoff?: string; input_snapshot_hash?: string }; sources: Record<string, { provider?: string; dataset?: string; status?: string; latest_source_date?: string; fetched_at?: string; last_successful_fetch?: string; row_count?: number; staleness?: string }>; institutional: any[]; foreign_holding: any[]; holding_distribution: any[]; holding_series: Record<string, { source_date: string; value: number | null }[]>; brokers: any[]; prices: any[]; score_history: any[] };
+type ChartPoint = { value: number | null; label?: string };
+type ChartSeries = { name: string; color: string; values: ChartPoint[]; axis?: "left" | "right" };
+type ChartAxis = { leftLabel: string; rightLabel?: string; format: "integer" | "price" | "percent" | "score" };
 
 const statusLabel: Record<string, string> = { STRONG_ACCUMULATION: "Strong Accumulation", ACCUMULATION: "Accumulation", WATCH: "Watch", NO_STRONG_EVIDENCE: "No Strong Evidence", DATA_INSUFFICIENT: "Data Insufficient" };
 const datasetLabels: Record<string, string> = { institutional: "三大法人", foreign_holding: "外資持股", holding_distribution: "集保持股", broker: "分點", price: "股價／成交量", major_shareholder_5pct: "持股超過 5% 股東" };
 const MARKET_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
 const chartAxisMetadata: Record<string, { x: string; y: string; note?: string }> = {
-  "股價／Accumulation Score": { x: "來源日期（由左至右：舊 → 新）", y: "價格（元）／Score（0–100 分）", note: "Price 與 Score 單位不同，請分別看各自趨勢，不直接比較線條高度。" },
+  "股價／Accumulation Score": { x: "來源日期（由左至右：舊 → 新）", y: "左：價格（元）／右：Score（0–100 分）", note: "Price 與 Score 使用左右兩條 Y 軸，請分別看各自趨勢，不直接比較線條高度。" },
   "法人每日 Net Buy": { x: "交易日（由左至右：舊 → 新）", y: "法人淨買超（股）" },
   "外資實際持股比例": { x: "資料日期（由左至右：舊 → 新）", y: "外資持股比例（%）" },
   ">400／>1000 lots 持股比例": { x: "週資料日期（由左至右：舊 → 新）", y: "持股比例（%）" },
@@ -123,12 +126,12 @@ function App() {
 
 function DetailPage({ detail, onBack }: { detail: Detail; onBack: () => void }) {
   const score = detail.score;
-  const holding400 = (detail.holding_series?.["400"] || []).map(point => point.value);
-  const holding1000 = (detail.holding_series?.["1000"] || []).map(point => point.value);
+  const holding400 = (detail.holding_series?.["400"] || []).map(point => ({ value: point.value, label: point.source_date }));
+  const holding1000 = (detail.holding_series?.["1000"] || []).map(point => ({ value: point.value, label: point.source_date }));
   return <div className="app-shell"><header className="topbar"><button className="back-button" onClick={onBack}>← 回到全部股票</button><div><p className="eyebrow">STOCK DETAIL · {detail.stock.stock_id}</p><h1>{detail.stock.stock_name} <span className="muted">{detail.stock.stock_id}</span></h1><p className="subtitle">{detail.stock.market} · {detail.stock.industry || "產業未提供"}</p></div><div className="header-meta">Score version<br /><strong>{score.score_version || "—"}</strong></div></header><main><div className="notice"><strong>Why this score</strong>　Final = institutional 35% + ownership 35% + broker 30% + low-profile modifier。分點是券商營業據點的彙總，不等同於一位自然人或「主力」；價格與成交量只作低調 modifier。</div><section className="detail-hero"><div><span className="eyebrow">ACCUMULATION EVIDENCE</span><div className="hero-score">{score.score == null ? "—" : score.score.toFixed(1)}</div><span className={`pill ${scoreClass(score.status)}`}>{statusLabel[score.status] || score.status}</span></div><div className="coverage-box"><h3>Data coverage</h3><Coverage coverage={score.coverage || {}} large /><p>Source date {score.source_date || "unavailable"}<br />Calculated at {formatDate(score.calculated_at)}<br />Input snapshot {score.input_snapshot_hash || "unavailable"}<br />Formula hash {score.formula_hash || "unavailable"}</p></div></section><section className="explanation-grid">{(score.explanation || []).map((part, i) => <div className="explain-card" key={part.label}><span className={`explain-index i${i}`}>0{i + 1}</span><div><strong>{part.label}</strong><b>{part.value.toFixed(1)}</b><p>{part.detail}</p></div></div>)}</section><section className="charts-grid"><ChartCard title="股價／Accumulation Score"><LineChart series={[{ name: "Price", color: "#72a7ff", values: chartValues(detail.prices, "close") }, { name: "Score", color: "#f0b35b", values: chartValues(detail.score_history, "score") }]} /></ChartCard><ChartCard title="法人每日 Net Buy"><LineChart series={[{ name: "外資", color: "#70d6a1", values: chartValues(detail.institutional, "foreign_net") }, { name: "投信", color: "#f597a5", values: chartValues(detail.institutional, "investment_trust_net") }, { name: "自營商", color: "#b7a0f5", values: chartValues(detail.institutional, "dealer_net") }]} /></ChartCard><ChartCard title="外資實際持股比例"><LineChart series={[{ name: "ForeignInvestmentSharesRatio", color: "#70d6a1", values: chartValues(detail.foreign_holding, "foreign_investment_shares_ratio") }]} /></ChartCard><ChartCard title=">400／>1000 lots 持股比例"><LineChart series={[{ name: ">400 lots", color: "#f0b35b", values: holding400 }, { name: ">1000 lots", color: "#a78bfa", values: holding1000 }]} /></ChartCard></section><section className="panel broker-detail"><div className="table-head"><div><span className="eyebrow">BROKER PERSISTENCE</span><h2>Top 20D 分點彙總</h2></div><span>持續承接證據，不指向單一受益所有人；v6 只計入逐列驗證的正買超事件，未出現分點保持 unknown，絕不補零。</span></div><div className="table-scroll"><table><thead><tr><th>券商分點</th><th>買進</th><th>賣出</th><th>淨買</th><th>正值天數</th><th>負值天數</th></tr></thead><tbody>{detail.brokers.length ? detail.brokers.map(b => <tr key={b.securities_trader_id}><td>{b.securities_trader_name || b.securities_trader_id}</td><td>{formatNumber(b.buy_volume)}</td><td>{formatNumber(b.sell_volume)}</td><td className={b.net_volume >= 0 ? "positive" : "negative"}>{formatNumber(b.net_volume)}</td><td>{b.positive_days}</td><td>{b.negative_days}</td></tr>) : <tr><td colSpan={6} className="empty">分點資料 unavailable</td></tr>}</tbody></table></div></section><section className="panel source-panel"><div><span className="eyebrow">PROVENANCE</span><h2>來源與更新時間</h2></div><div className="source-grid">{Object.entries(detail.sources).map(([key, source]) => <div className="source-card" data-testid={`source-${key}`} key={key}><span className={source.status === "UNAVAILABLE_NOT_CONFIGURED" ? "status-dot warn" : "status-dot ok"} /><div><strong>{datasetLabels[key] || key}</strong><small>{source.provider || "—"} · {source.dataset || "not configured"}<br />Source date {source.latest_source_date || "unavailable"} · {source.row_count ?? "—"} rows<br />Fetched {formatDate(source.fetched_at)} · {source.staleness || source.status || "unavailable"}</small></div></div>)}</div></section></main><footer>此頁只呈現可追溯的 accumulation evidence，不提供投資建議。</footer></div>;
 }
 
-function chartValues(rows: any[], field: string): (number | null)[] { return rows.map(row => row[field] == null ? null : Number.isFinite(Number(row[field])) ? Number(row[field]) : null); }
+function chartValues(rows: any[], field: string): ChartPoint[] { return rows.map(row => ({ value: row[field] == null ? null : Number.isFinite(Number(row[field])) ? Number(row[field]) : null, label: row.source_date || row.date })); }
 
 function ChartCard({ title, children }: { title: string; children: React.ReactNode }) {
   const axes = chartAxisMetadata[title] || { x: "資料序列（由左至右：舊 → 新）", y: "數值（依圖例）" };
@@ -142,8 +145,76 @@ function ChartCard({ title, children }: { title: string; children: React.ReactNo
     {axes.note && <p className="chart-axis-note">{axes.note}</p>}
   </section>;
 }
-function LineChart({ series }: { series: { name: string; color: string; values: (number | null)[] }[] }) { const all = series.flatMap(s => s.values).filter((value): value is number => value != null && Number.isFinite(value)); if (!all.length) return <div className="chart-empty">資料不足，無法繪製</div>; const min = Math.min(...all), max = Math.max(...all), range = max - min || 1; return <div><svg viewBox="0 0 500 180" role="img" aria-label="資料趨勢圖" className="line-chart">{series.flatMap(s => chartSegments(s.values, min, range).map((points, index) => <polyline key={`${s.name}-${index}`} fill="none" stroke={s.color} strokeWidth="2.5" points={points} />))}</svg><div className="legend">{series.map(s => <span key={s.name}><i style={{ background: s.color }} />{s.name}</span>)}</div></div>; }
-function chartSegments(values: (number | null)[], min: number, range: number): string[] { const segments: string[] = []; let current: string[] = []; values.forEach((value, index) => { if (value == null || !Number.isFinite(value)) { if (current.length > 1) segments.push(current.join(" ")); current = []; return; } current.push(`${(index / Math.max(values.length - 1, 1)) * 490 + 5},${170 - ((value - min) / range) * 150}`); }); if (current.length > 1) segments.push(current.join(" ")); return segments; }
+function LineChart({ series }: { series: ChartSeries[] }) {
+  const axis = chartAxisFor(series);
+  const resolvedSeries = series.map(item => ({ ...item, axis: item.axis || (axis.rightLabel && item.name === "Score" ? "right" : "left") as "left" | "right" }));
+  const leftValues = resolvedSeries.flatMap(item => item.axis === "left" ? item.values.map(point => point.value) : []).filter((value): value is number => value != null && Number.isFinite(value));
+  const rightValues = resolvedSeries.flatMap(item => item.axis === "right" ? item.values.map(point => point.value) : []).filter((value): value is number => value != null && Number.isFinite(value));
+  if (!leftValues.length && !rightValues.length) return <div className="chart-empty">資料不足，無法繪製</div>;
+  const width = 640;
+  const height = 260;
+  const plot = { left: 66, right: width - (rightValues.length ? 66 : 22), top: 18, bottom: height - 54 };
+  const leftDomain = chartDomain(leftValues);
+  const rightDomain = rightValues.length ? chartDomain(rightValues) : null;
+  const leftTicks = chartTicks(leftDomain);
+  const rightTicks = rightDomain ? chartTicks(rightDomain) : [];
+  const timeline = [...(series.reduce((longest, item) => item.values.length > longest.length ? item.values : longest, [] as ChartPoint[]))];
+  const xTickIndexes = chartTickIndexes(timeline.length);
+  const axisDescription = rightDomain ? `左軸 ${axis.leftLabel}、右軸 ${axis.rightLabel}` : axis.leftLabel;
+  return <div>
+    <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`資料趨勢圖；X 軸為日期；Y 軸為${axisDescription}`} className="line-chart">
+      {leftTicks.map((value, index) => {
+        const y = chartY(value, leftDomain, plot);
+        return <g key={`left-tick-${index}`}>
+          <line x1={plot.left} x2={plot.right} y1={y} y2={y} stroke="#263b64" strokeWidth="1" />
+          <text data-testid="chart-y-tick" x={plot.left - 9} y={y + 4} textAnchor="end" fill="#8fa3c8" fontSize="11">{formatAxisTick(value, axis.format)}</text>
+        </g>;
+      })}
+      {rightDomain && rightTicks.map((value, index) => {
+        const y = chartY(value, rightDomain, plot);
+        return <text data-testid="chart-y-tick" key={`right-tick-${index}`} x={plot.right + 9} y={y + 4} textAnchor="start" fill="#efb45f" fontSize="11">{formatAxisTick(value, "score")}</text>;
+      })}
+      <line x1={plot.left} x2={plot.left} y1={plot.top} y2={plot.bottom} stroke="#5574a9" strokeWidth="1.2" />
+      <line x1={plot.right} x2={plot.right} y1={plot.top} y2={plot.bottom} stroke={rightDomain ? "#9b6e35" : "#5574a9"} strokeWidth="1.2" />
+      <line x1={plot.left} x2={plot.right} y1={plot.bottom} y2={plot.bottom} stroke="#5574a9" strokeWidth="1.2" />
+      {xTickIndexes.map(index => {
+        const x = chartX(index, Math.max(timeline.length, 1), plot);
+        return <g key={`x-tick-${index}`}>
+          <line x1={x} x2={x} y1={plot.bottom} y2={plot.bottom + 5} stroke="#5574a9" strokeWidth="1" />
+          <text data-testid="chart-x-tick" x={x} y={plot.bottom + 20} textAnchor="middle" fill="#8fa3c8" fontSize="11">{timeline[index]?.label ? formatChartDate(timeline[index].label) : `資料點 ${index + 1}`}</text>
+        </g>;
+      })}
+      <text x={(plot.left + plot.right) / 2} y={height - 7} textAnchor="middle" fill="#a9bde1" fontSize="11">X 軸：日期</text>
+      <text x="15" y={(plot.top + plot.bottom) / 2} textAnchor="middle" fill="#a9bde1" fontSize="11" transform={`rotate(-90 15 ${(plot.top + plot.bottom) / 2})`}>Y 軸：{axis.leftLabel}</text>
+      {rightDomain && <text x={width - 15} y={(plot.top + plot.bottom) / 2} textAnchor="middle" fill="#efb45f" fontSize="11" transform={`rotate(90 ${width - 15} ${(plot.top + plot.bottom) / 2})`}>Y 軸：{axis.rightLabel}</text>}
+      {resolvedSeries.flatMap(item => chartSegments(item, item.axis, leftDomain, rightDomain, plot, timeline.length).map((points, index) => <polyline key={`${item.name}-${index}`} fill="none" stroke={item.color} strokeWidth="2.5" points={points} />))}
+    </svg>
+    <div className="legend">{series.map(item => <span key={item.name}><i style={{ background: item.color }} />{item.name}</span>)}</div>
+  </div>;
+}
+
+function chartAxisFor(series: ChartSeries[]): ChartAxis {
+  const names = new Set(series.map(item => item.name));
+  if (names.has("Price") && names.has("Score")) return { leftLabel: "價格（元）", rightLabel: "Score（分）", format: "price" };
+  if (names.has("ForeignInvestmentSharesRatio") || names.has(">400 lots") || names.has(">1000 lots")) return { leftLabel: names.has("ForeignInvestmentSharesRatio") ? "外資持股比例（%）" : "持股比例（%）", format: "percent" };
+  return { leftLabel: "法人淨買超（股）", format: "integer" };
+}
+
+function chartDomain(values: number[]): { min: number; max: number } {
+  if (!values.length) return { min: 0, max: 1 };
+  const minValue = Math.min(...values);
+  const maxValue = Math.max(...values);
+  const padding = minValue === maxValue ? Math.max(Math.abs(minValue) * 0.1, 1) : (maxValue - minValue) * 0.08;
+  return { min: minValue - padding, max: maxValue + padding };
+}
+
+function chartTicks(domain: { min: number; max: number }): number[] { return Array.from({ length: 5 }, (_, index) => domain.max - ((domain.max - domain.min) * index) / 4); }
+function chartTickIndexes(length: number): number[] { if (length <= 1) return length ? [0] : []; return Array.from({ length: Math.min(5, length) }, (_, index) => Math.round((index * (length - 1)) / (Math.min(5, length) - 1))); }
+function chartX(index: number, length: number, plot: { left: number; right: number }): number { return plot.left + (index / Math.max(length - 1, 1)) * (plot.right - plot.left); }
+function chartY(value: number, domain: { min: number; max: number }, plot: { top: number; bottom: number }): number { return plot.bottom - ((value - domain.min) / (domain.max - domain.min || 1)) * (plot.bottom - plot.top); }
+function formatAxisTick(value: number, format: ChartAxis["format"]): string { if (format === "price") return value.toFixed(2); if (format === "percent") return `${value.toFixed(2)}%`; if (format === "score") return Math.round(value).toString(); return Math.round(value).toLocaleString("zh-TW"); }
+function formatChartDate(value?: string): string { const match = String(value || "").match(/\d{4}-(\d{2})-(\d{2})/); return match ? `${match[1]}/${match[2]}` : String(value || "").slice(0, 10); }
+function chartSegments(series: ChartSeries & { axis: "left" | "right" }, axis: "left" | "right", leftDomain: { min: number; max: number }, rightDomain: { min: number; max: number } | null, plot: { left: number; right: number; top: number; bottom: number }, timelineLength: number): string[] { const domain = axis === "right" && rightDomain ? rightDomain : leftDomain; const segments: string[] = []; let current: string[] = []; series.values.forEach((point, index) => { const value = point.value; if (value == null || !Number.isFinite(value)) { if (current.length > 1) segments.push(current.join(" ")); current = []; return; } current.push(`${chartX(index, timelineLength, plot)},${chartY(value, domain, plot)}`); }); if (current.length > 1) segments.push(current.join(" ")); return segments; }
 function Metric({ title, value, accent }: { title: string; value: number | string; accent: string }) { return <div className={`metric ${accent}`}><span>{title}</span><strong>{typeof value === "number" ? value.toLocaleString() : value}</strong></div>; }
 function Coverage({ coverage, large = false }: { coverage: Record<string, boolean>; large?: boolean }) { const keys = ["InstitutionalDataAvailable", "ForeignHoldingDataAvailable", "HoldingDistributionAvailable", "BrokerDataAvailable", "PriceDataAvailable"]; const count = keys.filter(k => coverage[k]).length; return <span className={large ? "coverage large" : "coverage"} title={keys.map(k => `${k}: ${coverage[k] ? "available" : "missing"}`).join("\n")}>{count}/5 sources</span>; }
 function formatNumber(value: any) { return value == null || Number.isNaN(Number(value)) ? "—" : Number(value).toLocaleString("zh-TW", { maximumFractionDigits: 2 }); }
