@@ -1,0 +1,77 @@
+{
+  "format": "fail-closed-remediation-evidence-v2",
+  "captured_at": "2026-08-21T05:44:13.3001822Z",
+  "source_revision": "522cd2991c938dd41f6ca2015e5614477d84528e",
+  "score_version": "s-only-v4",
+  "formula_hash": "6996b96ab431d160cd20c29bee6bb1d0ba04be519d024be8a319e03817a47bb8",
+  "runtime_provider_gate": {
+    "provider_status": "PROVIDER_UNAVAILABLE",
+    "provider_reason_code": "QUOTA_EXHAUSTED",
+    "numeric_scores_allowed": false,
+    "stock_count": 2148,
+    "current_latest_score_date": null,
+    "historical_latest_score_date": "2026-08-20",
+    "data_insufficient_count": 2148,
+    "rankings_item_count": 0,
+    "current_stock_page_non_null_score_count": 0,
+    "detail_2330_score": null,
+    "detail_2330_status": "DATA_INSUFFICIENT",
+    "historical_scores_provenance_bound": true,
+    "observed": "PASS"
+  },
+  "worker_contract": {
+    "status": "ok",
+    "ready": true,
+    "scheduler_ready": true,
+    "stale": false,
+    "job_progress_active": false,
+    "last_job_status": "PARTIAL",
+    "last_error_code": "QUOTA_EXHAUSTED"
+  },
+  "authoritative_coverage_gate": {
+    "partial_dataset_can_publish_numeric_scores": false,
+    "latest_source_date_alone_is_sufficient": false,
+    "required_dataset_statuses": ["SUCCESS", "REUSED"],
+    "required_staleness": "FRESH",
+    "incomplete_checkpoint_produces_current_score": false
+  },
+  "hermetic_regression_cases": [
+    {
+      "test": "test_provider_failure_suppresses_existing_numeric_scores",
+      "parameters": ["QUOTA_EXHAUSTED", "ACCESS_DENIED", "AUTHENTICATION_FAILED", "SCHEMA_MISMATCH"],
+      "observed": "PASS"
+    },
+    {
+      "test": "test_provider_partial_coverage_suppresses_existing_numeric_scores",
+      "parameters": ["FAILED", "PARTIAL"],
+      "observed": "PASS"
+    },
+    {
+      "test": "test_complete_authoritative_sync_is_required_before_current_scores_are_served",
+      "observed": "PASS"
+    },
+    {
+      "test": "test_partial_sync_state_cannot_report_authoritative_freshness",
+      "observed": "PASS"
+    },
+    {
+      "test": "test_capability_broker_rows_cannot_change_s4_features_score_api_or_provenance",
+      "observed": "PASS"
+    }
+  ],
+  "backend_tests": {
+    "tests": 80,
+    "passed": 80,
+    "failed": 0,
+    "junit_sha256": "39499f65473389fb262e7f6da025cc7d18f1a137df6fa23daac4c46c1486c1c2"
+  },
+  "machine_sources": [
+    "test_results/backend-junit.xml",
+    "test_results/frontend-e2e-junit.xml",
+    "deployment_evidence/NAS_DEPLOYMENT_EVIDENCE.json",
+    "deployment_evidence/SOURCE_CHECKPOINT_REMEDIATION_EVIDENCE.json"
+  ],
+  "status": "PASS",
+  "secrets_included": false,
+  "sanitized": true
+}

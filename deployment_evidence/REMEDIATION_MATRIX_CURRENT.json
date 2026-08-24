@@ -1,0 +1,95 @@
+{
+  "format": "production-safety-remediation-v2",
+  "acceptance_run_id": "20260821T144011Z-45b1566",
+  "source_revision": "45b1566fe7dc3262829351b402c5ccc08150d113",
+  "deployed_source_revision": "45b1566fe7dc3262829351b402c5ccc08150d113",
+  "properties": [
+    {
+      "property": "closed-market freshness and monitoring semantics",
+      "status": "PASS",
+      "evidence": [
+        "RUN_METADATA.json",
+        "NAS_DEPLOYMENT_EVIDENCE.json",
+        "backend-junit.xml"
+      ]
+    },
+    {
+      "property": "source checkpoint expected-observation coverage",
+      "status": "PASS",
+      "evidence": [
+        "backend-junit.xml",
+        "FINMIND_CAPABILITY_EVIDENCE.json"
+      ]
+    },
+    {
+      "property": "current score fail-closed provider gate",
+      "status": "PASS",
+      "evidence": [
+        "backend-junit.xml",
+        "frontend-e2e-junit.xml",
+        "BROWSER_ACCEPTANCE_EVIDENCE.json"
+      ]
+    },
+    {
+      "property": "broker capability source isolation",
+      "status": "PASS",
+      "evidence": [
+        "BROKER_SOURCE_ISOLATION_EVIDENCE.json",
+        "backend-junit.xml"
+      ]
+    },
+    {
+      "property": "clean-room Docker/restart/migration",
+      "status": "PASS",
+      "evidence": [
+        "CLEANROOM_DOCKER_EVIDENCE.json"
+      ]
+    },
+    {
+      "property": "NAS persistence and revision binding",
+      "status": "PASS",
+      "evidence": [
+        "NAS_COMPOSE_PERSISTENCE_EVIDENCE.json",
+        "NAS_RUNTIME_METADATA_EVIDENCE.json"
+      ]
+    },
+    {
+      "property": "PIT historical immutability",
+      "status": "PASS",
+      "evidence": [
+        "PIT_POSTGRES_EVIDENCE.json"
+      ]
+    },
+    {
+      "property": "frontend/API/E2E contract",
+      "status": "PASS",
+      "evidence": [
+        "frontend-e2e-junit.xml",
+        "BROWSER_ACCEPTANCE_EVIDENCE.json"
+      ]
+    },
+    {
+      "property": "quota multi-renewal/full-market completion",
+      "status": "PARTIAL_NOT_PROVEN",
+      "evidence": [
+        "QUOTA_BUDGET_EVIDENCE.json",
+        "FINMIND_PROVIDER_QUOTA_EVIDENCE.json",
+        "CATCH_UP_ATTEMPT_EVIDENCE.json"
+      ]
+    },
+    {
+      "property": "live broker completeness/omitted-branch semantics",
+      "status": "CONTRACT_BOUND_FAIL_CLOSED_PASS",
+      "live_provider_completeness": "NOT_PROVEN_UNTIL_FULL_MARKET_RUN",
+      "evidence": [
+        "FINMIND_CAPABILITY_EVIDENCE.json",
+        "BROKER_SOURCE_ISOLATION_EVIDENCE.json",
+        "backend-junit.xml"
+      ]
+    }
+  ],
+  "overall_status": "PARTIAL_NOT_PROVEN",
+  "reason": "Current source/runtime safety gates pass and the latest exact-revision JobRun is real, but it ended PARTIAL/QUOTA_EXHAUSTED; immutable acceptance must not claim full-market completion or live provider completeness before quota-aware checkpoint cycles prove them.",
+  "secrets_included": false,
+  "sanitized": true
+}

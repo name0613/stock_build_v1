@@ -1,0 +1,230 @@
+{
+  "config": {
+    "argv": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "D:\\大戶緩慢建倉\\frontend\\node_modules\\@playwright\\test\\cli.js",
+      "test",
+      "--reporter=junit,json"
+    ],
+    "configFile": "D:\\大戶緩慢建倉\\frontend\\playwright.config.ts",
+    "rootDir": "D:/大戶緩慢建倉/frontend/e2e",
+    "failOnFlakyTests": false,
+    "forbidOnly": false,
+    "fullyParallel": false,
+    "globalSetup": null,
+    "globalTeardown": null,
+    "globalTimeout": 0,
+    "grep": {},
+    "grepInvert": null,
+    "maxFailures": 0,
+    "metadata": {
+      "base_url": "http://192.168.31.138:18080",
+      "acceptance_run_id": "20260821-remediation-522cd29",
+      "source_revision": "522cd2991c938dd41f6ca2015e5614477d84528e",
+      "score_version": "s-only-v4",
+      "formula_hash": "6996b96ab431d160cd20c29bee6bb1d0ba04be519d024be8a319e03817a47bb8",
+      "frontend_image_digest": "sha256:eb7608264dda10cdfd7ee9b757923cd5cbd0c7506349a4b5e1543a7f35101093",
+      "actualWorkers": 1
+    },
+    "preserveOutput": "always",
+    "projects": [
+      {
+        "outputDir": "D:/大戶緩慢建倉/frontend/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "base_url": "http://192.168.31.138:18080",
+          "acceptance_run_id": "20260821-remediation-522cd29",
+          "source_revision": "522cd2991c938dd41f6ca2015e5614477d84528e",
+          "score_version": "s-only-v4",
+          "formula_hash": "6996b96ab431d160cd20c29bee6bb1d0ba04be519d024be8a319e03817a47bb8",
+          "frontend_image_digest": "sha256:eb7608264dda10cdfd7ee9b757923cd5cbd0c7506349a4b5e1543a7f35101093",
+          "actualWorkers": 1
+        },
+        "id": "",
+        "name": "",
+        "testDir": "D:/大戶緩慢建倉/frontend/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "**/*.@(spec|test).?(c|m)[jt]s?(x)"
+        ],
+        "timeout": 30000
+      }
+    ],
+    "quiet": false,
+    "reporter": [
+      [
+        "junit"
+      ],
+      [
+        "json"
+      ]
+    ],
+    "reportSlowTests": {
+      "max": 5,
+      "threshold": 300000
+    },
+    "shard": null,
+    "tags": [],
+    "updateSnapshots": "missing",
+    "updateSourceMethod": "patch",
+    "version": "1.62.1",
+    "workers": 6,
+    "webServer": null
+  },
+  "suites": [
+    {
+      "title": "dashboard.spec.ts",
+      "file": "dashboard.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [
+        {
+          "title": "dashboard loads and exposes evidence controls",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "",
+              "projectName": "",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 326,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-08-21T05:44:05.355Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "90cda532ab82d274b30b-ec3aa260e27af6d468b1",
+          "file": "dashboard.spec.ts",
+          "line": 3,
+          "column": 1
+        },
+        {
+          "title": "search and insufficient-data state are visible",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "",
+              "projectName": "",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 295,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-08-21T05:44:05.767Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "90cda532ab82d274b30b-06fc3ac0c6f945831336",
+          "file": "dashboard.spec.ts",
+          "line": 17,
+          "column": 1
+        },
+        {
+          "title": "NAS detail exposes S-level charts, provenance and missing-data gaps",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "",
+              "projectName": "",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 963,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-08-21T05:44:06.069Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "90cda532ab82d274b30b-87d8c2d730d912b74bc4",
+          "file": "dashboard.spec.ts",
+          "line": 29,
+          "column": 1
+        },
+        {
+          "title": "filters, rankings, freshness and score hash are exposed",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "",
+              "projectName": "",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 707,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-08-21T05:44:07.038Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "90cda532ab82d274b30b-d10cc183b8a8f850defc",
+          "file": "dashboard.spec.ts",
+          "line": 48,
+          "column": 1
+        }
+      ]
+    }
+  ],
+  "errors": [],
+  "stats": {
+    "startTime": "2026-08-21T05:44:04.879Z",
+    "duration": 2919.8779999999997,
+    "expected": 4,
+    "skipped": 0,
+    "unexpected": 0,
+    "flaky": 0
+  }
+}

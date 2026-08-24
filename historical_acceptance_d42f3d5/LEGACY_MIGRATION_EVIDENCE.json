@@ -1,0 +1,13 @@
+{
+  "captured_at": "2026-08-20T18:16:00Z",
+  "database_dialect": "postgresql",
+  "migration": "004_seed_legacy_source_revisions.sql",
+  "legacy_rows_seeded": 5,
+  "source_revisions_after_backfill": 5,
+  "fetched_at_preserved_rows": 5,
+  "correction_revision_count": 2,
+  "backfill_pass": true,
+  "correction_preserves_original_pass": true,
+  "secrets_included": false,
+  "sanitized": true
+}

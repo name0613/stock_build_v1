@@ -1,0 +1,19 @@
+{
+  "format": "cleanroom-docker-acceptance-v2",
+  "acceptance_run_id": "20260821T021302Z-d42f3d5",
+  "source_revision": "d42f3d5ed53b3fd636492c3aa001d46ae9941e06",
+  "evidence_file": "CLEANROOM_DOCKER_EVIDENCE.json",
+  "verification_scope": "isolated NAS source archive and disposable Docker Compose project with empty PostgreSQL volume",
+  "build_status": "PASS",
+  "build_no_cache": true,
+  "full_stack_status": "PASS",
+  "services": ["postgres", "api", "worker", "frontend", "nginx"],
+  "migration_from_empty_database": true,
+  "worker_image_source_bound": true,
+  "restart_persistence_status": "PASS",
+  "schema_migrations_persisted": true,
+  "job_runs_not_lost": true,
+  "cleanup_complete": true,
+  "secrets_included": false,
+  "sanitized": true
+}

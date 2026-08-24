@@ -1,0 +1,71 @@
+{
+  "format": "source-checkpoint-observation-evidence-v1",
+  "captured_at": "2026-08-21T05:44:13.3001822Z",
+  "source_revision": "522cd2991c938dd41f6ca2015e5614477d84528e",
+  "checkpoint_schema_version": "2026-08-21-v3-observation-bound",
+  "incremental_checkpoint_version": "2026-08-21-incremental-v4",
+  "request_policy_version": "finmind-request-policy-v4-observation-coverage",
+  "normalization_policy_version": "s-only-normalization-v4-probe-isolated",
+  "contracts": {
+    "daily_expected_observations": "versioned Taiwan trading sessions",
+    "holding_expected_observations": "Friday weekly publications",
+    "coverage_grants": [
+      "exact returned and accepted stock/date observation",
+      "explicit validated no-data semantic naming the exact observation"
+    ],
+    "incomplete_pagination": "retryable and grants zero coverage",
+    "partial_range": "PARTIAL_RETRYABLE with unresolved observations persisted"
+  },
+  "production_runtime": {
+    "TaiwanStockInstitutionalInvestorsBuySellWide": {
+      "status": "FAILED",
+      "staleness": "ERROR",
+      "fatal_code": "QUOTA_EXHAUSTED",
+      "observation_cadence": "trading_session",
+      "expected_observations_per_stock": 42,
+      "verified_observations": 76793,
+      "unresolved_observations": 13423,
+      "retryable_pending_stocks": 2148,
+      "success_stocks": 0,
+      "selection_policy": "sorted_stock_id_observation_resume",
+      "false_complete_observed": false
+    },
+    "TaiwanStockShareholding": {
+      "status": "PARTIAL",
+      "staleness": "PARTIAL",
+      "observation_cadence": "trading_session",
+      "expected_observations_per_stock": 42,
+      "verified_observations": 80709,
+      "unresolved_observations": 9507,
+      "partial_responses": 1980,
+      "retryable_pending_stocks": 2148,
+      "success_stocks": 0,
+      "selection_policy": "sorted_stock_id_observation_resume",
+      "false_complete_observed": false
+    }
+  },
+  "regression_tests": [
+    "test_source_checkpoint_resumes_finite_quota_without_repeating_completed_stock",
+    "test_source_checkpoint_reuses_covered_history_when_window_moves_forward",
+    "test_partial_daily_range_keeps_unreturned_sessions_pending_across_restart",
+    "test_weekly_holding_checkpoint_retries_unreturned_publication",
+    "test_explicit_valid_no_data_covers_only_named_observation",
+    "test_incomplete_pagination_cannot_create_checkpoint_coverage",
+    "test_partial_sync_state_cannot_report_authoritative_freshness"
+  ],
+  "backend_junit": {
+    "path": "test_results/backend-junit.xml",
+    "sha256": "39499f65473389fb262e7f6da025cc7d18f1a137df6fa23daac4c46c1486c1c2",
+    "tests": 80,
+    "passed": 80,
+    "failed": 0
+  },
+  "machine_sources": [
+    "test_results/backend-junit.xml",
+    "deployment_evidence/NAS_DEPLOYMENT_EVIDENCE.json",
+    "deployment_evidence/FINMIND_CAPABILITY_EVIDENCE.json"
+  ],
+  "status": "PASS",
+  "secrets_included": false,
+  "sanitized": true
+}

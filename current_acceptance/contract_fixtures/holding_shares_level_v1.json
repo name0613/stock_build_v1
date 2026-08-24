@@ -1,0 +1,27 @@
+{
+  "schema_version": "finmind-holding-shares-level-v1",
+  "dataset": "TaiwanStockHoldingSharesPer",
+  "sanitized": true,
+  "canonical_levels": [
+    {"label": "1-999", "threshold": 1},
+    {"label": "1,000-5,000", "threshold": 1000},
+    {"label": "5,001-10,000", "threshold": 5001},
+    {"label": "10,001-15,000", "threshold": 10001},
+    {"label": "15,001-20,000", "threshold": 15001},
+    {"label": "20,001-30,000", "threshold": 20001},
+    {"label": "30,001-40,000", "threshold": 30001},
+    {"label": "40,001-50,000", "threshold": 40001},
+    {"label": "50,001-100,000", "threshold": 50001},
+    {"label": "100,001-200,000", "threshold": 100001},
+    {"label": "200,001-400,000", "threshold": 200001},
+    {"label": "400,001-600,000", "threshold": 400001},
+    {"label": "600,001-800,000", "threshold": 600001},
+    {"label": "800,001-1,000,000", "threshold": 800001},
+    {"label": "more than 1,000,001", "threshold": 1000001}
+  ],
+  "required_fields": ["percent", "people", "shares"],
+  "relevant_thresholds": [400001, 600001, 800001, 1000001],
+  "completeness_policy": "all canonical thresholds exactly once; all required fields non-null; unknown thresholds fail closed",
+  "metadata_levels_ignored": ["all", "total", "差異數調整（說明4）"],
+  "contains_credentials": false
+}

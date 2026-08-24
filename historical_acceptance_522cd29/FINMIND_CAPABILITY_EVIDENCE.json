@@ -1,0 +1,354 @@
+{
+  "generated_at": "2026-08-21T05:41:01.263871+00:00",
+  "probe_time": "2026-08-21T05:41:01.263915+00:00",
+  "source_revision": "522cd2991c938dd41f6ca2015e5614477d84528e",
+  "request_policy_version": "finmind-request-policy-v4-observation-coverage",
+  "normalization_policy_version": "s-only-normalization-v4-probe-isolated",
+  "dataset_policy_sha256": "cfc1b4436cc4bd56786ea51e2d09771b45d9b191c45b965f69d6b556ef19b705",
+  "provider_policy_sha256": "2115d8f01808e37bf3990d5edcf60f4781d15b8b1f1d0fa0efd38f5df9f5eafb",
+  "dataset_policy": {
+    "production_s_datasets": [
+      "TaiwanStockHoldingSharesPer",
+      "TaiwanStockInstitutionalInvestorsBuySellWide",
+      "TaiwanStockShareholding",
+      "TaiwanStockTradingDailyReport"
+    ],
+    "reference_datasets": [
+      "TaiwanSecuritiesTraderInfo",
+      "TaiwanStockInfo",
+      "TaiwanStockPrice"
+    ],
+    "capability_only_datasets": [
+      "TaiwanStockTradingDailyReportSecIdAgg"
+    ],
+    "forbidden_datasets": [
+      "TaiwanDailyShortSaleBalances",
+      "TaiwanStockActiveETFHolding",
+      "TaiwanStockActiveETFHoldingChange",
+      "TaiwanStockBlockTrade",
+      "TaiwanStockBlockTradingDailyReport",
+      "TaiwanStockGovernmentBankBuySell",
+      "TaiwanStockIndustryChainMoneyFlow",
+      "TaiwanStockMarginMaintenance",
+      "TaiwanStockMarginPurchaseShortSale",
+      "TaiwanStockPriceTick",
+      "TaiwanStockSecuritiesLending"
+    ]
+  },
+  "provider_policy": {
+    "request_policy_version": "finmind-request-policy-v4-observation-coverage",
+    "normalization_policy_version": "s-only-normalization-v4-probe-isolated",
+    "checkpoint_schema_version": "2026-08-21-v3-observation-bound",
+    "incremental_checkpoint_version": "2026-08-21-incremental-v4",
+    "empty_data_requires_exact_observation_dates": true,
+    "pagination_false_fails_closed": true
+  },
+  "policy": {
+    "approved_datasets": [
+      "TaiwanStockHoldingSharesPer",
+      "TaiwanStockInstitutionalInvestorsBuySellWide",
+      "TaiwanStockShareholding",
+      "TaiwanStockTradingDailyReport"
+    ],
+    "capability_only_datasets": [
+      "TaiwanStockTradingDailyReportSecIdAgg"
+    ],
+    "raw_institutional_fallback": "disabled",
+    "zero_rows_are_usable": false,
+    "probe_path_can_ingest": false
+  },
+  "results": [
+    {
+      "dataset": "TaiwanStockInstitutionalInvestorsBuySellWide",
+      "accessible": false,
+      "method": "GET /api/v4/data",
+      "latest_date": null,
+      "sample_row_count": 0,
+      "permission_error": "QUOTA_EXHAUSTED",
+      "status_code": 402,
+      "response_fields": [],
+      "requested_shape": {
+        "data_id": null,
+        "start_date": "2026-07-22",
+        "end_date": "2026-08-21",
+        "securities_trader_id": null,
+        "mode": "broad"
+      },
+      "production_used": false,
+      "query_mode": "broad",
+      "data_id_required": true,
+      "returned_range": {
+        "start": null,
+        "end": null
+      },
+      "classification": "QUOTA_EXHAUSTED",
+      "quota_plan": "not exposed by provider response",
+      "probe_only": true,
+      "sanitized_request_mode": true,
+      "secret_values_included": false
+    },
+    {
+      "dataset": "TaiwanStockInstitutionalInvestorsBuySellWide",
+      "accessible": false,
+      "method": "GET /api/v4/data",
+      "latest_date": null,
+      "sample_row_count": 0,
+      "permission_error": "QUOTA_EXHAUSTED",
+      "status_code": 402,
+      "response_fields": [],
+      "requested_shape": {
+        "data_id": "2330",
+        "start_date": "2026-07-22",
+        "end_date": "2026-08-21",
+        "securities_trader_id": null,
+        "mode": "per_stock"
+      },
+      "production_used": false,
+      "query_mode": "per_stock",
+      "data_id_required": true,
+      "returned_range": {
+        "start": null,
+        "end": null
+      },
+      "classification": "QUOTA_EXHAUSTED",
+      "quota_plan": "not exposed by provider response",
+      "probe_only": true,
+      "sanitized_request_mode": true,
+      "secret_values_included": false
+    },
+    {
+      "dataset": "TaiwanStockShareholding",
+      "accessible": false,
+      "method": "GET /api/v4/data",
+      "latest_date": null,
+      "sample_row_count": 0,
+      "permission_error": "QUOTA_EXHAUSTED",
+      "status_code": 402,
+      "response_fields": [],
+      "requested_shape": {
+        "data_id": null,
+        "start_date": "2026-07-22",
+        "end_date": "2026-08-21",
+        "securities_trader_id": null,
+        "mode": "broad"
+      },
+      "production_used": false,
+      "query_mode": "broad",
+      "data_id_required": true,
+      "returned_range": {
+        "start": null,
+        "end": null
+      },
+      "classification": "QUOTA_EXHAUSTED",
+      "quota_plan": "not exposed by provider response",
+      "probe_only": true,
+      "sanitized_request_mode": true,
+      "secret_values_included": false
+    },
+    {
+      "dataset": "TaiwanStockShareholding",
+      "accessible": false,
+      "method": "GET /api/v4/data",
+      "latest_date": null,
+      "sample_row_count": 0,
+      "permission_error": "QUOTA_EXHAUSTED",
+      "status_code": 402,
+      "response_fields": [],
+      "requested_shape": {
+        "data_id": "2330",
+        "start_date": "2026-07-22",
+        "end_date": "2026-08-21",
+        "securities_trader_id": null,
+        "mode": "per_stock"
+      },
+      "production_used": false,
+      "query_mode": "per_stock",
+      "data_id_required": true,
+      "returned_range": {
+        "start": null,
+        "end": null
+      },
+      "classification": "QUOTA_EXHAUSTED",
+      "quota_plan": "not exposed by provider response",
+      "probe_only": true,
+      "sanitized_request_mode": true,
+      "secret_values_included": false
+    },
+    {
+      "dataset": "TaiwanStockHoldingSharesPer",
+      "accessible": false,
+      "method": "GET /api/v4/data",
+      "latest_date": null,
+      "sample_row_count": 0,
+      "permission_error": "QUOTA_EXHAUSTED",
+      "status_code": 402,
+      "response_fields": [],
+      "requested_shape": {
+        "data_id": null,
+        "start_date": "2026-07-22",
+        "end_date": "2026-08-21",
+        "securities_trader_id": null,
+        "mode": "broad"
+      },
+      "production_used": false,
+      "query_mode": "broad",
+      "data_id_required": true,
+      "returned_range": {
+        "start": null,
+        "end": null
+      },
+      "classification": "QUOTA_EXHAUSTED",
+      "quota_plan": "not exposed by provider response",
+      "probe_only": true,
+      "sanitized_request_mode": true,
+      "secret_values_included": false
+    },
+    {
+      "dataset": "TaiwanStockHoldingSharesPer",
+      "accessible": false,
+      "method": "GET /api/v4/data",
+      "latest_date": null,
+      "sample_row_count": 0,
+      "permission_error": "QUOTA_EXHAUSTED",
+      "status_code": 402,
+      "response_fields": [],
+      "requested_shape": {
+        "data_id": "2330",
+        "start_date": "2026-07-22",
+        "end_date": "2026-08-21",
+        "securities_trader_id": null,
+        "mode": "per_stock"
+      },
+      "production_used": false,
+      "query_mode": "per_stock",
+      "data_id_required": true,
+      "returned_range": {
+        "start": null,
+        "end": null
+      },
+      "classification": "QUOTA_EXHAUSTED",
+      "quota_plan": "not exposed by provider response",
+      "probe_only": true,
+      "sanitized_request_mode": true,
+      "secret_values_included": false
+    },
+    {
+      "dataset": "TaiwanStockTradingDailyReport",
+      "accessible": false,
+      "method": "GET /api/v4/data",
+      "latest_date": null,
+      "sample_row_count": 0,
+      "permission_error": "NON_RETRYABLE_4XX",
+      "status_code": 400,
+      "response_fields": [],
+      "requested_shape": {
+        "data_id": null,
+        "start_date": "2026-08-20",
+        "end_date": "2026-08-20",
+        "securities_trader_id": null,
+        "mode": "broad"
+      },
+      "production_used": false,
+      "query_mode": "broad",
+      "data_id_required": true,
+      "returned_range": {
+        "start": null,
+        "end": null
+      },
+      "classification": "NON_RETRYABLE_4XX",
+      "quota_plan": "not exposed by provider response",
+      "probe_only": true,
+      "sanitized_request_mode": true,
+      "secret_values_included": false
+    },
+    {
+      "dataset": "TaiwanStockTradingDailyReport",
+      "accessible": false,
+      "method": "GET /api/v4/data",
+      "latest_date": null,
+      "sample_row_count": 0,
+      "permission_error": "QUOTA_EXHAUSTED",
+      "status_code": 402,
+      "response_fields": [],
+      "requested_shape": {
+        "data_id": "2330",
+        "start_date": "2026-08-20",
+        "end_date": "2026-08-20",
+        "securities_trader_id": null,
+        "mode": "per_stock"
+      },
+      "production_used": false,
+      "query_mode": "per_stock",
+      "data_id_required": true,
+      "returned_range": {
+        "start": null,
+        "end": null
+      },
+      "classification": "QUOTA_EXHAUSTED",
+      "quota_plan": "not exposed by provider response",
+      "probe_only": true,
+      "sanitized_request_mode": true,
+      "secret_values_included": false
+    },
+    {
+      "dataset": "TaiwanStockTradingDailyReportSecIdAgg",
+      "accessible": false,
+      "method": "GET /api/v4/data",
+      "latest_date": null,
+      "sample_row_count": 0,
+      "permission_error": "NON_RETRYABLE_4XX",
+      "status_code": 400,
+      "response_fields": [],
+      "requested_shape": {
+        "data_id": null,
+        "start_date": "2026-08-20",
+        "end_date": "2026-08-20",
+        "securities_trader_id": "075T",
+        "mode": "broad"
+      },
+      "production_used": false,
+      "query_mode": "broad",
+      "data_id_required": true,
+      "returned_range": {
+        "start": null,
+        "end": null
+      },
+      "classification": "NON_RETRYABLE_4XX",
+      "quota_plan": "not exposed by provider response",
+      "probe_only": true,
+      "sanitized_request_mode": true,
+      "secret_values_included": false
+    },
+    {
+      "dataset": "TaiwanStockTradingDailyReportSecIdAgg",
+      "accessible": false,
+      "method": "GET /api/v4/data",
+      "latest_date": null,
+      "sample_row_count": 0,
+      "permission_error": "QUOTA_EXHAUSTED",
+      "status_code": 402,
+      "response_fields": [],
+      "requested_shape": {
+        "data_id": "2330",
+        "start_date": "2026-08-20",
+        "end_date": "2026-08-20",
+        "securities_trader_id": "075T",
+        "mode": "per_stock"
+      },
+      "production_used": false,
+      "query_mode": "per_stock",
+      "data_id_required": true,
+      "returned_range": {
+        "start": null,
+        "end": null
+      },
+      "classification": "QUOTA_EXHAUSTED",
+      "quota_plan": "not exposed by provider response",
+      "probe_only": true,
+      "sanitized_request_mode": true,
+      "secret_values_included": false
+    }
+  ],
+  "sanitized_request_mode": true,
+  "secret_values_included": false
+}

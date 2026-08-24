@@ -1,0 +1,16 @@
+{
+  "format": "detached-final-zip-scan-v2",
+  "generated_at": "2026-08-21T13:06:56.118941+00:00",
+  "archive": "D:\\大戶緩慢建倉\\review_bundle_20260821_130631.zip",
+  "archive_sha256": "72f36966d6a876152723504a8c554ed26db9350bb501e1638e04965af61d9317",
+  "manifest_path": "review_bundle_20260821_130631/BUNDLE_MANIFEST.json",
+  "manifest_file_count": 165,
+  "archive_member_count": 165,
+  "member_set_exact": true,
+  "hashes_and_sizes_match": true,
+  "unsafe_archive_paths": [],
+  "mismatches": [],
+  "secret_scan_artifact": "deployment_evidence/FINAL_SUBMISSION_SECRET_SCAN.json",
+  "secrets_included": false,
+  "sanitized": true
+}

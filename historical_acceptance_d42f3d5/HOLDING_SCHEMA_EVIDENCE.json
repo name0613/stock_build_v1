@@ -1,0 +1,22 @@
+{
+  "captured_at": "2026-08-21T02:13:02Z",
+  "data_capture_source_revision": "b5ca40cdcc140a5ae819c5b64c3e7e969ba1a340",
+  "validation_source_revision": "d42f3d5ed53b3fd636492c3aa001d46ae9941e06",
+  "current_deployed_source_revision": "d42f3d5ed53b3fd636492c3aa001d46ae9941e06",
+  "dataset": "TaiwanStockHoldingSharesPer",
+  "provider_metadata_level_accepted": "差異數調整（說明4）",
+  "unknown_bucket_policy": "SCHEMA_MISMATCH and fail closed",
+  "duplicate_normalized_bucket_policy": "SCHEMA_MISMATCH and fail closed",
+  "latest_attempt": {
+    "requested": 2148,
+    "success": 930,
+    "no_data": 52,
+    "failed": 58,
+    "rows_received": 126242,
+    "rows_accepted": 111390,
+    "error_code": "QUOTA_EXHAUSTED",
+    "global_schema_mismatch": false
+  },
+  "secrets_included": false,
+  "sanitized": true
+}

@@ -1,0 +1,68 @@
+{
+  "format": "current-acceptance-v5",
+  "acceptance_run_id": "20260821T054703Z-522cd29",
+  "captured_at": "2026-08-21T05:47:03.2276079Z",
+  "source_revision": "522cd2991c938dd41f6ca2015e5614477d84528e",
+  "deployed_source_revision": "522cd2991c938dd41f6ca2015e5614477d84528e",
+  "source_revision_match": true,
+  "score_version": "s-only-v4",
+  "formula_hash": "6996b96ab431d160cd20c29bee6bb1d0ba04be519d024be8a319e03817a47bb8",
+  "calendar_hash": "245382ea5cb79419654219e8eef2303664a79037765f12e10fdfc86361ef4e5b",
+  "base_url": "http://192.168.31.138:18080",
+  "frontend_image_digest": "sha256:eb7608264dda10cdfd7ee9b757923cd5cbd0c7506349a4b5e1543a7f35101093",
+  "backend_image_digest": "sha256:147fa8eacdd0f72c62fa4ff63959c549e0c6d60939cdd7d75635d6563236eb7e",
+  "worker_image_digest": "sha256:1d305707995a3f96a62630c413e1e63c012ad1eaf59b1f785697cef21a0b360b",
+  "backend_lock_sha256": "75a0d62812977f2137f3fdbd0082594ba87efef8b0ce8af3c7fbbd0c0a0dfc47",
+  "frontend_lock_sha256": "36c6571745da922fb5b37d65bf374a7fb146c28aadb7f55850a131399ff6ce0d",
+  "checkpoint_policy": {
+    "schema_version": "2026-08-21-v3-observation-bound",
+    "incremental_version": "2026-08-21-incremental-v4",
+    "request_policy_version": "finmind-request-policy-v4-observation-coverage",
+    "verified_observation_coverage_only": true
+  },
+  "broker_source_isolation": {
+    "production_source": "TaiwanStockTradingDailyReport",
+    "capability_only_source": "TaiwanStockTradingDailyReportSecIdAgg",
+    "prohibited_rows": 0,
+    "prohibited_revisions": 0,
+    "pending_authoritative_rebuilds": 0,
+    "database_constraint": true,
+    "status": "PASS"
+  },
+  "worker": {
+    "runtime_status": "ok",
+    "ready": true,
+    "scheduler_ready": true,
+    "stale": false,
+    "job_progress_active": false,
+    "scheduler_contract_missing": false,
+    "last_job_status": "PARTIAL",
+    "last_error_code": "QUOTA_EXHAUSTED"
+  },
+  "provider_state": {
+    "status": "PROVIDER_UNAVAILABLE",
+    "reason_code": "QUOTA_EXHAUSTED",
+    "numeric_scores_allowed": false,
+    "current_numeric_scores_exposed": false,
+    "current_rankings_count": 0,
+    "data_insufficient_count": 2148,
+    "synthetic_data_used": false
+  },
+  "tests": {
+    "backend": "80 passed",
+    "ruff": "PASS",
+    "frontend_build": "PASS",
+    "frontend_lint": "PASS",
+    "frontend_unit_tests": "0 tests, 0 failures",
+    "frontend_e2e": "4 passed",
+    "cleanroom_docker": "PASS",
+    "migration": "PASS",
+    "pit_postgres": "PASS",
+    "persistence": "PASS",
+    "broker_source_audit": "PASS",
+    "secret_scans": "PASS"
+  },
+  "performance_scope": "live provider-unavailable path; no numeric-ranking performance claim",
+  "secrets_included": false,
+  "sanitized": true
+}

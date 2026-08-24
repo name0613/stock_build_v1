@@ -1,0 +1,48 @@
+{
+  "format": "current-acceptance-v3",
+  "acceptance_run_id": "20260821T021302Z-d42f3d5",
+  "captured_at": "2026-08-21T02:13:02Z",
+  "source_revision": "d42f3d5ed53b3fd636492c3aa001d46ae9941e06",
+  "deployed_source_revision": "d42f3d5ed53b3fd636492c3aa001d46ae9941e06",
+  "source_revision_match": true,
+  "score_version": "s-only-v3",
+  "formula_hash": "f62f284d19e8f64d7eb98ac9072d148515bb0bb7dca9a909596b4bb4cf5ec92d",
+  "calendar_hash": "245382ea5cb79419654219e8eef2303664a79037765f12e10fdfc86361ef4e5b",
+  "base_url": "http://192.168.31.138:18080",
+  "frontend_image_digest": "sha256:abcd77fd9fa854a724a87b71007aba83a636cf2a244130463828435bdea74dd3",
+  "backend_image_digest": "sha256:fd9f2473aa9645acc6e1407ec0aa392324214301428b85edcc48fcfec5a4a5d8",
+  "worker_image_digest": "sha256:0dc7d664962d20d7012859e56f6f2e80df7d329421dc6b1c9a424b0ac2fd7487",
+  "backend_lock_sha256": "75a0d62812977f2137f3fdbd0082594ba87efef8b0ce8af3c7fbbd0c0a0dfc47",
+  "frontend_lock_sha256": "36c6571745da922fb5b37d65bf374a7fb146c28aadb7f55850a131399ff6ce0d",
+  "worker": {
+    "runtime_status": "ok",
+    "ready": true,
+    "stale": false,
+    "scheduler_ready": true,
+    "job_progress_active": false,
+    "scheduler_contract_missing": false,
+    "last_job_status": "PARTIAL",
+    "last_error_code": "ACCESS_DENIED",
+    "state_interpretation": "healthy idle after provider-limited run; no retry storm"
+  },
+  "provider_state": {
+    "status": "PROVIDER_UNAVAILABLE",
+    "reason_code": "QUOTA_EXHAUSTED",
+    "provider": "FinMind",
+    "score_policy": "FAIL_CLOSED",
+    "numeric_scores_allowed": false,
+    "numeric_scores_available": false,
+    "synthetic_data_used": false,
+    "live_numeric_ranking_validation": "BLOCKED_EXTERNAL_PROVIDER"
+  },
+  "tests": {
+    "backend": "58 passed",
+    "frontend_build": "PASS",
+    "frontend_e2e": "4 passed",
+    "cleanroom_backend": "58 passed",
+    "cleanroom_docker": "PASS"
+  },
+  "performance_scope": "live production provider-unavailable path; no live numeric-ranking correctness or performance claim",
+  "secrets_included": false,
+  "sanitized": true
+}

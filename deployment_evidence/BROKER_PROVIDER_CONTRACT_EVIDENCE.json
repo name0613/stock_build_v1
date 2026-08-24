@@ -1,0 +1,107 @@
+{
+  "format": "live-broker-provider-contract-evidence-v1",
+  "source_revision": "45b1566fe7dc3262829351b402c5ccc08150d113",
+  "provider": "FinMind",
+  "dataset": "TaiwanStockTradingDailyReport",
+  "cases": [
+    {
+      "request": {
+        "dataset": "TaiwanStockTradingDailyReport",
+        "endpoint": "/api/v4/taiwan_stock_trading_daily_report",
+        "query_mode": "per_stock_per_session",
+        "data_id": "2330",
+        "date": "2026-08-20",
+        "must_need_date": "true",
+        "persist_raw": false
+      },
+      "response": {
+        "http_status": 200,
+        "application_status": 200,
+        "pagination_complete": null,
+        "provider_report_complete": false,
+        "provider_contract_version": null,
+        "provider_row_contract_version": "finmind-observed-stock-session-row-v1",
+        "provider_row_validated": true,
+        "provider_contract_reason": "finmind-observed-stock-session-row-v1",
+        "empty_is_valid": false,
+        "empty_reason": null,
+        "rows": {
+          "row_count": 3759,
+          "unique_stock_ids": [
+            "2330"
+          ],
+          "unique_dates": [
+            "2026-08-20"
+          ],
+          "all_rows_match_requested_stock_and_session": true,
+          "required_fields_present": true,
+          "provider_row_validated_count": 3759,
+          "active_buyer_branch_count": 3018,
+          "active_seller_branch_count": 3114,
+          "buyer_zero_count": 741,
+          "seller_zero_count": 645,
+          "branch_ids_present": 3759
+        }
+      }
+    },
+    {
+      "request": {
+        "dataset": "TaiwanStockTradingDailyReport",
+        "endpoint": "/api/v4/taiwan_stock_trading_daily_report",
+        "query_mode": "per_stock_per_session",
+        "data_id": "2311",
+        "date": "2026-07-27",
+        "must_need_date": "true",
+        "persist_raw": false
+      },
+      "response": {
+        "http_status": 200,
+        "application_status": 200,
+        "pagination_complete": null,
+        "provider_report_complete": false,
+        "provider_contract_version": null,
+        "provider_row_contract_version": null,
+        "provider_row_validated": false,
+        "provider_contract_reason": "empty_report",
+        "empty_is_valid": false,
+        "empty_reason": null,
+        "rows": {
+          "row_count": 0,
+          "unique_stock_ids": [],
+          "unique_dates": [],
+          "all_rows_match_requested_stock_and_session": true,
+          "required_fields_present": true,
+          "provider_row_validated_count": 0,
+          "active_buyer_branch_count": 0,
+          "active_seller_branch_count": 0,
+          "buyer_zero_count": 0,
+          "seller_zero_count": 0,
+          "branch_ids_present": 0
+        }
+      }
+    }
+  ],
+  "semantics": {
+    "omitted_branch_as_zero_proven": false,
+    "empty_report_semantics_authoritatively_proven": false,
+    "production_policy": "unverified_empty_or_incomplete_report_remains_retryable_and_is_excluded_from_scoring"
+  },
+  "official_contract_context": [
+    {
+      "url": "https://finmind.github.io/en/tutor/TaiwanMarket/Chip/",
+      "claims": [
+        "query by stock_id is supported",
+        "one day is provided per request",
+        "Sponsor access is required"
+      ]
+    },
+    {
+      "url": "https://api.finmindtrade.com/docs",
+      "claims": [
+        "the trading daily report endpoint is documented by the provider"
+      ]
+    }
+  ],
+  "sanitized": true,
+  "secrets_included": false
+}

@@ -1,0 +1,67 @@
+{
+  "format": "browser-acceptance-v7",
+  "captured_at": "2026-08-21T12:51:19.166101+00:00",
+  "acceptance_run_id": "final-a22f4a4",
+  "base_url": "http://192.168.31.138:18080",
+  "source_revision": "a22f4a4295f3add4271a1dce33df745bd889dce3",
+  "deployed_source_revision": "a22f4a4295f3add4271a1dce33df745bd889dce3",
+  "frontend_image_digest": "sha256:0311df702327794620a30736676c0d0707639d7f42823b004a30dd277c0e712c",
+  "backend_image_digest": "sha256:81a1e7bc3dffb3752e5c6bf3b37bfa5a6eac37fc240de99d23fe5d51d44109f4",
+  "worker_image_digest": "sha256:608054e4aca516195012c5aca4748e9d5059a48d2fc98590881cfefe274ab4e7",
+  "score_version": "s-only-v6",
+  "formula_hash": "21df6cf28188f6ef3973e8283cb6f482d9895203e9f023f3dc9c69bec926f99b",
+  "provider_state": {
+    "status": "PROVIDER_UNAVAILABLE",
+    "reason_code": "EMPTY_RESPONSE_UNVERIFIED",
+    "numeric_scores_allowed": false,
+    "current_rankings_count": 0,
+    "data_insufficient_count": 2148
+  },
+  "screenshots": [
+    {
+      "path": "screenshots/dashboard.png",
+      "captured_at": "2026-08-21T12:51:19.166125+00:00",
+      "sha256": "3a83b3ccb56ba72ec598965bedcbda88916e6f089b8b022cf0d860bb9fabfed6"
+    },
+    {
+      "path": "screenshots/detail-2330.png",
+      "captured_at": "2026-08-21T12:51:19.170588+00:00",
+      "sha256": "b3ad8019bdc019f511b192eb951bff26c8d038a07fe7191cb1866a77925e0039"
+    },
+    {
+      "path": "screenshots/detail-2330-charts.png",
+      "captured_at": "2026-08-21T12:51:19.174825+00:00",
+      "sha256": "b3ad8019bdc019f511b192eb951bff26c8d038a07fe7191cb1866a77925e0039"
+    }
+  ],
+  "browser_checks": {
+    "dashboard_http": 200,
+    "stock_count": 2148,
+    "search_2330": true,
+    "detail_2330_http": 200,
+    "detail_provenance": true,
+    "detail_freshness_and_hash_labels": true,
+    "holding_chart_series": true,
+    "broker_disclaimer": false,
+    "data_insufficient_label": true,
+    "missing_data_not_zero": true,
+    "s_level_only_verified": true,
+    "provider_state": "PROVIDER_UNAVAILABLE",
+    "numeric_scores_allowed": false,
+    "ranking_items": 0
+  },
+  "e2e": {
+    "tests": 12,
+    "passed": 12,
+    "failed": 0,
+    "blocked_external_provider": 0
+  },
+  "strict_labels_verified": true,
+  "no_investment_advice_language_verified": true,
+  "provenance_and_freshness_verified": true,
+  "missing_data_not_zero_verified": true,
+  "s_level_only_verified": true,
+  "provider_quota_blocked_numeric_scores": true,
+  "secrets_included": false,
+  "sanitized": true
+}

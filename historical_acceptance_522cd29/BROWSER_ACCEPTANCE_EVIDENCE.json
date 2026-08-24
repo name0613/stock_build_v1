@@ -1,0 +1,13 @@
+{
+  "format": "browser-acceptance-v5",
+  "captured_at": "2026-08-21T05:47:03.2276079Z",
+  "acceptance_run_id": "20260821T054703Z-522cd29",
+  "target_conversation": "Production Safety Review",
+  "source_revision": "522cd2991c938dd41f6ca2015e5614477d84528e",
+  "bundle_status": "PENDING_FINAL_ARCHIVE_AND_EXACT_SCAN",
+  "message_sent": false,
+  "sensitive_transfer_performed": false,
+  "status": "PENDING",
+  "secrets_included": false,
+  "sanitized": true
+}

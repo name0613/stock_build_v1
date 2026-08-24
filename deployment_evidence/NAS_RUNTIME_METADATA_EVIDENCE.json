@@ -1,9 +1,9 @@
 {
-  "generated_at": "2026-08-20T17:50:08.524494+00:00",
+  "generated_at": "2026-08-21T14:33:21.335963+00:00",
   "host": "192.168.31.138",
   "project": "/volume1/docker/tw-accumulation-evidence",
-  "local_source_revision": "e07d6902b03c0364fcb80edb2d6c21b6e77b63e0",
-  "deployed_source_revision": "e07d6902b03c0364fcb80edb2d6c21b6e77b63e0",
+  "local_source_revision": "45b1566fe7dc3262829351b402c5ccc08150d113",
+  "deployed_source_revision": "45b1566fe7dc3262829351b402c5ccc08150d113",
   "source_revision_matches": true,
   "compose_images": [
     "nginx:1.27-alpine",
@@ -13,18 +13,18 @@
     "tw-accumulation-evidence-frontend"
   ],
   "running_containers": [
-    "tw-accumulation-evidence-nginx-1 nginx:1.27-alpine Up 57 seconds (healthy)",
+    "tw-accumulation-evidence-nginx-1 nginx:1.27-alpine Up About a minute (healthy)",
     "tw-accumulation-evidence-frontend-1 tw-accumulation-evidence-frontend Up About a minute",
-    "tw-accumulation-evidence-worker-1 tw-accumulation-evidence-worker Up About a minute (health: starting)",
+    "tw-accumulation-evidence-worker-1 tw-accumulation-evidence-worker Up About a minute (healthy)",
     "tw-accumulation-evidence-api-1 tw-accumulation-evidence-api Up About a minute (healthy)",
-    "tw-accumulation-evidence-postgres-1 postgres:16-alpine Up 40 minutes (healthy)"
+    "tw-accumulation-evidence-postgres-1 postgres:16-alpine Up 2 hours (healthy)"
   ],
   "image_ids": [
     "[nginx:1.27-alpine] sha256:6769dc3a703c719c1d2756bda113659be28ae16cf0da58dd5fd823d6b9a050ea",
     "[postgres:16-alpine] sha256:75f5a96988cdf694a215073c3e9c001b706b371e2f94df3967f2efdec2787f6b",
-    "[tw-accumulation-evidence-api:latest] sha256:961391681f67ad2410ab7bff09b3068a6dbb6962c526354206b6ab2d8606ac6c",
-    "[tw-accumulation-evidence-frontend:latest] sha256:705d167bfa3ccb7188244b4eb70716b6ef7d58889d53faa99c2168c3b7334ca0",
-    "[tw-accumulation-evidence-worker:latest] sha256:8fa61640cf84d4f4234f7ed0d160c42306f007262b5fb4cfaefd8c6fefcf7b22"
+    "[tw-accumulation-evidence-api:latest] sha256:eadda08e38047e39a7a39e2fd0aa3f871a78c2bc95b7071fcf15a31a12869604",
+    "[tw-accumulation-evidence-frontend:latest] sha256:8e6847c5a8c673cb2fa171e55f92e456b73753af3a9e0ce5cbb30a109630073e",
+    "[tw-accumulation-evidence-worker:latest] sha256:fd812099f3357ef8e87b88ced97efde563caf33d43e2a1efdb7254992d552537"
   ],
   "named_volumes": [
     "tw-accumulation-evidence_postgres_data /volume1/@docker/volumes/tw-accumulation-evidence_postgres_data/_data",

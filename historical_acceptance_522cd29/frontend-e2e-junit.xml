@@ -1,0 +1,12 @@
+<testsuites id="" name="" tests="4" failures="0" skipped="0" errors="0" time="2.9198779999999998">
+<testsuite name="dashboard.spec.ts" timestamp="2026-08-21T05:44:04.917Z" hostname="" tests="4" failures="0" skipped="0" time="2.291" errors="0">
+<testcase name="dashboard loads and exposes evidence controls" classname="dashboard.spec.ts" time="0.326">
+</testcase>
+<testcase name="search and insufficient-data state are visible" classname="dashboard.spec.ts" time="0.295">
+</testcase>
+<testcase name="NAS detail exposes S-level charts, provenance and missing-data gaps" classname="dashboard.spec.ts" time="0.963">
+</testcase>
+<testcase name="filters, rankings, freshness and score hash are exposed" classname="dashboard.spec.ts" time="0.707">
+</testcase>
+</testsuite>
+</testsuites>

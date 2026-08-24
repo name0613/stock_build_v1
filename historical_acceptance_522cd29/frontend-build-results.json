@@ -1,0 +1,26 @@
+{
+  "generated_at": "2026-08-21T05:44:13.3001822Z",
+  "source_revision": "522cd2991c938dd41f6ca2015e5614477d84528e",
+  "status": "PASS",
+  "checks": [
+    {
+      "command": "npm run lint",
+      "status": "PASS",
+      "tool": "TypeScript"
+    },
+    {
+      "command": "npm run build",
+      "status": "PASS",
+      "bundler": "Vite",
+      "target": "production"
+    },
+    {
+      "command": "npm test",
+      "status": "PASS",
+      "tests": 0,
+      "failures": 0
+    }
+  ],
+  "e2e_junit_sha256": "8d2b9abf99dc85c2cea5144a88471385b32e61e49815cb9be9d8b866dd8e1ce3",
+  "secrets_included": false
+}

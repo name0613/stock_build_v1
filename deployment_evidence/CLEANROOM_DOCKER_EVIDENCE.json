@@ -1,0 +1,101 @@
+{
+  "generated_at": "2026-08-21T12:45:38.366947+00:00",
+  "acceptance_run_id": "20260821T124538Z-cleanroom-a22f4a4295f3",
+  "source_revision": "a22f4a4295f3add4271a1dce33df745bd889dce3",
+  "source_mode": "git_archive_HEAD_only",
+  "host": "192.168.31.138",
+  "project": "/volume1/docker/tw-accumulation-cleanroom-a22f4a4295f3",
+  "services": [
+    "postgres",
+    "api",
+    "worker",
+    "frontend",
+    "nginx"
+  ],
+  "secrets_included": false,
+  "sanitized": true,
+  "source_archive_sha256": "42029d77da509b16dfa3d2e94a472e00ebf8b75edcb5c79198a528e868f8b2fb",
+  "build": {
+    "status": "PASS",
+    "no_cache": true,
+    "backend_lock_sha256": "75a0d62812977f2137f3fdbd0082594ba87efef8b0ce8af3c7fbbd0c0a0dfc47",
+    "frontend_lock_sha256": "36c6571745da922fb5b37d65bf374a7fb146c28aadb7f55850a131399ff6ce0d"
+  },
+  "cleanroom_checks": {
+    "status": "PASS",
+    "backend": {
+      "pytest_and_ruff": "PASS",
+      "output_tail": [
+        "    cursor.execute(statement, parameters)",
+        "",
+        "-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html",
+        "135 passed, 4 warnings in 5.34s",
+        "All checks passed!"
+      ]
+    },
+    "frontend": {
+      "npm_ci_lint_test_build": "PASS",
+      "output_tail": [
+        "✓ 15 modules transformed.",
+        "rendering chunks...",
+        "computing gzip size...",
+        "dist/index.html                   0.54 kB │ gzip:  0.40 kB",
+        "dist/assets/index-xj03W1DR.css    6.66 kB │ gzip:  2.35 kB",
+        "dist/assets/index-DsbSNSMt.js   206.99 kB │ gzip: 65.42 kB",
+        "",
+        "✓ built in 161ms"
+      ]
+    }
+  },
+  "compose_config": "PASS",
+  "initial_stack": {
+    "status": "PASS",
+    "ps": "NAME                                                IMAGE                                             COMMAND                  SERVICE    CREATED          STATUS                    PORTS\ntw-accumulation-cleanroom-a22f4a4295f3-api-1        tw-accumulation-cleanroom-a22f4a4295f3-api        \"uvicorn app.main:ap…\"   api        37 seconds ago   Up 36 seconds (healthy)   8000-8001/tcp\ntw-accumulation-cleanroom-a22f4a4295f3-frontend-1   tw-accumulation-cleanroom-a22f4a4295f3-frontend   \"/docker-entrypoint.…\"   frontend   19 seconds ago   Up 17 seconds             80/tcp\ntw-accumulation-cleanroom-a22f4a4295f3-nginx-1      nginx:1.27-alpine                                 \"/docker-entrypoint.…\"   nginx      19 seconds ago   Up 17 seconds (healthy)   80/tcp, 0.0.0.0:18082->8080/tcp, [::]:18082->8080/tcp\ntw-accumulation-cleanroom-a22f4a4295f3-postgres-1   postgres:16-alpine                                \"docker-entrypoint.s…\"   postgres   48 seconds ago   Up 47 seconds (healthy)   5432/tcp\ntw-accumulation-cleanroom-a22f4a4295f3-worker-1     tw-accumulation-cleanroom-a22f4a4295f3-worker     \"python -m app.worker\"   worker     19 seconds ago   Up 18 seconds (healthy)   8000-8001/tcp",
+    "api_health": "{\"status\":\"ok\",\"service\":\"api\",\"database\":\"ok\",\"score_version\":\"s-only-v6\",\"formula_hash\":\"21df6cf28188f6ef3973e8283cb6f482d9895203e9f023f3dc9c69bec926f99b\",\"timezone\":\"Asia/Taipei\"}",
+    "worker_health": "{\"service\": \"worker\", \"status\": \"ok\", \"ready\": true, \"heartbeat_age_seconds\": 18, \"scheduler_age_seconds\": 18, \"progress_age_seconds\": 18, \"progress_deadline_seconds\": 180, \"stale\": false, \"prolonged_job\": false, \"scheduler_ready\": true, \"job_progress_active\": false, \"scheduler_contract_missing\": false, \"scheduler_execution_overdue\": false, \"scheduler_event_error\": false, \"scheduler_job_reasons\": [], \"heartbeat\": {\"status\": \"idle\", \"ready\": true, \"scheduler_ready\": true, \"market_session\": {\"state\": \"CLOSED\", \"monitoring_active\": false, \"reason\": \"outside_continuous_trading_hours\", \"timezone\": \"Asia/Taipei\", \"local_date\": \"2026-08-21\", \"local_time\": \"20:47:26\", \"open_time\": \"09:00:00\", \"close_time\": \"13:30:00\", \"calendar_version\": \"tw-exchange-2026-v1\", \"calendar_hash\": \"245382ea5cb79419654219e8eef2303664a79037765f12e10fdfc86361ef4e5b\"}, \"scheduler_started_at\": \"2026-08-21T12:47:26.471580+00:00\", \"last_heartbeat_at\": \"2026-08-21T12:47:26.471864+00:00\", \"last_job_status\": \"DEFERRED_BEFORE_SOURCE_PUBLICATION\", \"last_error_code\": null, \"last_job_started_at\": null, \"last_job_progress_at\": null, \"job_phase\": null, \"last_job_finished_at\": \"2026-08-21T12:47:26.470409+00:00\", \"current_job_run_id\": null, \"last_scheduler_heartbeat_at\": \"2026-08-21T12:47:26.471580+00:00\", \"next_expected_run_at\": \"2026-08-21T13:30:00+00:00\", \"registered_scheduler_job_ids\": [\"main-sync\", \"retry-sync\"], \"scheduler_jobs\": {\"main-sync\": {\"next_expected_fire_at\": \"2026-08-21T13:30:00+00:00\", \"last_started_fire_at\": null, \"last_completed_fire_at\": null, \"last_event\": \"REGISTERED\", \"last_event_at\": \"2026-08-21T12:47:26.471611+00:00\", \"last_error_code\": null}, \"retry-sync\": {\"next_expected_fire_at\": \"2026-08-21T15:00:00+00:00\", \"last_started_fire_at\": null, \"last_completed_fire_at\": null, \"last_event\": \"REGISTERED\", \"last_event_at\": \"2026-08-21T12:47:26.471647+00:00\", \"last_error_code\": null}}, \"last_scheduler_event_at\": \"2026-08-21T12:47:26.471580+00:00\"}}",
+    "proxy_build_metadata": "{\"source_revision\":\"a22f4a4295f3add4271a1dce33df745bd889dce3\",\"backend_lock_sha256\":\"75a0d62812977f2137f3fdbd0082594ba87efef8b0ce8af3c7fbbd0c0a0dfc47\",\"score_spec_hash\":\"21df6cf28188f6ef3973e8283cb6f482d9895203e9f023f3dc9c69bec926f99b\",\"calendar_hash\":\"245382ea5cb79419654219e8eef2303664a79037765f12e10fdfc86361ef4e5b\",\"build_timestamp\":\"2026-08-21T12:45:39.332083+00:00\",\"build_metadata_available\":true,\"error_code\":null,\"score_spec_match\":true,\"calendar_match\":true}",
+    "schema_migrations_count": "10",
+    "images": {
+      "api": {
+        "image_id": "9581e46f1b91c00dc6f3c26942fcd234b2542b439735fadfcdb07ad1a39e7c77",
+        "inspect": "sha256:9581e46f1b91c00dc6f3c26942fcd234b2542b439735fadfcdb07ad1a39e7c77|{\"com.docker.compose.project\":\"tw-accumulation-cleanroom-a22f4a4295f3\",\"com.docker.compose.service\":\"api\",\"com.docker.compose.version\":\"5.1.3\",\"org.openai.calendar-sha256\":\"245382ea5cb79419654219e8eef2303664a79037765f12e10fdfc86361ef4e5b\",\"org.openai.score-spec-sha256\":\"21df6cf28188f6ef3973e8283cb6f482d9895203e9f023f3dc9c69bec926f99b\",\"org.opencontainers.image.created\":\"2026-08-21T12:45:39.332083+00:00\",\"org.opencontainers.image.revision\":\"a22f4a4295f3add4271a1dce33df745bd889dce3\",\"org.opencontainers.image.source-lock-sha256\":\"75a0d62812977f2137f3fdbd0082594ba87efef8b0ce8af3c7fbbd0c0a0dfc47\"}"
+      },
+      "worker": {
+        "image_id": "19ed6cdb5bad6ddd9d80fabd224ef03a390667d17c1ce02c66cb3ceadcbd166d",
+        "inspect": "sha256:19ed6cdb5bad6ddd9d80fabd224ef03a390667d17c1ce02c66cb3ceadcbd166d|{\"com.docker.compose.project\":\"tw-accumulation-cleanroom-a22f4a4295f3\",\"com.docker.compose.service\":\"worker\",\"com.docker.compose.version\":\"5.1.3\",\"org.openai.calendar-sha256\":\"245382ea5cb79419654219e8eef2303664a79037765f12e10fdfc86361ef4e5b\",\"org.openai.score-spec-sha256\":\"21df6cf28188f6ef3973e8283cb6f482d9895203e9f023f3dc9c69bec926f99b\",\"org.opencontainers.image.created\":\"2026-08-21T12:45:39.332083+00:00\",\"org.opencontainers.image.revision\":\"a22f4a4295f3add4271a1dce33df745bd889dce3\",\"org.opencontainers.image.source-lock-sha256\":\"75a0d62812977f2137f3fdbd0082594ba87efef8b0ce8af3c7fbbd0c0a0dfc47\"}"
+      },
+      "frontend": {
+        "image_id": "991a8d6c0a6bcfabdd0d35a89b4616d5e1dc1abb71c209bbd221549c6bb27826",
+        "inspect": "sha256:991a8d6c0a6bcfabdd0d35a89b4616d5e1dc1abb71c209bbd221549c6bb27826|{\"com.docker.compose.project\":\"tw-accumulation-cleanroom-a22f4a4295f3\",\"com.docker.compose.service\":\"frontend\",\"com.docker.compose.version\":\"5.1.3\",\"maintainer\":\"NGINX Docker Maintainers <docker-maint@nginx.com>\",\"org.opencontainers.image.created\":\"2026-08-21T12:45:39.332083+00:00\",\"org.opencontainers.image.revision\":\"a22f4a4295f3add4271a1dce33df745bd889dce3\",\"org.opencontainers.image.source-lock-sha256\":\"36c6571745da922fb5b37d65bf374a7fb146c28aadb7f55850a131399ff6ce0d\"}"
+      }
+    }
+  },
+  "worker_image_validation": {
+    "status": "PASS",
+    "worker_built_image_inspect": {
+      "image_id": "19ed6cdb5bad6ddd9d80fabd224ef03a390667d17c1ce02c66cb3ceadcbd166d",
+      "inspect": "sha256:19ed6cdb5bad6ddd9d80fabd224ef03a390667d17c1ce02c66cb3ceadcbd166d|{\"com.docker.compose.project\":\"tw-accumulation-cleanroom-a22f4a4295f3\",\"com.docker.compose.service\":\"worker\",\"com.docker.compose.version\":\"5.1.3\",\"org.openai.calendar-sha256\":\"245382ea5cb79419654219e8eef2303664a79037765f12e10fdfc86361ef4e5b\",\"org.openai.score-spec-sha256\":\"21df6cf28188f6ef3973e8283cb6f482d9895203e9f023f3dc9c69bec926f99b\",\"org.opencontainers.image.created\":\"2026-08-21T12:45:39.332083+00:00\",\"org.opencontainers.image.revision\":\"a22f4a4295f3add4271a1dce33df745bd889dce3\",\"org.opencontainers.image.source-lock-sha256\":\"75a0d62812977f2137f3fdbd0082594ba87efef8b0ce8af3c7fbbd0c0a0dfc47\"}"
+    }
+  },
+  "restart_validation": {
+    "status": "PASS",
+    "before_state": {
+      "schema_migrations": 10,
+      "job_runs": 0
+    },
+    "after_state": {
+      "schema_migrations": 10,
+      "job_runs": 0
+    },
+    "schema_migrations_persisted": true,
+    "job_runs_not_lost": true,
+    "state_persisted": true,
+    "api_health": "{\"status\":\"ok\",\"service\":\"api\",\"database\":\"ok\",\"score_version\":\"s-only-v6\",\"formula_hash\":\"21df6cf28188f6ef3973e8283cb6f482d9895203e9f023f3dc9c69bec926f99b\",\"timezone\":\"Asia/Taipei\"}",
+    "worker_health": "{\"service\": \"worker\", \"status\": \"ok\", \"ready\": true, \"heartbeat_age_seconds\": 16, \"scheduler_age_seconds\": 16, \"progress_age_seconds\": 16, \"progress_deadline_seconds\": 180, \"stale\": false, \"prolonged_job\": false, \"scheduler_ready\": true, \"job_progress_active\": false, \"scheduler_contract_missing\": false, \"scheduler_execution_overdue\": false, \"scheduler_event_error\": false, \"scheduler_job_reasons\": [], \"heartbeat\": {\"status\": \"idle\", \"ready\": true, \"scheduler_ready\": true, \"market_session\": {\"state\": \"CLOSED\", \"monitoring_active\": false, \"reason\": \"outside_continuous_trading_hours\", \"timezone\": \"Asia/Taipei\", \"local_date\": \"2026-08-21\", \"local_time\": \"20:47:59\", \"open_time\": \"09:00:00\", \"close_time\": \"13:30:00\", \"calendar_version\": \"tw-exchange-2026-v1\", \"calendar_hash\": \"245382ea5cb79419654219e8eef2303664a79037765f12e10fdfc86361ef4e5b\"}, \"scheduler_started_at\": \"2026-08-21T12:47:59.122580+00:00\", \"last_heartbeat_at\": \"2026-08-21T12:47:59.122910+00:00\", \"last_job_status\": \"DEFERRED_BEFORE_SOURCE_PUBLICATION\", \"last_error_code\": null, \"last_job_started_at\": null, \"last_job_progress_at\": null, \"job_phase\": null, \"last_job_finished_at\": \"2026-08-21T12:47:59.121185+00:00\", \"current_job_run_id\": null, \"last_scheduler_heartbeat_at\": \"2026-08-21T12:47:59.122580+00:00\", \"next_expected_run_at\": \"2026-08-21T13:30:00+00:00\", \"registered_scheduler_job_ids\": [\"main-sync\", \"retry-sync\"], \"scheduler_jobs\": {\"main-sync\": {\"next_expected_fire_at\": \"2026-08-21T13:30:00+00:00\", \"last_started_fire_at\": null, \"last_completed_fire_at\": null, \"last_event\": \"REGISTERED\", \"last_event_at\": \"2026-08-21T12:47:59.122619+00:00\", \"last_error_code\": null}, \"retry-sync\": {\"next_expected_fire_at\": \"2026-08-21T15:00:00+00:00\", \"last_started_fire_at\": null, \"last_completed_fire_at\": null, \"last_event\": \"REGISTERED\", \"last_event_at\": \"2026-08-21T12:47:59.122641+00:00\", \"last_error_code\": null}}, \"last_scheduler_event_at\": \"2026-08-21T12:47:59.122580+00:00\"}}"
+  },
+  "frontend_api_via_nginx": {
+    "status": "PASS",
+    "url": "http://127.0.0.1:18082/health"
+  },
+  "cleanup_complete": true
+}

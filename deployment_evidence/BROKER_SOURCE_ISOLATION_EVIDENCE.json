@@ -1,0 +1,49 @@
+{
+  "generated_at": "2026-08-21T12:45:12.110635+00:00",
+  "status": "PASS",
+  "source_revision": "a22f4a4295f3add4271a1dce33df745bd889dce3",
+  "official_broker_source": "TaiwanStockTradingDailyReport",
+  "capability_only_source": "TaiwanStockTradingDailyReportSecIdAgg",
+  "broker_sources": [
+    {
+      "source_dataset": "TaiwanStockTradingDailyReport",
+      "rows": 344347
+    }
+  ],
+  "prohibited_broker_rows": 0,
+  "prohibited_source_revisions": 0,
+  "database_constraint": "CHECK (((source_dataset)::text = 'TaiwanStockTradingDailyReport'::text))",
+  "quarantined_broker_rows": 0,
+  "quarantined_source_revisions": 0,
+  "affected_stocks": 0,
+  "pending_authoritative_rebuilds": 0,
+  "remediation_states": [],
+  "migration_audit": [
+    {
+      "migration_version": "007_isolate_broker_capability_sources",
+      "prohibited_broker_rows": 0,
+      "prohibited_source_revisions": 0,
+      "affected_stocks": 0,
+      "invalidated_features": 0,
+      "invalidated_v4_scores": 0,
+      "applied_at": "2026-08-21 05:08:09.278003+00:00"
+    }
+  ],
+  "score_counts": [
+    {
+      "score_version": "s-only-v1",
+      "rows": 8595
+    },
+    {
+      "score_version": "s-only-v2",
+      "rows": 4296
+    },
+    {
+      "score_version": "s-only-v4",
+      "rows": 2148
+    }
+  ],
+  "payloads_included": false,
+  "secrets_included": false,
+  "sanitized": true
+}

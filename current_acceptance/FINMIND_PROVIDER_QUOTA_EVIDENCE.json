@@ -1,0 +1,17 @@
+{
+  "generated_at": "2026-08-21T12:44:06.416926+00:00",
+  "source_revision": "a22f4a4295f3add4271a1dce33df745bd889dce3",
+  "status": "PASS",
+  "evidence_type": "authenticated_provider_user_info",
+  "direct_provider_response": true,
+  "provider": "FinMind",
+  "plan": "Sponsor",
+  "provider_reported_limit_per_hour": 6000,
+  "provider_reported_used": 2515,
+  "provider_reported_remaining": 3485,
+  "sponsor_limit_matches_expected": true,
+  "raw_response_persisted": false,
+  "authorization_material_included": false,
+  "sanitized": true,
+  "secrets_included": false
+}
