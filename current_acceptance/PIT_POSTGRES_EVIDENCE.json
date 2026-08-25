@@ -1,6 +1,6 @@
 {
   "database_dialect": "postgresql",
-  "temporary_schema": "pit_evidence_936d5918a105",
+  "temporary_schema": "pit_evidence_689651596a1a",
   "historical_date": "2026-08-20",
   "t1_cutoff": "2026-08-20T13:00:00+00:00",
   "initial": {
@@ -929,7 +929,7 @@
     },
     "score_version": "s-only-v6",
     "formula_hash": "21df6cf28188f6ef3973e8283cb6f482d9895203e9f023f3dc9c69bec926f99b",
-    "knowledge_cutoff": "2026-08-21 12:45:17.778084+00:00",
+    "knowledge_cutoff": "2026-08-25 14:41:57.598881+00:00",
     "input_snapshot_hash": "5a39191016ff427018809514ca73b2392cf8d08b7db914ff7ac18309b41b87b0",
     "input_source_hashes": [
       "043b00c4e9462c571deccecf9ce938b1b95ba3c200f9e384d2c54859dbf86186",

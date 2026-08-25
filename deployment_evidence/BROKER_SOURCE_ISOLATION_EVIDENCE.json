@@ -1,13 +1,13 @@
 {
-  "generated_at": "2026-08-21T12:45:12.110635+00:00",
+  "generated_at": "2026-08-25T14:41:52.039445+00:00",
   "status": "PASS",
-  "source_revision": "a22f4a4295f3add4271a1dce33df745bd889dce3",
+  "source_revision": "b257f34ca3b42a6bbe32f0e9b370dd10cdf80020",
   "official_broker_source": "TaiwanStockTradingDailyReport",
   "capability_only_source": "TaiwanStockTradingDailyReportSecIdAgg",
   "broker_sources": [
     {
       "source_dataset": "TaiwanStockTradingDailyReport",
-      "rows": 344347
+      "rows": 9519911
     }
   ],
   "prohibited_broker_rows": 0,
@@ -41,6 +41,10 @@
     {
       "score_version": "s-only-v4",
       "rows": 2148
+    },
+    {
+      "score_version": "s-only-v6",
+      "rows": 4296
     }
   ],
   "payloads_included": false,

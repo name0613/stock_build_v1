@@ -1,0 +1,163 @@
+{
+  "format": "current-acceptance-manifest-v7",
+  "acceptance_run_id": "20260821T125713Z-a22f4a4",
+  "captured_at": "2026-08-21T12:57:13.170892+00:00",
+  "source_revision": "a22f4a4295f3add4271a1dce33df745bd889dce3",
+  "deployed_source_revision": "a22f4a4295f3add4271a1dce33df745bd889dce3",
+  "source_revision_match": true,
+  "images": {
+    "api": "sha256:81a1e7bc3dffb3752e5c6bf3b37bfa5a6eac37fc240de99d23fe5d51d44109f4",
+    "worker": "sha256:608054e4aca516195012c5aca4748e9d5059a48d2fc98590881cfefe274ab4e7",
+    "frontend": "sha256:0311df702327794620a30736676c0d0707639d7f42823b004a30dd277c0e712c"
+  },
+  "dependency_locks": {
+    "backend_sha256": "75a0d62812977f2137f3fdbd0082594ba87efef8b0ce8af3c7fbbd0c0a0dfc47",
+    "frontend_sha256": "36c6571745da922fb5b37d65bf374a7fb146c28aadb7f55850a131399ff6ce0d"
+  },
+  "score_version": "s-only-v6",
+  "formula_hash": "21df6cf28188f6ef3973e8283cb6f482d9895203e9f023f3dc9c69bec926f99b",
+  "calendar_hash": null,
+  "provider_state": "PROVIDER_UNAVAILABLE",
+  "provider_reason_code": "EMPTY_RESPONSE_UNVERIFIED",
+  "numeric_scores_allowed": false,
+  "artifact_count": 27,
+  "artifacts": [
+    {
+      "path": "backend-junit.xml",
+      "size": 19237,
+      "sha256": "56f27578aa26a18e832caf8657b91a8cbd99f2489f85a9a1788e3a0177886882"
+    },
+    {
+      "path": "backend-pytest-results.json",
+      "size": 217,
+      "sha256": "33f2eac3259c93b57d6e6a68c80f5f54ed3ca60715afaa69de0f983c3a41aa76"
+    },
+    {
+      "path": "BROKER_SOURCE_ISOLATION_EVIDENCE.json",
+      "size": 1407,
+      "sha256": "9752caa4419d27cfeb4c7156b5b150f9448733a0a4b1d712c9e541c43387c5d5"
+    },
+    {
+      "path": "BROWSER_ACCEPTANCE_EVIDENCE.json",
+      "size": 2541,
+      "sha256": "736dfb11c9bb798b26d99d582c54dd08de72d6825e683212bced625dc54dc30c"
+    },
+    {
+      "path": "CATCH_UP_ATTEMPT_EVIDENCE.json",
+      "size": 14932,
+      "sha256": "ed133f16702eeab54dcce1c323f75fc511ed6ff31f83979c9af928df4f1d611f"
+    },
+    {
+      "path": "CLEANROOM_DOCKER_EVIDENCE.json",
+      "size": 12118,
+      "sha256": "6ec4cf812123a07a7f7ed58e26cedebc08aeb4d6b6bc58faadab5618aa7ae3b2"
+    },
+    {
+      "path": "contract_fixtures/broker_report_contract_v1.json",
+      "size": 1592,
+      "sha256": "f7e3d0ae5869bdc70db0297ac32df3cc23701294e51046e6374117c66b4a3b19"
+    },
+    {
+      "path": "contract_fixtures/holding_shares_level_v1.json",
+      "size": 1294,
+      "sha256": "e1c249c9f2832090d257278f2e2966b5e50fa5192cac80d555e2be76b786506f"
+    },
+    {
+      "path": "FINMIND_CAPABILITY_EVIDENCE.json",
+      "size": 14108,
+      "sha256": "898671f0c31c153d4cc8e549496114aaf8726e8d66d98192ae28e3e993805e04"
+    },
+    {
+      "path": "FINMIND_PROVIDER_QUOTA_EVIDENCE.json",
+      "size": 584,
+      "sha256": "e16aa8160d3e106b52c4d90f84d7a1a79d157448384fbc77dbcfdd11cea04c5e"
+    },
+    {
+      "path": "frontend-build-results.json",
+      "size": 802,
+      "sha256": "6100f536a228d0a6a56ae31f72e63362b2a15ae6af1b076dc19f2e2677d21406"
+    },
+    {
+      "path": "frontend-e2e-junit.xml",
+      "size": 2484,
+      "sha256": "aef48f5931e70d0e6e41cae8c1a8f54984c86989369cfc0f0ac47021edb18d92"
+    },
+    {
+      "path": "frontend-e2e-results.json",
+      "size": 15988,
+      "sha256": "261f80d6f11260e9e2e580ea9300122b6b1a7b7cb430346be082f5a7a0bc2117"
+    },
+    {
+      "path": "IMAGE_SECRET_EVIDENCE.json",
+      "size": 1415,
+      "sha256": "fb2865c1e56c5fd057d26ddbdde42707cb675806f912c62c7c196b4177c7aad3"
+    },
+    {
+      "path": "NAS_COMPOSE_PERSISTENCE_EVIDENCE.json",
+      "size": 11113,
+      "sha256": "28a949d282f4d2d642f304928666836dbb52826bc3701ada7dc0123069fb8eb3"
+    },
+    {
+      "path": "NAS_DEPLOYMENT_EVIDENCE.json",
+      "size": 27141,
+      "sha256": "d044aebfd0d5dee2127925494dfe100c114aeba77c8a100d4a0a75b920bc6b7c"
+    },
+    {
+      "path": "NAS_DEPLOYMENT_EVIDENCE.md",
+      "size": 27234,
+      "sha256": "2412b40907c89f82fea0e6aac9abc1596906b092158d8748c5d6c9bee8e3cfff"
+    },
+    {
+      "path": "NAS_RUNTIME_METADATA_EVIDENCE.json",
+      "size": 1939,
+      "sha256": "d1dafbee31a686c69114687445de7244e9b16fa77e3417eecfa5f8be62bc192e"
+    },
+    {
+      "path": "PIT_POSTGRES_EVIDENCE.json",
+      "size": 62835,
+      "sha256": "c0a7c9f7a746a0e90dc586e5b4608dcd51e5254728ae82dcb938f805b4e4036a"
+    },
+    {
+      "path": "QUOTA_BUDGET_EVIDENCE.json",
+      "size": 14580,
+      "sha256": "821a014caca26d73875e2180294c69eada1c2c195af4e342fefee4dc8ba330e2"
+    },
+    {
+      "path": "REMEDIATION_MATRIX.json",
+      "size": 2745,
+      "sha256": "b70553d10fadc08feb81e6e8a912652effa91c1c6eb704e532df8053024c855a"
+    },
+    {
+      "path": "RUN_METADATA.json",
+      "size": 3445,
+      "sha256": "4c3f2ffcf259b9041e4a3a64053a6303daac3fb9b42572f4a12cebfbf02e5aa2"
+    },
+    {
+      "path": "screenshots/dashboard.png",
+      "size": 1173589,
+      "sha256": "3a83b3ccb56ba72ec598965bedcbda88916e6f089b8b022cf0d860bb9fabfed6"
+    },
+    {
+      "path": "screenshots/detail-2330-charts.png",
+      "size": 930536,
+      "sha256": "b3ad8019bdc019f511b192eb951bff26c8d038a07fe7191cb1866a77925e0039"
+    },
+    {
+      "path": "screenshots/detail-2330.png",
+      "size": 930536,
+      "sha256": "b3ad8019bdc019f511b192eb951bff26c8d038a07fe7191cb1866a77925e0039"
+    },
+    {
+      "path": "SECRET_SURFACE_EVIDENCE.json",
+      "size": 691,
+      "sha256": "aac251b72deff34cc63a490ec1c2e7adaf8d894a788753d76b84481a08f90b3a"
+    },
+    {
+      "path": "TEST_SUMMARY.md",
+      "size": 540,
+      "sha256": "b0e0d825c288b23d8991b97d9f196c9b9dffb9e0278027b9ad7ad92f7c17b671"
+    }
+  ],
+  "secrets_included": false,
+  "sanitized": true
+}

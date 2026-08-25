@@ -1,7 +1,7 @@
 {
-  "generated_at": "2026-08-21T14:32:38.492878+00:00",
-  "probe_time": "2026-08-21T14:32:38.492894+00:00",
-  "source_revision": "45b1566fe7dc3262829351b402c5ccc08150d113",
+  "generated_at": "2026-08-25T14:41:49.143957+00:00",
+  "probe_time": "2026-08-25T14:41:49.143966+00:00",
+  "source_revision": "b257f34ca3b42a6bbe32f0e9b370dd10cdf80020",
   "request_policy_version": "finmind-request-policy-v5-fair-period-coverage",
   "source_request_policy_version": "finmind-request-policy-v6-fair-provider-missing",
   "normalization_policy_version": "s-only-normalization-v5-contract-bound",
@@ -66,32 +66,17 @@
   "results": [
     {
       "dataset": "TaiwanStockInstitutionalInvestorsBuySellWide",
-      "accessible": true,
+      "accessible": false,
       "method": "GET /api/v4/data",
-      "latest_date": "2026-07-22",
-      "sample_row_count": 20029,
+      "latest_date": null,
+      "sample_row_count": 0,
       "permission_error": null,
       "status_code": 200,
-      "response_fields": [
-        "Dealer_Hedging_buy",
-        "Dealer_Hedging_sell",
-        "Dealer_buy",
-        "Dealer_self_buy",
-        "Dealer_self_sell",
-        "Dealer_sell",
-        "Foreign_Dealer_Self_buy",
-        "Foreign_Dealer_Self_sell",
-        "Foreign_Investor_buy",
-        "Foreign_Investor_sell",
-        "Investment_Trust_buy",
-        "Investment_Trust_sell",
-        "date",
-        "stock_id"
-      ],
+      "response_fields": [],
       "requested_shape": {
         "data_id": null,
-        "start_date": "2026-07-22",
-        "end_date": "2026-08-21",
+        "start_date": "2026-07-26",
+        "end_date": "2026-08-25",
         "securities_trader_id": null,
         "mode": "broad"
       },
@@ -99,10 +84,10 @@
       "query_mode": "broad",
       "data_id_required": true,
       "returned_range": {
-        "start": "2026-07-22",
-        "end": "2026-07-22"
+        "start": null,
+        "end": null
       },
-      "classification": "FULL_MARKET_LIMITED_RANGE",
+      "classification": "EMPTY_RESPONSE",
       "quota_plan": "not exposed by provider response",
       "probe_only": true,
       "sanitized_request_mode": true,
@@ -112,8 +97,8 @@
       "dataset": "TaiwanStockInstitutionalInvestorsBuySellWide",
       "accessible": true,
       "method": "GET /api/v4/data",
-      "latest_date": "2026-08-21",
-      "sample_row_count": 23,
+      "latest_date": "2026-08-25",
+      "sample_row_count": 22,
       "permission_error": null,
       "status_code": 200,
       "response_fields": [
@@ -134,8 +119,8 @@
       ],
       "requested_shape": {
         "data_id": "2330",
-        "start_date": "2026-07-22",
-        "end_date": "2026-08-21",
+        "start_date": "2026-07-26",
+        "end_date": "2026-08-25",
         "securities_trader_id": null,
         "mode": "per_stock"
       },
@@ -143,8 +128,8 @@
       "query_mode": "per_stock",
       "data_id_required": true,
       "returned_range": {
-        "start": "2026-07-22",
-        "end": "2026-08-21"
+        "start": "2026-07-27",
+        "end": "2026-08-25"
       },
       "classification": "PER_STOCK_HISTORY_USABLE",
       "quota_plan": "not exposed by provider response",
@@ -154,31 +139,17 @@
     },
     {
       "dataset": "TaiwanStockShareholding",
-      "accessible": true,
+      "accessible": false,
       "method": "GET /api/v4/data",
-      "latest_date": "2026-07-22",
-      "sample_row_count": 2360,
+      "latest_date": null,
+      "sample_row_count": 0,
       "permission_error": null,
       "status_code": 200,
-      "response_fields": [
-        "ChineseInvestmentUpperLimitRatio",
-        "ForeignInvestmentRemainRatio",
-        "ForeignInvestmentRemainingShares",
-        "ForeignInvestmentShares",
-        "ForeignInvestmentSharesRatio",
-        "ForeignInvestmentUpperLimitRatio",
-        "InternationalCode",
-        "NumberOfSharesIssued",
-        "RecentlyDeclareDate",
-        "date",
-        "note",
-        "stock_id",
-        "stock_name"
-      ],
+      "response_fields": [],
       "requested_shape": {
         "data_id": null,
-        "start_date": "2026-07-22",
-        "end_date": "2026-08-21",
+        "start_date": "2026-07-26",
+        "end_date": "2026-08-25",
         "securities_trader_id": null,
         "mode": "broad"
       },
@@ -186,10 +157,10 @@
       "query_mode": "broad",
       "data_id_required": true,
       "returned_range": {
-        "start": "2026-07-22",
-        "end": "2026-07-22"
+        "start": null,
+        "end": null
       },
-      "classification": "FULL_MARKET_LIMITED_RANGE",
+      "classification": "EMPTY_RESPONSE",
       "quota_plan": "not exposed by provider response",
       "probe_only": true,
       "sanitized_request_mode": true,
@@ -199,8 +170,8 @@
       "dataset": "TaiwanStockShareholding",
       "accessible": true,
       "method": "GET /api/v4/data",
-      "latest_date": "2026-08-21",
-      "sample_row_count": 23,
+      "latest_date": "2026-08-25",
+      "sample_row_count": 22,
       "permission_error": null,
       "status_code": 200,
       "response_fields": [
@@ -220,8 +191,8 @@
       ],
       "requested_shape": {
         "data_id": "2330",
-        "start_date": "2026-07-22",
-        "end_date": "2026-08-21",
+        "start_date": "2026-07-26",
+        "end_date": "2026-08-25",
         "securities_trader_id": null,
         "mode": "per_stock"
       },
@@ -229,8 +200,8 @@
       "query_mode": "per_stock",
       "data_id_required": true,
       "returned_range": {
-        "start": "2026-07-22",
-        "end": "2026-08-21"
+        "start": "2026-07-27",
+        "end": "2026-08-25"
       },
       "classification": "PER_STOCK_HISTORY_USABLE",
       "quota_plan": "not exposed by provider response",
@@ -249,8 +220,8 @@
       "response_fields": [],
       "requested_shape": {
         "data_id": null,
-        "start_date": "2026-07-22",
-        "end_date": "2026-08-21",
+        "start_date": "2026-07-26",
+        "end_date": "2026-08-25",
         "securities_trader_id": null,
         "mode": "broad"
       },
@@ -271,7 +242,7 @@
       "dataset": "TaiwanStockHoldingSharesPer",
       "accessible": true,
       "method": "GET /api/v4/data",
-      "latest_date": "2026-08-14",
+      "latest_date": "2026-08-21",
       "sample_row_count": 68,
       "permission_error": null,
       "status_code": 200,
@@ -287,8 +258,8 @@
       ],
       "requested_shape": {
         "data_id": "2330",
-        "start_date": "2026-07-22",
-        "end_date": "2026-08-21",
+        "start_date": "2026-07-26",
+        "end_date": "2026-08-25",
         "securities_trader_id": null,
         "mode": "per_stock"
       },
@@ -296,8 +267,8 @@
       "query_mode": "per_stock",
       "data_id_required": true,
       "returned_range": {
-        "start": "2026-07-24",
-        "end": "2026-08-14"
+        "start": "2026-07-31",
+        "end": "2026-08-21"
       },
       "classification": "PER_STOCK_HISTORY_USABLE",
       "quota_plan": "not exposed by provider response",
@@ -316,8 +287,8 @@
       "response_fields": [],
       "requested_shape": {
         "data_id": null,
-        "start_date": "2026-08-20",
-        "end_date": "2026-08-20",
+        "start_date": "2026-08-24",
+        "end_date": "2026-08-24",
         "securities_trader_id": null,
         "mode": "broad"
       },
@@ -338,8 +309,8 @@
       "dataset": "TaiwanStockTradingDailyReport",
       "accessible": true,
       "method": "GET /api/v4/taiwan_stock_trading_daily_report",
-      "latest_date": "2026-08-20",
-      "sample_row_count": 3759,
+      "latest_date": "2026-08-24",
+      "sample_row_count": 5928,
       "permission_error": null,
       "status_code": 200,
       "response_fields": [
@@ -357,8 +328,8 @@
       ],
       "requested_shape": {
         "data_id": "2330",
-        "start_date": "2026-08-20",
-        "end_date": "2026-08-20",
+        "start_date": "2026-08-24",
+        "end_date": "2026-08-24",
         "securities_trader_id": null,
         "mode": "per_stock"
       },
@@ -366,8 +337,8 @@
       "query_mode": "per_stock",
       "data_id_required": true,
       "returned_range": {
-        "start": "2026-08-20",
-        "end": "2026-08-20"
+        "start": "2026-08-24",
+        "end": "2026-08-24"
       },
       "classification": "PER_STOCK_HISTORY_USABLE",
       "quota_plan": "not exposed by provider response",
@@ -386,8 +357,8 @@
       "response_fields": [],
       "requested_shape": {
         "data_id": null,
-        "start_date": "2026-08-20",
-        "end_date": "2026-08-20",
+        "start_date": "2026-08-24",
+        "end_date": "2026-08-24",
         "securities_trader_id": "075T",
         "mode": "broad"
       },
@@ -415,8 +386,8 @@
       "response_fields": [],
       "requested_shape": {
         "data_id": "2330",
-        "start_date": "2026-08-20",
-        "end_date": "2026-08-20",
+        "start_date": "2026-08-24",
+        "end_date": "2026-08-24",
         "securities_trader_id": "075T",
         "mode": "per_stock"
       },

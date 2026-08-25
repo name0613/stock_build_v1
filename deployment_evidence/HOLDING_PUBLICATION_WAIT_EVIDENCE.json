@@ -1,0 +1,39 @@
+{
+  "format": "holding-publication-wait-production-evidence-v1",
+  "source_revision": "b257f34ca3b42a6bbe32f0e9b370dd10cdf80020",
+  "dataset": "TaiwanStockHoldingSharesPer",
+  "first_check": {
+    "status": "WAITING_FOR_PROVIDER_PUBLICATION",
+    "publication_target_date": "2026-08-21",
+    "required_bucket_count": 15,
+    "requested_stocks": 2148,
+    "stocks_with_rows": 0,
+    "complete_stocks": 0,
+    "incomplete_stocks": 2148,
+    "physical_requests": 0,
+    "missing_values_imputed_as_zero": 0,
+    "next_publication_check_at": "2026-08-26T20:59:29.508452+08:00"
+  },
+  "second_check_before_eligible_time": {
+    "status": "WAITING_FOR_PROVIDER_PUBLICATION",
+    "publication_target_date": "2026-08-21",
+    "required_bucket_count": 15,
+    "requested_stocks": 2148,
+    "stocks_with_rows": 0,
+    "complete_stocks": 0,
+    "incomplete_stocks": 2148,
+    "physical_requests": 0,
+    "rows_received": 0,
+    "checkpoint_content_hash_before": "146928306feb4ab6130a3ab02910797f7724058c4fddd20fe4ac436f8c3a2bda",
+    "checkpoint_content_hash_after": "146928306feb4ab6130a3ab02910797f7724058c4fddd20fe4ac436f8c3a2bda",
+    "next_publication_check_at": "2026-08-26T20:59:29.508452+08:00"
+  },
+  "assertions": {
+    "all_15_canonical_buckets_required": true,
+    "missing_bucket_fill_as_zero": false,
+    "second_check_issued_zero_physical_requests": true,
+    "old_date_relabelled_as_target": false
+  },
+  "sanitized": true,
+  "secrets_included": false
+}

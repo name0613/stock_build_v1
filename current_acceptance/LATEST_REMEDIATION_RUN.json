@@ -1,0 +1,20 @@
+{
+  "format": "latest-remediation-run-v2",
+  "acceptance_run_id": "20260825T-final-b257",
+  "source_revision": "b257f34ca3b42a6bbe32f0e9b370dd10cdf80020",
+  "deployed_source_revision": "b257f34ca3b42a6bbe32f0e9b370dd10cdf80020",
+  "deployed_image_digests": {
+    "api": "sha256:08e8abd71fec167ef2765c57c6689d03e44c13814ec45ffa1e32ddf4aa5a41a5",
+    "worker": "sha256:e58d0fec742e88fb890f1da10c5decaec2d211e44dbc3fab4291f64c2ff700a5",
+    "frontend": "sha256:2992e4355db4f982a97cec5eca55f9818cd9cee3bc4d1e962aa686b41168cabd"
+  },
+  "actual_production_catch_up": true,
+  "broker_retry_cycles": 2,
+  "holding_publication_second_check_physical_requests": 0,
+  "score_blocked_stocks_attempted": 0,
+  "e2e_passed": 13,
+  "quota_acceptance_claim": "PROVIDER_BLOCKED_FAIL_CLOSED",
+  "full_market_completion_claimed": false,
+  "secrets_included": false,
+  "sanitized": true
+}

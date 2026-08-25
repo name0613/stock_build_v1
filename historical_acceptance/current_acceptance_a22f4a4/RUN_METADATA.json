@@ -1,0 +1,92 @@
+{
+  "format": "current-acceptance-v7",
+  "acceptance_run_id": "20260821T125713Z-a22f4a4",
+  "captured_at": "2026-08-21T12:57:13.170892+00:00",
+  "source_revision": "a22f4a4295f3add4271a1dce33df745bd889dce3",
+  "deployed_source_revision": "a22f4a4295f3add4271a1dce33df745bd889dce3",
+  "source_revision_match": true,
+  "base_url": "http://192.168.31.138:18080",
+  "images": {
+    "api": "sha256:81a1e7bc3dffb3752e5c6bf3b37bfa5a6eac37fc240de99d23fe5d51d44109f4",
+    "worker": "sha256:608054e4aca516195012c5aca4748e9d5059a48d2fc98590881cfefe274ab4e7",
+    "frontend": "sha256:0311df702327794620a30736676c0d0707639d7f42823b004a30dd277c0e712c"
+  },
+  "dependency_locks": {
+    "backend_sha256": "75a0d62812977f2137f3fdbd0082594ba87efef8b0ce8af3c7fbbd0c0a0dfc47",
+    "frontend_sha256": "36c6571745da922fb5b37d65bf374a7fb146c28aadb7f55850a131399ff6ce0d"
+  },
+  "score_contract": {
+    "score_version": "s-only-v6",
+    "formula_hash": "21df6cf28188f6ef3973e8283cb6f482d9895203e9f023f3dc9c69bec926f99b",
+    "calendar_hash": null,
+    "build_metadata_available": true,
+    "score_spec_match": true,
+    "calendar_match": true
+  },
+  "worker": {
+    "status": "ok",
+    "ready": true,
+    "stale": false,
+    "scheduler_ready": true,
+    "scheduler_contract_missing": false,
+    "scheduler_execution_overdue": false,
+    "last_job_status": "DEFERRED_BEFORE_SOURCE_PUBLICATION",
+    "last_error_code": null,
+    "market_session": {
+      "state": "CLOSED",
+      "monitoring_active": false,
+      "reason": "outside_continuous_trading_hours",
+      "timezone": "Asia/Taipei",
+      "local_date": "2026-08-21",
+      "local_time": "20:57:04",
+      "open_time": "09:00:00",
+      "close_time": "13:30:00",
+      "calendar_version": "tw-exchange-2026-v1",
+      "calendar_hash": "245382ea5cb79419654219e8eef2303664a79037765f12e10fdfc86361ef4e5b"
+    }
+  },
+  "provider_gate": {
+    "captured_at": "2026-08-21T12:57:13.170906+00:00",
+    "status": "PROVIDER_UNAVAILABLE",
+    "reason_code": "EMPTY_RESPONSE_UNVERIFIED",
+    "numeric_scores_allowed": false,
+    "current_scores_exposed": false,
+    "historical_scores_provenance_bound": true
+  },
+  "tests": {
+    "backend_passed": 135,
+    "backend_failed": 0,
+    "frontend_e2e_passed": 12,
+    "frontend_e2e_failed": 0,
+    "frontend_build": "PASS",
+    "frontend_lint": "PASS",
+    "ruff": "PASS",
+    "cleanroom_docker": "PASS",
+    "migration": "PASS",
+    "pit_postgres": "PASS",
+    "persistence_identical": true
+  },
+  "performance_scope": "live NAS provider/current-data state; rankings are empty when numeric_scores_allowed=false",
+  "secret_scans_pass": true,
+  "secrets_included": false,
+  "sanitized": true,
+  "catch_up": {
+    "source_revision": "a22f4a4295f3add4271a1dce33df745bd889dce3",
+    "target_date": "2026-08-21",
+    "target_date_policy": "completed_source_end_date_v1",
+    "status": "PARTIAL",
+    "fatal_code": "EMPTY_RESPONSE_UNVERIFIED",
+    "market_session": {
+      "state": "CLOSED",
+      "monitoring_active": false,
+      "reason": "outside_continuous_trading_hours",
+      "timezone": "Asia/Taipei",
+      "local_date": "2026-08-21",
+      "local_time": "21:04:48",
+      "open_time": "09:00:00",
+      "close_time": "13:30:00",
+      "calendar_version": "tw-exchange-2026-v1",
+      "calendar_hash": "245382ea5cb79419654219e8eef2303664a79037765f12e10fdfc86361ef4e5b"
+    }
+  }
+}

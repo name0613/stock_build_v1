@@ -1,0 +1,32 @@
+{
+  "generated_at": "2026-08-21T09:37:23.6180625Z",
+  "source_revision": "c7930dbfce6319f5b6fd5b4be6e2f1e0f454542b",
+  "status": "PASS",
+  "checks": [
+    {
+      "command": "npm run lint",
+      "status": "PASS",
+      "tool": "TypeScript"
+    },
+    {
+      "command": "npm run build",
+      "status": "PASS",
+      "bundler": "Vite",
+      "target": "production"
+    },
+    {
+      "command": "npm test",
+      "status": "PASS",
+      "tests": 0,
+      "failures": 0
+    },
+    {
+      "command": "python -m ruff check backend",
+      "status": "PASS",
+      "tool": "Ruff"
+    }
+  ],
+  "e2e_junit_sha256": "496e74e34492a453e0e41e54a5ff2bbea65089216e32b25d566ac0370d0ba61d",
+  "frontend_lock_sha256": "36c6571745da922fb5b37d65bf374a7fb146c28aadb7f55850a131399ff6ce0d",
+  "secrets_included": false
+}

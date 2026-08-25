@@ -1,0 +1,14 @@
+{
+  "format": "review-bundle-sha256-v2",
+  "bundle": "review_bundle_20260825_144938.zip",
+  "sha256": "225c6ff58c05e91ef029be022c83cfe745dc156dcd8cafd5257d9b7d8b1373b6",
+  "source_revision": "b257f34ca3b42a6bbe32f0e9b370dd10cdf80020",
+  "acceptance_run_id": "20260825T-final-b257",
+  "zip_members": 192,
+  "bundle_manifest_files": 191,
+  "zip_integrity": "PASS",
+  "current_acceptance_revision_match": true,
+  "actual_screenshots_included": true,
+  "secrets_included": false,
+  "sanitized": true
+}

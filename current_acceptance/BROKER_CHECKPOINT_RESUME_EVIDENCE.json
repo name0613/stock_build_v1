@@ -1,0 +1,66 @@
+{
+  "format": "broker-checkpoint-resume-production-evidence-v1",
+  "source_revision": "b257f34ca3b42a6bbe32f0e9b370dd10cdf80020",
+  "target_date": "2026-08-24",
+  "checkpoint_manifest_hash": "7b769f1068fac06daa3ba67299a2b165b41b9f93ca312c022f38cfeedf25d902",
+  "cycles": [
+    {
+      "cycle": 1,
+      "started_at": "2026-08-25T22:31:06.459658+08:00",
+      "finished_at": "2026-08-25T22:35:50.824430+08:00",
+      "quota_remaining": 5854,
+      "quota_reserve": 300,
+      "usable_quota": 5554,
+      "quota_estimated_cost_per_item": 5,
+      "selected_pending_count": 1110,
+      "physical_requests": 1110,
+      "skipped_checkpoint": 39323,
+      "pending_before": 3637,
+      "pending_after": 3637,
+      "rows_received": 0,
+      "retryable_failed": 1110,
+      "retry_deferred": 0,
+      "checkpoint_state": "resumed",
+      "status": "PARTIAL"
+    },
+    {
+      "cycle": 2,
+      "started_at": "2026-08-25T22:36:25.350019+08:00",
+      "finished_at": "2026-08-25T22:40:17.611299+08:00",
+      "quota_remaining": 4790,
+      "quota_reserve": 300,
+      "usable_quota": 4490,
+      "quota_estimated_cost_per_item": 5,
+      "selected_pending_count": 898,
+      "physical_requests": 898,
+      "skipped_checkpoint": 39323,
+      "pending_before": 3637,
+      "pending_after": 3637,
+      "rows_received": 0,
+      "retryable_failed": 898,
+      "retry_deferred": 1110,
+      "deferred_pending_count": 1110,
+      "checkpoint_state": "resumed",
+      "status": "PARTIAL"
+    }
+  ],
+  "checkpoint_after_cycles": {
+    "completed_count": 41281,
+    "failed_count": 3870,
+    "retryable_failed_count": 3827,
+    "failure_code": "EMPTY_RESPONSE_UNVERIFIED",
+    "last_attempt_at_max": "2026-08-25T14:40:16.892286+00:00",
+    "next_eligible_retry_at_max": "2026-08-25T15:40:16.892286+00:00",
+    "persisted_path": "/data/raw/checkpoints/TaiwanStockTradingDailyReport-incremental-v5.json"
+  },
+  "assertions": {
+    "reserve_not_consumed": true,
+    "completed_keys_not_refetched": true,
+    "same_checkpoint_manifest_resumed": true,
+    "next_eligible_retry_at_persisted": true,
+    "full_market_completion": false,
+    "provider_returned_rows": false
+  },
+  "sanitized": true,
+  "secrets_included": false
+}

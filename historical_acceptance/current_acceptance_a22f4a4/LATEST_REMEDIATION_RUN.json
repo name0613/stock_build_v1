@@ -1,0 +1,80 @@
+{
+  "format": "latest-remediation-runtime-evidence-v1",
+  "generated_at": "2026-08-25T18:04:08.834098+08:00",
+  "source_revision": "b257f34ca3b42a6bbe32f0e9b370dd10cdf80020",
+  "deployed_source_revision": "b257f34ca3b42a6bbe32f0e9b370dd10cdf80020",
+  "source_revision_match": true,
+  "base_url": "http://192.168.31.138:18080",
+  "health": {
+    "status": "ok",
+    "database": "ok"
+  },
+  "tests": {
+    "backend": {
+      "command": "PYTHONPATH=backend python -m pytest backend/tests -q --junitxml=test_results/backend-junit.xml",
+      "passed": 146,
+      "failed": 0,
+      "status": "PASS"
+    },
+    "ruff": {
+      "command": "python -m ruff check backend/app backend/tests",
+      "status": "PASS"
+    },
+    "frontend_build": {
+      "command": "npm run build",
+      "status": "PASS"
+    }
+  },
+  "provider_quota": {
+    "evidence_type": "authenticated_provider_user_info",
+    "provider": "FinMind",
+    "plan": "Sponsor",
+    "limit_per_hour": 6000,
+    "used": 103,
+    "remaining": 5897,
+    "reserve": 300,
+    "usable_budget": 5597,
+    "source_revision_matched": true,
+    "raw_response_persisted": false,
+    "authorization_material_included": false
+  },
+  "worker": {
+    "status": "ok",
+    "ready": true,
+    "stale": false,
+    "scheduler_ready": true,
+    "market_session": "CLOSED",
+    "next_expected_runs": {
+      "main-sync": "2026-08-25T21:30:00+08:00",
+      "retry-sync": "2026-08-25T23:00:00+08:00",
+      "market-open-sync": "2026-08-26T09:00:00+08:00"
+    },
+    "intraday_contract": "market-open-sync only refreshes current-session institutional/shareholding/price data; it does not invoke broker catch-up or Score"
+  },
+  "source_coverage": {
+    "score_ready": false,
+    "score_blocked": true,
+    "score_blocking_reason": "SCORE_BLOCKED_BY_SOURCE_COVERAGE",
+    "holding": {
+      "latest_source_date": "2026-08-14",
+      "expected_source_date": "2026-08-21",
+      "staleness": "STALE",
+      "publication_semantics": "WAITING_FOR_PROVIDER_PUBLICATION / coverage must be rechecked at most daily; stale data is never relabeled"
+    },
+    "broker": {
+      "status": "PARTIAL",
+      "retryable_pending": 3637,
+      "reason_code": "BROKER_RETRY_PENDING"
+    },
+    "numeric_scores_published": 0,
+    "synthetic_data_or_zero_imputation": false
+  },
+  "evidence_files": [
+    "deployment_evidence/NAS_DEPLOYMENT_EVIDENCE.json",
+    "deployment_evidence/NAS_RUNTIME_METADATA_EVIDENCE.json",
+    "deployment_evidence/NAS_DEPLOYMENT_EVIDENCE.md",
+    "deployment_evidence/FINMIND_PROVIDER_QUOTA_EVIDENCE.json",
+    "deployment_evidence/QUOTA_BUDGET_EVIDENCE.json"
+  ],
+  "capture_policy": "No catch-up was started during this capture; runtime evidence is read-only except for the authenticated provider quota probe."
+}
