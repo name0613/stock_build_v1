@@ -17,7 +17,7 @@ from apscheduler.triggers.cron import CronTrigger
 from .config import get_settings
 from .db import SessionLocal, init_db
 from .finmind import FinMindClient
-from .ingestion import catch_up, seed_score_version
+from .ingestion import catch_up, intraday_sync, seed_score_version
 from .calendar import MARKET_CLOSE_TIME, MARKET_OPEN_TIME, completed_source_end_date, is_trading_session, market_session_state, source_publication_window_open
 from .models import JobRun
 from .worker_health import start_health_server
@@ -196,7 +196,7 @@ def run_catch_up() -> None:
 
 
 def run_open_market_sync() -> None:
-    """Run the regular pipeline only while the Taiwan market is open."""
+    """Run only current-session source refreshes while the Taiwan market is open."""
     session = market_session_state()
     if session.get("state") != "OPEN":
         _heartbeat(
@@ -209,7 +209,28 @@ def run_open_market_sync() -> None:
             current_job_run_id=None,
         )
         return
-    run_catch_up()
+    run_intraday_sync()
+
+
+def run_intraday_sync() -> None:
+    started = datetime.now(timezone.utc).isoformat()
+    _heartbeat(status="running", ready=True, scheduler_ready=False, market_session=market_session_state(), last_scheduler_heartbeat_at=started, last_job_started_at=started, last_error_code=None)
+    db = SessionLocal()
+    try:
+        def report_progress(phase: str) -> None:
+            running = db.query(JobRun).filter(JobRun.status == "RUNNING").order_by(JobRun.id.desc()).first()
+            _heartbeat(last_job_progress_at=datetime.now(timezone.utc).isoformat(), job_phase=phase, current_job_run_id=running.id if running else None)
+
+        result = asyncio.run(intraday_sync(db, FinMindClient(settings), end_date=datetime.now(ZoneInfo(settings.timezone)).date(), progress_callback=report_progress))
+        logger.info("intraday sync completed status=%s datasets=%s", result.get("status"), result.get("datasets"))
+        finished = datetime.now(timezone.utc).isoformat()
+        _heartbeat(status="idle", ready=True, scheduler_ready=bool(_scheduler_runtime and _scheduler_runtime.running), market_session=market_session_state(), last_job_finished_at=finished, last_job_status=result.get("status"), last_error_code=result.get("fatal_code"), current_job_run_id=None)
+    except Exception as exc:
+        logger.error("intraday sync failed code=%s", getattr(exc, "code", "UNEXPECTED"))
+        finished = datetime.now(timezone.utc).isoformat()
+        _heartbeat(status="idle", ready=True, scheduler_ready=bool(_scheduler_runtime and _scheduler_runtime.running), market_session=market_session_state(), last_job_finished_at=finished, last_job_status="FAILED", last_error_code=getattr(exc, "code", "UNEXPECTED"), current_job_run_id=None)
+    finally:
+        db.close()
 
 
 def main() -> None:

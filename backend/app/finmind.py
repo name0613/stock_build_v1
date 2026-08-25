@@ -70,6 +70,31 @@ def _quota_plan(limit: int | None) -> str:
     return {600: "Free", 1_600: "Backer", 6_000: "Sponsor", 20_000: "Sponsor Pro"}.get(limit, "Unknown")
 
 
+def _broker_retry_class(code: str) -> str:
+    if code in {"QUOTA_EXHAUSTED", "RATE_LIMITED"}:
+        return "quota_or_rate_limit"
+    if code in {"TIMEOUT", "NETWORK_ERROR", "UPSTREAM_5XX"}:
+        return "transient_provider_or_network"
+    if code in {"EMPTY_RESPONSE_UNVERIFIED", "PARTIAL_RESPONSE_UNVERIFIED", "INCOMPLETE_PROVIDER_COVERAGE"}:
+        return "empty_or_incomplete_response"
+    if code in {"SCHEMA_MISMATCH", "STOCK_SCHEMA_MISMATCH"}:
+        return "schema_or_validation"
+    if code in {"AUTHENTICATION_FAILED", "ACCESS_DENIED", "NON_RETRYABLE_4XX"}:
+        return "permanent_access_or_validation"
+    return "transient_provider_error"
+
+
+def _broker_backoff_seconds(settings: Settings, retry_count: int, code: str) -> int:
+    if settings.broker_retry_base_seconds <= 0:
+        return 0
+    if code in {"QUOTA_EXHAUSTED", "RATE_LIMITED"}:
+        base = max(settings.broker_retry_base_seconds, 300)
+    else:
+        base = max(settings.broker_retry_base_seconds, 1)
+    exponent = max(0, min(retry_count - 1, 10))
+    return min(max(settings.broker_retry_base_seconds, 1) * (2 ** exponent), max(settings.broker_retry_max_seconds, 1)) if code not in {"QUOTA_EXHAUSTED", "RATE_LIMITED"} else min(base * (2 ** exponent), max(settings.broker_retry_max_seconds, base))
+
+
 def _date_range(start: date, end: date) -> list[date]:
     """Return an inclusive calendar-date range for policy calculations."""
     if end < start:
@@ -545,11 +570,60 @@ class FinMindClient:
                 checkpoint_state = "corrupt_ignored"
         completed = set(checkpoint.get("completed", [])) & requested_keys
         permanent_failed = set(checkpoint.get("permanent_failed", [])) & requested_keys
+        failed_by_key = {
+            str(item.get("key")): item
+            for item in checkpoint.get("failed", [])
+            if item.get("key") in requested_keys
+        }
+        now = datetime.now(timezone.utc)
+        deferred_retry_keys: set[str] = set()
+        for key, failure in failed_by_key.items():
+            next_retry = failure.get("next_eligible_retry_at")
+            if next_retry:
+                try:
+                    eligible_at = datetime.fromisoformat(str(next_retry).replace("Z", "+00:00"))
+                    if eligible_at > now:
+                        deferred_retry_keys.add(key)
+                except ValueError:
+                    pass
+        candidate_keys = requested_keys - completed - permanent_failed - deferred_retry_keys
         semaphore = asyncio.Semaphore(self.settings.broker_concurrency)
         checkpoint_lock = asyncio.Lock()
         sink_lock = asyncio.Lock()
         fatal_event = asyncio.Event()
-        metrics = {"requested": len(stock_ids), "requested_keys": len(requested_keys), "skipped_checkpoint": len(completed), "reused_complete": len(completed), "reused_valid_no_data": 0, "observations_reused": len(completed), "newly_fetched": 0, "physical_requests": 0, "checkpoint_state": checkpoint_state, "checkpoint_manifest_hash": manifest_hash, "requested_start_date": start_date, "requested_end_date": end_date, "session_set_hash": session_hash, "universe_hash": universe_hash, "selection_policy": "date_major_round_robin", "success": len(completed), "failed": 0, "stocks_completed": 0, "stocks_failed": 0, "retryable_failed": 0, "permanent_failed": len(permanent_failed), "rows": 0, "rows_received": 0, "contract_validated_rows": 0, "retries": 0, "fatal_code": None}
+        metrics = {"requested": len(stock_ids), "requested_keys": len(requested_keys), "skipped_checkpoint": len(completed), "reused_complete": len(completed), "reused_valid_no_data": 0, "observations_reused": len(completed), "newly_fetched": 0, "physical_requests": 0, "checkpoint_state": checkpoint_state, "checkpoint_manifest_hash": manifest_hash, "requested_start_date": start_date, "requested_end_date": end_date, "session_set_hash": session_hash, "universe_hash": universe_hash, "selection_policy": "date_major_round_robin", "success": len(completed), "failed": 0, "stocks_completed": 0, "stocks_failed": 0, "retryable_failed": 0, "permanent_failed": len(permanent_failed), "retryable_pending": len(candidate_keys) + len(deferred_retry_keys), "retry_deferred": len(deferred_retry_keys), "rows": 0, "rows_received": 0, "contract_validated_rows": 0, "retries": 0, "fatal_code": None, "quota_probe_status": "NOT_CONFIGURED", "quota_remaining": None, "quota_reserve": max(0, int(self.settings.broker_quota_reserve)), "usable_quota": None, "quota_selected_pending_count": 0, "quota_estimated_cost_per_item": max(1, self.settings.broker_max_retries + 1)}
+
+        selected_keys = sorted(candidate_keys, key=lambda key: (key.split(":", 1)[1], key.split(":", 1)[0]))
+        quota_probe = getattr(self, "provider_quota", None)
+        if candidate_keys and self.settings.finmind_api_token and callable(quota_probe):
+            try:
+                quota = quota_probe(source_revision=self.settings.source_revision)
+                remaining = max(0, int(quota.get("provider_reported_remaining", 0)))
+                reserve = max(0, int(self.settings.broker_quota_reserve))
+                usable = max(0, remaining - reserve)
+                estimated_cost = max(1, int(self.settings.broker_max_retries) + 1)
+                allowed_count = min(len(candidate_keys), usable // estimated_cost)
+                metrics.update({"quota_probe_status": "PASS", "quota_remaining": remaining, "quota_reserve": reserve, "usable_quota": usable, "quota_selected_pending_count": allowed_count, "quota_estimated_cost_per_item": estimated_cost, "quota_limit": quota.get("provider_reported_limit_per_hour")})
+                selected_keys = selected_keys[:allowed_count]
+                if not selected_keys:
+                    metrics["fatal_code"] = "QUOTA_EXHAUSTED"
+                    metrics["quota_blocked"] = True
+            except FinMindError as exc:
+                metrics.update({"quota_probe_status": "FAILED", "quota_probe_error_code": exc.code, "fatal_code": exc.code, "quota_blocked": True})
+                selected_keys = []
+        elif candidate_keys and not self.settings.finmind_api_token:
+            metrics["quota_probe_status"] = "NOT_CONFIGURED"
+
+        metrics["selected_pending_count"] = len(selected_keys)
+        metrics["deferred_pending_count"] = len(deferred_retry_keys)
+        metrics["quota_unselected_pending_count"] = max(0, len(candidate_keys) - len(selected_keys))
+        metrics["remaining_pending_before_run"] = len(candidate_keys) + len(deferred_retry_keys)
+        if metrics.get("fatal_code"):
+            awaitable_persist = checkpoint_file.with_suffix(".tmp")
+            checkpoint["last_quota_decision"] = {key: metrics[key] for key in ("quota_probe_status", "quota_remaining", "quota_reserve", "usable_quota", "quota_selected_pending_count", "quota_estimated_cost_per_item", "selected_pending_count", "remaining_pending_before_run") if key in metrics}
+            awaitable_persist.write_text(json.dumps(checkpoint, ensure_ascii=False, indent=2), encoding="utf-8")
+            awaitable_persist.replace(checkpoint_file)
+            return metrics
         completed_stocks: set[str] = set()
         failed_stocks: set[str] = set()
 
@@ -597,12 +671,16 @@ class FinMindClient:
                         await persist()
                 except FinMindError as exc:
                     async with checkpoint_lock:
-                        global_fatal = exc.code in GLOBAL_PROVIDER_FAILURE_CODES
-                        permanent = exc.code in {"NON_RETRYABLE_4XX"}
+                        permanent = exc.code in {"NON_RETRYABLE_4XX", "SCHEMA_MISMATCH", "STOCK_SCHEMA_MISMATCH"}
+                        global_fatal = exc.code in GLOBAL_PROVIDER_FAILURE_CODES and not permanent
                         retryable = not (global_fatal or permanent)
                         failed_by_key = {item.get("key"): item for item in checkpoint.setdefault("failed", [])}
                         previous = failed_by_key.get(checkpoint_key, {})
-                        failure = {"key": checkpoint_key, "stock_id": stock_id, "requested_date": requested_date, "code": exc.code, "classification": "global_fatal" if global_fatal else ("permanent_failed" if permanent else "retryable_failed"), "retryable": retryable, "retry_count": int(previous.get("retry_count", 0)) + 1, "last_attempt_at": datetime.now(timezone.utc).isoformat(), "next_eligible_retry_at": datetime.now(timezone.utc).isoformat() if retryable else None}
+                        retry_count = int(previous.get("retry_count", 0)) + 1
+                        attempt_at = datetime.now(timezone.utc)
+                        retry_class = _broker_retry_class(exc.code)
+                        next_eligible = attempt_at + timedelta(seconds=_broker_backoff_seconds(self.settings, retry_count, exc.code)) if retryable else None
+                        failure = {"key": checkpoint_key, "stock_id": stock_id, "requested_date": requested_date, "code": exc.code, "classification": "global_fatal" if global_fatal else ("permanent_failed" if permanent else "retryable_failed"), "retry_class": "global_fatal" if global_fatal else retry_class, "retryable": retryable, "retry_count": retry_count, "last_attempt_at": attempt_at.isoformat(), "next_eligible_retry_at": next_eligible.isoformat() if next_eligible else None}
                         checkpoint["failed"] = [item for item in checkpoint["failed"] if item.get("key") != checkpoint_key] + [failure]
                         if permanent:
                             checkpoint.setdefault("permanent_failed", []).append(checkpoint_key)
@@ -635,15 +713,19 @@ class FinMindClient:
         # Date-major ordering gives each stock a fair opportunity in every
         # newly opened trading session instead of draining one stock's full
         # rolling window before starting the next stock.
+        selected_set = set(selected_keys)
         for requested_date in days:
             for stock_id in stock_ids:
-                await queue.put((stock_id, requested_date))
+                if f"{stock_id}:{requested_date}" in selected_set:
+                    await queue.put((stock_id, requested_date))
         await queue.join()
         for _ in workers:
             await queue.put(None)
         await asyncio.gather(*workers)
         metrics["retryable_pending"] = sum(1 for item in checkpoint.get("failed", []) if item.get("key") in requested_keys and item.get("classification") == "retryable_failed")
+        metrics["retryable_pending"] = max(metrics["retryable_pending"], len(deferred_retry_keys) + int(metrics.get("quota_unselected_pending_count", 0)))
         metrics["permanent_failed"] = len(set(checkpoint.get("permanent_failed", [])) & requested_keys)
+        metrics["remaining_pending_after_run"] = metrics["retryable_pending"] + metrics["permanent_failed"]
         return metrics
 
     async def fetch_stocks_dataset(self, stock_ids: list[str], dataset: str, start_date: str, end_date: str, *, record_sink: Callable[[list[dict[str, Any]]], int | dict[str, Any]] | None = None, progress_callback: Callable[[str], None] | None = None) -> dict[str, Any]:
@@ -715,6 +797,25 @@ class FinMindClient:
                     checkpoint_state = "legacy_corrupt_ignored"
 
         entries = checkpoint.setdefault("entries", {})
+        publication_target = expected_strings[-1] if dataset in WEEKLY_OBSERVATION_DATASETS and expected_strings else None
+        publication_wait = checkpoint.get("publication_wait") if isinstance(checkpoint.get("publication_wait"), dict) else None
+        publication_recheck_due = False
+        if publication_target and publication_wait and publication_wait.get("target_date") == publication_target:
+            next_check = publication_wait.get("next_eligible_check_at")
+            try:
+                publication_recheck_due = not next_check or datetime.fromisoformat(str(next_check).replace("Z", "+00:00")) <= datetime.now(timezone.utc)
+            except ValueError:
+                publication_recheck_due = True
+            if publication_recheck_due:
+                for entry in entries.values():
+                    if not isinstance(entry, dict):
+                        continue
+                    if publication_target in set(entry.get("verified_record_dates", [])):
+                        continue
+                    for field in ("covered_dates", "verified_missing_dates", "verified_no_data_dates", "unresolved_dates"):
+                        entry[field] = sorted(set(entry.get(field, [])) - {publication_target})
+                checkpoint["completed"] = sorted(set(checkpoint.get("completed", [])) - set(stock_ids))
+                checkpoint["no_data_but_valid"] = sorted(set(checkpoint.get("no_data_but_valid", [])) - set(stock_ids))
         cursor_start = checkpoint.get("fair_cursor_stock_id")
         cursor_index = stock_ids.index(cursor_start) if cursor_start in stock_ids else 0
         ordered_stock_ids = stock_ids[cursor_index:] + stock_ids[:cursor_index]
@@ -790,6 +891,17 @@ class FinMindClient:
             "previous_global_fatal": previous_global_fatal,
             "per_stock": {key: value for key, value in entries.items() if key in initial_complete},
         }
+
+        if publication_target and publication_wait and not publication_recheck_due:
+            metrics.update({
+                "publication_state": publication_wait.get("state", "WAITING_FOR_PROVIDER_PUBLICATION"),
+                "publication_check_deferred": True,
+                "next_publication_check_at": publication_wait.get("next_eligible_check_at"),
+                "publication_target_date": publication_target,
+                "physical_requests": 0,
+                "retryable_pending": 0,
+            })
+            return metrics
 
         async def persist() -> None:
             checkpoint["manifest"] = manifest
@@ -996,6 +1108,20 @@ class FinMindClient:
         metrics["unresolved_observations"] = len(stock_ids) * len(expected_strings) - metrics["verified_observations"]
         metrics["per_stock"] = {key: value for key, value in entries.items() if key in stock_ids}
         metrics["fair_cursor_end_stock_id"] = checkpoint.get("fair_cursor_stock_id")
+        if publication_target:
+            target_records = sum(1 for stock_id in stock_ids if publication_target in set(entries.get(stock_id, {}).get("verified_record_dates", [])))
+            metrics["publication_target_date"] = publication_target
+            metrics["publication_target_records"] = target_records
+            metrics["publication_target_stocks"] = len(stock_ids)
+            if target_records < len(stock_ids) and metrics.get("fatal_code") is None and metrics.get("failed", 0) == 0:
+                next_check = datetime.now(timezone.utc) + timedelta(hours=max(1, self.settings.holding_publication_check_interval_hours))
+                state = "WAITING_FOR_PROVIDER_PUBLICATION" if target_records == 0 else "HOLDING_PUBLICATION_PARTIAL"
+                checkpoint["publication_wait"] = {"state": state, "target_date": publication_target, "next_eligible_check_at": next_check.isoformat(), "confirmed_at": datetime.now(timezone.utc).isoformat(), "target_records": target_records, "target_stocks": len(stock_ids)}
+                metrics["publication_state"] = state
+                metrics["next_publication_check_at"] = next_check.isoformat()
+            else:
+                checkpoint.pop("publication_wait", None)
+            await persist()
         return metrics
 
 

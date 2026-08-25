@@ -111,7 +111,8 @@ def test_universe_refresh_failure_is_persisted_and_blocks_scoring() -> None:
     assert sync is not None and sync.status == "FAILED" and sync.last_error_code == "NETWORK_ERROR"
     assert sync.expected_latest_source_date == date(2026, 8, 20)
     assert jobs and jobs[-1].status == "FAILED" and jobs[-1].error_code == "NETWORK_ERROR"
-    assert not db.scalars(select(JobRun).where(JobRun.dataset == "score")).all()
+    score_jobs = db.scalars(select(JobRun).where(JobRun.dataset == "score")).all()
+    assert score_jobs and score_jobs[-1].status == "SCORE_BLOCKED_BY_SOURCE_COVERAGE"
 
 
 def test_universe_failure_does_not_mutate_previous_active_universe() -> None:
@@ -405,7 +406,7 @@ def test_scheduled_catch_up_runs_all_phases_for_dynamic_multi_stock_universe() -
                 record_sink(rows)
             return {"requested": len(stock_ids), "skipped_checkpoint": 0, "success": len(stock_ids) * len(sessions), "failed": 0, "rows": len(rows), "retries": 0}
 
-    result = asyncio.run(catch_up(db, FakeClient()))
+    result = asyncio.run(catch_up(db, FakeClient(), end_date=end))
     assert result["status"] in {"SUCCESS", "PARTIAL"}
     assert set(result["datasets"]) >= {"TaiwanStockInfo", "TaiwanStockInstitutionalInvestorsBuySellWide", "TaiwanStockShareholding", "TaiwanStockHoldingSharesPer", "TaiwanStockPrice", "TaiwanStockTradingDailyReport"}
     assert db.scalar(select(Stock.stock_id).where(Stock.is_common_stock.is_(True))) == "2330"

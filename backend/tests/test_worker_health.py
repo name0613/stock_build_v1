@@ -78,7 +78,7 @@ def test_open_market_sync_skips_closed_market(monkeypatch) -> None:
     heartbeat: dict[str, object] = {}
     monkeypatch.setattr("app.worker.market_session_state", lambda: {"state": "CLOSED", "monitoring_active": False})
     monkeypatch.setattr("app.worker._heartbeat", lambda **updates: heartbeat.update(updates))
-    monkeypatch.setattr("app.worker.run_catch_up", lambda: calls.append("run"))
+    monkeypatch.setattr("app.worker.run_intraday_sync", lambda: calls.append("run"))
     run_open_market_sync()
     assert calls == []
     assert heartbeat["last_job_status"] == "SKIPPED_MARKET_CLOSED"
@@ -87,7 +87,7 @@ def test_open_market_sync_skips_closed_market(monkeypatch) -> None:
 def test_open_market_sync_runs_when_market_is_open(monkeypatch) -> None:
     calls: list[str] = []
     monkeypatch.setattr("app.worker.market_session_state", lambda: {"state": "OPEN", "monitoring_active": True})
-    monkeypatch.setattr("app.worker.run_catch_up", lambda: calls.append("run"))
+    monkeypatch.setattr("app.worker.run_intraday_sync", lambda: calls.append("run"))
     run_open_market_sync()
     assert calls == ["run"]
 

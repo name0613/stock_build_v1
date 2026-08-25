@@ -51,6 +51,7 @@ def _seed_authoritative_sync(*, failing_dataset: str | None = None, status: str 
                 attempt_latest_source_date=current_date,
                 expected_latest_source_date=current_date,
                 last_error_code=error_code if dataset == failing_dataset else None,
+                metadata_json={"coverage": {"holding_schema": {"complete": True, "required_bucket_count": 15}}} if dataset == "TaiwanStockHoldingSharesPer" else {},
             )
             db.add(row)
         db.commit()

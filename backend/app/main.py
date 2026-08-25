@@ -124,7 +124,7 @@ def summary(db: Session = Depends(get_db)) -> dict[str, Any]:
     else:
         counts = {"STRONG_ACCUMULATION": 0, "ACCUMULATION": 0, "WATCH": 0, "DATA_INSUFFICIENT": total, "NO_STRONG_EVIDENCE": 0}
     last_updates = [s.last_fetch_at or s.last_successful_sync for s in sync if s.last_fetch_at or s.last_successful_sync]
-    return {"stock_count": total, "strong_count": counts["STRONG_ACCUMULATION"], "accumulation_count": counts["ACCUMULATION"], "watch_count": counts["WATCH"], "data_insufficient_count": counts["DATA_INSUFFICIENT"], "no_strong_evidence_count": counts["NO_STRONG_EVIDENCE"], "status_invariant": sum(counts.values()) == total, "latest_score_date": current_latest, "historical_latest_score_date": historical_latest, "score_version": SCORE_VERSION, "formula_hash": FORMULA_HASH, "last_data_update": max(last_updates, default=None), "provider_state": provider_state, "sync_status": [_sync_dict(s) for s in sync]}
+    return {"stock_count": total, "strong_count": counts["STRONG_ACCUMULATION"], "accumulation_count": counts["ACCUMULATION"], "watch_count": counts["WATCH"], "data_insufficient_count": counts["DATA_INSUFFICIENT"], "no_strong_evidence_count": counts["NO_STRONG_EVIDENCE"], "status_invariant": sum(counts.values()) == total, "latest_score_date": current_latest, "historical_latest_score_date": historical_latest, "score_ready": current_latest is not None, "historical_score_blocked": provider_state.get("score_blocked") is True, "score_version": SCORE_VERSION, "formula_hash": FORMULA_HASH, "last_data_update": max(last_updates, default=None), "provider_state": provider_state, "sync_status": [_sync_dict(s) for s in sync]}
 
 
 @app.get("/api/stocks", response_model=PaginatedStocks)
@@ -290,7 +290,9 @@ def score_history(stock_id: str, limit: int = Query(365, ge=1, le=1000), db: Ses
 def data_status(db: Session = Depends(get_db)) -> dict[str, Any]:
     rows = db.scalars(select(DataSyncStatus).order_by(DataSyncStatus.dataset)).all()
     jobs = db.scalars(select(JobRun).order_by(JobRun.started_at.desc()).limit(50)).all()
-    return {"datasets": [_sync_dict(row) for row in rows], "jobs": [{"dataset": j.dataset, "status": j.status, "requested_date": j.requested_date, "requested_start_date": j.requested_start_date, "requested_end_date": j.requested_end_date, "started_at": j.started_at, "finished_at": j.finished_at, "records": j.records, "duration_ms": j.duration_ms, "retry_count": j.retry_count, "stocks_attempted": j.stocks_attempted, "stocks_completed": j.stocks_completed, "stocks_failed": j.stocks_failed, "checkpoint_state": j.checkpoint_state, "error_code": j.error_code, "error": j.error} for j in jobs]}
+    provider_state = _provider_state(rows)
+    latest_score_date = _current_score_date(db, provider_state, rows)
+    return {"provider_state": provider_state, "score_ready": latest_score_date is not None, "latest_score_date": latest_score_date, "datasets": [_sync_dict(row) for row in rows], "jobs": [{"dataset": j.dataset, "status": j.status, "requested_date": j.requested_date, "requested_start_date": j.requested_start_date, "requested_end_date": j.requested_end_date, "started_at": j.started_at, "finished_at": j.finished_at, "records": j.records, "duration_ms": j.duration_ms, "retry_count": j.retry_count, "stocks_attempted": j.stocks_attempted, "stocks_completed": j.stocks_completed, "stocks_failed": j.stocks_failed, "checkpoint_state": j.checkpoint_state, "error_code": j.error_code, "error": j.error} for j in jobs]}
 
 
 def _latest_score_date(db: Session) -> date | None:
@@ -305,6 +307,9 @@ def _current_score_date(db: Session, provider_state: dict[str, Any], sync: list[
     provider_state["source_coverage_numeric_scores_allowed"] = source_gate
     provider_state["numeric_scores_allowed"] = readiness["ready"]
     provider_state["score_readiness"] = readiness
+    provider_state["score_ready"] = readiness["ready"]
+    provider_state["score_blocked"] = not readiness["ready"]
+    provider_state["score_blocking_reason"] = None if readiness["ready"] else "SCORE_BLOCKED_BY_SOURCE_COVERAGE"
     if not readiness["ready"]:
         if source_gate:
             provider_state["status"] = "DATA_INSUFFICIENT"
@@ -488,7 +493,7 @@ def _holding_chart_series(db: Session, stock_id: str, limit: int) -> dict[str, l
 
 def _sync_dict(row: DataSyncStatus) -> dict[str, Any]:
     metadata = row.metadata_json or {}
-    return {"dataset": row.dataset, "status": row.status, "latest_source_date": row.latest_source_date, "attempt_latest_source_date": row.attempt_latest_source_date, "expected_latest_source_date": row.expected_latest_source_date, "source_age_days": row.source_age_days, "last_attempt_at": row.last_attempt_at, "last_fetch_at": row.last_fetch_at, "last_http_success_at": row.last_http_success_at, "last_fully_successful_sync": row.last_fully_successful_sync, "last_usable_data_at": row.last_usable_data_at, "last_successful_sync": row.last_successful_sync, "records": row.records, "usable_records": row.usable_records, "stored_records": row.stored_records, "physical_requests_this_attempt": row.physical_requests_this_attempt, "rows_received_this_attempt": row.rows_received_this_attempt, "rows_accepted_this_attempt": row.rows_accepted_this_attempt, "rows_rejected_this_attempt": row.rows_rejected_this_attempt, "rows_versioned_this_attempt": row.rows_versioned_this_attempt, "observations_reused_this_attempt": row.observations_reused_this_attempt, "stored_rows_total": row.stored_rows_total, "counter_attempt_id": row.counter_attempt_id, "counter_semantics_version": row.counter_semantics_version, "counters_are_current_attempt": row.counters_are_current_attempt, "historical_pre_v5_counters": metadata.get("legacy_pre_v5_counter_snapshot"), "staleness": row.staleness_state, "metadata": metadata, "error_code": row.last_error_code}
+    return {"dataset": row.dataset, "status": row.status, "latest_source_date": row.latest_source_date, "attempt_latest_source_date": row.attempt_latest_source_date, "expected_latest_source_date": row.expected_latest_source_date, "source_age_days": row.source_age_days, "last_attempt_at": row.last_attempt_at, "last_fetch_at": row.last_fetch_at, "last_http_success_at": row.last_http_success_at, "last_fully_successful_sync": row.last_fully_successful_sync, "last_usable_data_at": row.last_usable_data_at, "last_successful_sync": row.last_successful_sync, "records": row.records, "usable_records": row.usable_records, "stored_records": row.stored_records, "physical_requests_this_attempt": row.physical_requests_this_attempt, "rows_received_this_attempt": row.rows_received_this_attempt, "rows_accepted_this_attempt": row.rows_accepted_this_attempt, "rows_rejected_this_attempt": row.rows_rejected_this_attempt, "rows_versioned_this_attempt": row.rows_versioned_this_attempt, "observations_reused_this_attempt": row.observations_reused_this_attempt, "stored_rows_total": row.stored_rows_total, "counter_attempt_id": row.counter_attempt_id, "counter_semantics_version": row.counter_semantics_version, "counters_are_current_attempt": row.counters_are_current_attempt, "historical_pre_v5_counters": metadata.get("legacy_pre_v5_counter_snapshot"), "blocking_reason": row.last_error_code or metadata.get("blocking_reason"), "staleness": row.staleness_state, "metadata": metadata, "error_code": row.last_error_code}
 
 
 def _provider_state(sync: list[DataSyncStatus]) -> dict[str, Any]:
@@ -499,8 +504,11 @@ def _provider_state(sync: list[DataSyncStatus]) -> dict[str, Any]:
     endpoint, but it cannot become a current score without this gate.
     """
     by_dataset = {row.dataset: row for row in sync}
+    def blocked(status: str, reason_code: str, *, blocking_sources: list[dict[str, Any]] | None = None, **extra: Any) -> dict[str, Any]:
+        return {"status": status, "reason_code": reason_code, "provider": "FinMind", "score_policy": "FAIL_CLOSED", "numeric_scores_allowed": False, "score_ready": False, "score_blocked": True, "score_blocking_reason": "SCORE_BLOCKED_BY_SOURCE_COVERAGE", "blocking_sources": blocking_sources or [], **extra}
+
     if not sync:
-        return {"status": "DATA_INSUFFICIENT", "reason_code": "NO_AUTHORITATIVE_SYNC_STATUS", "provider": "FinMind", "score_policy": "FAIL_CLOSED", "numeric_scores_allowed": False}
+        return blocked("DATA_INSUFFICIENT", "NO_AUTHORITATIVE_SYNC_STATUS")
 
     def failure_code(row: DataSyncStatus) -> str | None:
         if row.last_error_code in GLOBAL_PROVIDER_FAILURE_CODES:
@@ -512,18 +520,40 @@ def _provider_state(sync: list[DataSyncStatus]) -> dict[str, Any]:
 
     fatal = next((code for code in (failure_code(row) for row in sync) if code), None)
     if fatal:
-        return {"status": "PROVIDER_UNAVAILABLE", "reason_code": fatal, "provider": "FinMind", "score_policy": "FAIL_CLOSED", "numeric_scores_allowed": False}
+        return blocked("QUOTA_EXHAUSTED" if fatal == "QUOTA_EXHAUSTED" else "PROVIDER_UNAVAILABLE", fatal, blocking_sources=[{"dataset": row.dataset, "reason_code": fatal} for row in sync if failure_code(row) == fatal])
 
     missing = [dataset for dataset in CURRENT_SCORE_DATASETS if dataset not in by_dataset]
     if missing:
-        return {"status": "DATA_INSUFFICIENT", "reason_code": "MISSING_REQUIRED_DATA_SYNC_STATUS", "missing_datasets": missing, "provider": "FinMind", "score_policy": "FAIL_CLOSED", "numeric_scores_allowed": False}
+        return blocked("DATA_INSUFFICIENT", "MISSING_REQUIRED_DATA_SYNC_STATUS", missing_datasets=missing)
 
+    blockers: list[dict[str, Any]] = []
     for dataset in CURRENT_SCORE_DATASETS:
         row = by_dataset[dataset]
+        metadata = row.metadata_json or {}
+        coverage = metadata.get("coverage") if isinstance(metadata, dict) and isinstance(metadata.get("coverage"), dict) else (metadata if isinstance(metadata, dict) else {})
+        if row.status == "WAITING_FOR_PROVIDER_PUBLICATION":
+            blockers.append({"dataset": dataset, "reason_code": "WAITING_FOR_PROVIDER_PUBLICATION", "expected_source_date": row.expected_latest_source_date, "actual_source_date": row.latest_source_date, "next_check_at": coverage.get("next_publication_check_at")})
+            continue
+        if row.status == "QUOTA_EXHAUSTED" or coverage.get("fatal_code") == "QUOTA_EXHAUSTED":
+            blockers.append({"dataset": dataset, "reason_code": "QUOTA_EXHAUSTED"})
+            continue
+        if dataset == "TaiwanStockTradingDailyReport" and int(coverage.get("retryable_pending", 0) or 0) > 0:
+            blockers.append({"dataset": dataset, "reason_code": "BROKER_RETRY_PENDING", "retryable_pending": int(coverage.get("retryable_pending", 0))})
         if row.status not in {"SUCCESS", "REUSED"}:
-            return {"status": "DATA_INSUFFICIENT", "reason_code": "INCOMPLETE_PROVIDER_COVERAGE", "provider": "FinMind", "score_policy": "FAIL_CLOSED", "numeric_scores_allowed": False}
+            blockers.append({"dataset": dataset, "reason_code": row.last_error_code or "INCOMPLETE_PROVIDER_COVERAGE", "status": row.status})
+            continue
         if row.expected_latest_source_date is None or row.latest_source_date is None:
-            return {"status": "DATA_INSUFFICIENT", "reason_code": "NO_AUTHORITATIVE_CURRENT_SOURCE_DATE", "provider": "FinMind", "score_policy": "FAIL_CLOSED", "numeric_scores_allowed": False}
-        if row.staleness_state != "FRESH":
-            return {"status": "DATA_INSUFFICIENT", "reason_code": "STALE_PROVIDER_COVERAGE", "provider": "FinMind", "score_policy": "FAIL_CLOSED", "numeric_scores_allowed": False}
-    return {"status": "AVAILABLE", "reason_code": None, "provider": "FinMind", "score_policy": SCORE_VERSION.upper().replace("-", "_"), "numeric_scores_allowed": True}
+            blockers.append({"dataset": dataset, "reason_code": "NO_AUTHORITATIVE_CURRENT_SOURCE_DATE", "expected_source_date": row.expected_latest_source_date, "actual_source_date": row.latest_source_date})
+        elif row.staleness_state != "FRESH" or row.latest_source_date < row.expected_latest_source_date:
+            blockers.append({"dataset": dataset, "reason_code": "STALE_PROVIDER_COVERAGE", "expected_source_date": row.expected_latest_source_date, "actual_source_date": row.latest_source_date, "staleness": row.staleness_state})
+        if dataset == HOLDING_DISTRIBUTION_DATASET:
+            holding_schema = coverage.get("holding_schema")
+            if not isinstance(holding_schema, dict):
+                blockers.append({"dataset": dataset, "reason_code": "HOLDING_COVERAGE_NOT_VERIFIED"})
+            elif holding_schema.get("complete") is not True:
+                blockers.append({"dataset": dataset, "reason_code": "HOLDING_BUCKETS_INCOMPLETE", **holding_schema})
+    if blockers:
+        reason = next((item["reason_code"] for item in blockers if item["reason_code"] in {"WAITING_FOR_PROVIDER_PUBLICATION", "QUOTA_EXHAUSTED", "BROKER_RETRY_PENDING", "HOLDING_BUCKETS_INCOMPLETE"}), blockers[0]["reason_code"])
+        status = "WAITING_FOR_PROVIDER_PUBLICATION" if reason == "WAITING_FOR_PROVIDER_PUBLICATION" else ("QUOTA_EXHAUSTED" if reason == "QUOTA_EXHAUSTED" else "PARTIAL")
+        return blocked(status, reason, blocking_sources=blockers)
+    return {"status": "AVAILABLE", "reason_code": None, "provider": "FinMind", "score_policy": SCORE_VERSION.upper().replace("-", "_"), "numeric_scores_allowed": True, "score_ready": False, "score_blocked": False, "score_blocking_reason": None, "blocking_sources": []}

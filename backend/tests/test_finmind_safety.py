@@ -242,7 +242,7 @@ def test_broker_provider_contract_validates_rows_without_claiming_report_complet
 
 def test_broker_checkpoint_retains_retryable_failure_and_resumes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import asyncio
-    client = FinMindClient(Settings(raw_root=tmp_path, broker_max_retries=0, broker_concurrency=1))
+    client = FinMindClient(Settings(raw_root=tmp_path, broker_max_retries=0, broker_concurrency=1, broker_retry_base_seconds=0))
     monkeypatch.setattr(client, "fetch", lambda *_args, **_kwargs: (_ for _ in ()).throw(FinMindError("TIMEOUT", "temporary")))
     failed = asyncio.run(client.fetch_broker_stocks(["2330"], "2026-08-20", "2026-08-20"))
     assert failed["retryable_failed"] == 1
