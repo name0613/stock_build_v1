@@ -11,6 +11,7 @@ from app.config import Settings
 from app.finmind import BROKER_ROW_CONTRACT_VERSION, FinMindClient, FinMindError
 from app.ingestion import holding_coverage_state, record_score_blocked, score_source_coverage_gate
 from app.models import AccumulationScore, Base, DataSyncStatus, JobRun, Stock
+from app.scoring import HOLDING_CANONICAL_LEVELS
 
 
 def _db() -> Session:
@@ -128,6 +129,105 @@ def test_holding_publication_wait_is_throttled_for_the_same_target(monkeypatch, 
     second = asyncio.run(client.fetch_stocks_dataset(["2330"], "TaiwanStockHoldingSharesPer", "2026-08-21", "2026-08-21"))
     assert second["publication_check_deferred"] is True
     assert second["physical_requests"] == 0
+
+
+def _complete_holding_rows(stock_id: str, source_date: str) -> list[dict[str, object]]:
+    return [
+        {
+            "stock_id": stock_id,
+            "date": source_date,
+            "HoldingSharesLevel": level,
+            "holding_shares_threshold": threshold,
+            "percent": 1,
+            "people": 1,
+            "shares": threshold,
+        }
+        for level, threshold in HOLDING_CANONICAL_LEVELS
+    ]
+
+
+def test_published_canary_invalidates_wait_and_enters_partial_state(tmp_path) -> None:
+    client = FinMindClient(Settings(raw_root=tmp_path, finmind_api_token="configured", holding_publication_check_interval_hours=24, source_concurrency=1))
+    target = "2026-08-21"
+    calls: list[tuple[str, str]] = []
+
+    def fetch(_dataset: str, stock_id: str, start: str, end: str, **_kwargs):
+        calls.append((stock_id, f"{start}:{end}"))
+        if len(calls) <= 2:
+            return [], {"empty_is_valid": True, "empty_reason": "no_provider_observation", "empty_observation_dates": [target]}
+        if stock_id == "2330":
+            return _complete_holding_rows(stock_id, target), {"source_date": target}
+        return ([], {"empty_is_valid": True, "empty_reason": "no_provider_observation", "empty_observation_dates": [target]})
+
+    client.fetch = fetch  # type: ignore[method-assign]
+    first = asyncio.run(client.fetch_stocks_dataset(["2330", "2317"], "TaiwanStockHoldingSharesPer", target, target))
+    assert first["publication_state"] == "WAITING_FOR_PROVIDER_PUBLICATION"
+    assert first["physical_requests"] == 2
+
+    second = asyncio.run(client.fetch_stocks_dataset(["2330", "2317"], "TaiwanStockHoldingSharesPer", target, target))
+    assert second["publication_probe_requests"] == 1
+    assert second["publication_probe"]["observed_target"] is True
+    assert second["publication_wait_invalidated"] is True
+    assert second["publication_state"] == "HOLDING_PUBLICATION_PARTIAL"
+    assert second["publication_target_records"] == 1
+    assert second["physical_requests"] == 2
+    assert len(calls) == 5
+
+    checkpoint = next((tmp_path / "checkpoints").glob("source-TaiwanStockHoldingSharesPer-*.json"))
+    persisted = json.loads(checkpoint.read_text(encoding="utf-8"))["publication_wait"]
+    assert persisted["state"] == "HOLDING_PUBLICATION_PARTIAL"
+    assert persisted["wait_invalidated"] is True
+    assert persisted["last_check_result"] == "TARGET_OBSERVED"
+    assert persisted["publication_query_type"] == "per_stock_target_week_canary"
+
+
+def test_unpublished_canary_checks_one_stock_and_keeps_full_market_throttled(monkeypatch, tmp_path) -> None:
+    client = FinMindClient(Settings(raw_root=tmp_path, finmind_api_token="configured", holding_publication_check_interval_hours=24, source_concurrency=1))
+    calls: list[str] = []
+
+    def unpublished(_dataset: str, stock_id: str, *_args, **_kwargs):
+        calls.append(stock_id)
+        return [], {"empty_is_valid": True, "empty_reason": "no_provider_observation", "empty_observation_dates": ["2026-08-21"]}
+
+    monkeypatch.setattr(client, "fetch", unpublished)
+    stock_ids = [str(index) for index in range(8)]
+    first = asyncio.run(client.fetch_stocks_dataset(stock_ids, "TaiwanStockHoldingSharesPer", "2026-08-21", "2026-08-21"))
+    assert first["publication_state"] == "WAITING_FOR_PROVIDER_PUBLICATION"
+    assert first["physical_requests"] == len(stock_ids)
+    calls.clear()
+
+    second = asyncio.run(client.fetch_stocks_dataset(stock_ids, "TaiwanStockHoldingSharesPer", "2026-08-21", "2026-08-21"))
+    assert second["publication_state"] == "WAITING_FOR_PROVIDER_PUBLICATION"
+    assert second["publication_probe_requests"] == 1
+    assert second["physical_requests"] == 0
+    assert calls == ["0"]
+
+
+def test_partial_publication_state_survives_restart_without_reverting_to_wait(tmp_path) -> None:
+    settings = Settings(raw_root=tmp_path, finmind_api_token="configured", holding_publication_check_interval_hours=24, source_concurrency=1)
+    client = FinMindClient(settings)
+    target = "2026-08-21"
+    first_call = True
+
+    def first_fetch(_dataset: str, stock_id: str, *_args, **_kwargs):
+        nonlocal first_call
+        if first_call:
+            first_call = False
+            return [], {"empty_is_valid": True, "empty_reason": "no_provider_observation", "empty_observation_dates": [target]}
+        if stock_id == "2330":
+            return _complete_holding_rows(stock_id, target), {"source_date": target}
+        return [], {"empty_is_valid": True, "empty_reason": "no_provider_observation", "empty_observation_dates": [target]}
+
+    client.fetch = first_fetch  # type: ignore[method-assign]
+    asyncio.run(client.fetch_stocks_dataset(["2330", "2317"], "TaiwanStockHoldingSharesPer", target, target))
+    first_partial = asyncio.run(client.fetch_stocks_dataset(["2330", "2317"], "TaiwanStockHoldingSharesPer", target, target))
+    assert first_partial["publication_state"] == "HOLDING_PUBLICATION_PARTIAL"
+
+    restarted = FinMindClient(settings)
+    restarted.fetch = lambda _dataset, stock_id, *_args, **_kwargs: ([], {"empty_is_valid": True, "empty_reason": "no_provider_observation", "empty_observation_dates": [target]})  # type: ignore[method-assign]
+    resumed = asyncio.run(restarted.fetch_stocks_dataset(["2330", "2317"], "TaiwanStockHoldingSharesPer", target, target))
+    assert resumed["publication_state"] == "HOLDING_PUBLICATION_PARTIAL"
+    assert resumed["physical_requests"] == 1
 
 
 def test_holding_coverage_requires_all_fifteen_standard_buckets() -> None:

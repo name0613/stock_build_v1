@@ -34,6 +34,9 @@ SOURCE_CHECKPOINT_SCHEMA_VERSION = "2026-08-21-v6-provider-missing"
 SOURCE_INCREMENTAL_CHECKPOINT_VERSION = "2026-08-21-incremental-v6"
 SOURCE_REQUEST_POLICY_VERSION = "finmind-request-policy-v6-fair-provider-missing"
 PROVIDER_EMPTY_RANGE_CONTRACT_VERSION = "finmind-successful-filtered-empty-data-v1"
+HOLDING_PUBLICATION_WAIT_STATE = "WAITING_FOR_PROVIDER_PUBLICATION"
+HOLDING_PUBLICATION_PARTIAL_STATE = "HOLDING_PUBLICATION_PARTIAL"
+HOLDING_PUBLICATION_CANARY_STOCK_ID = "2330"
 GLOBAL_PROVIDER_FAILURE_CODES = frozenset({
     "AUTHENTICATION_FAILED",
     "ACCESS_DENIED",
@@ -524,6 +527,76 @@ class FinMindClient:
         except FinMindError as exc:
             return CapabilityResult(dataset, False, "GET /api/v4/data", None, 0, exc.code, exc.status_code, [], {"data_id": data_id, "start_date": start_date, "end_date": end_date, "securities_trader_id": trader_id, "mode": mode}, False, mode, dataset != "TaiwanStockInfo", {"start": None, "end": None}, exc.code)
 
+    def probe_holding_publication(self, target_date: str, *, stock_id: str = HOLDING_PUBLICATION_CANARY_STOCK_ID, capability_probe: bool = True) -> dict[str, Any]:
+        """Probe one stock's target holding week without claiming universe coverage.
+
+        The capability-evidence path uses the probe-only fetcher.  The
+        production checkpoint uses the same bounded query shape through the
+        normal S-source fetcher, but never sends the returned rows to the
+        ingestion sink.  In either case, a publication signal is valid only
+        when the target week has all canonical holding buckets.
+        """
+        target = date.fromisoformat(str(target_date)[:10])
+        canary = str(stock_id).strip()
+        query_start = (target - timedelta(days=4)).isoformat()
+        query_end = (target + timedelta(days=4)).isoformat()
+        checked_at = datetime.now(timezone.utc).isoformat()
+        request_shape = {
+            "dataset": "TaiwanStockHoldingSharesPer",
+            "data_id": canary,
+            "start_date": query_start,
+            "end_date": query_end,
+            "target_date": target.isoformat(),
+            "query_type": "per_stock_target_week_canary",
+            "capability_probe": capability_probe,
+        }
+        base: dict[str, Any] = {
+            "checked_at": checked_at,
+            "dataset": "TaiwanStockHoldingSharesPer",
+            "target_date": target.isoformat(),
+            "stock_id": canary,
+            "query_shape": request_shape,
+            "query_type": "per_stock_target_week_canary",
+            "probe_only": capability_probe,
+            "observed_target": False,
+            "returned_row_count": 0,
+            "returned_date_range": {"start": None, "end": None},
+            "source": "FinMind",
+            "secrets_included": False,
+        }
+        if capability_probe and not self.settings.finmind_api_token:
+            return {**base, "status": "ERROR", "error_code": "AUTHENTICATION_FAILED", "classification": "AUTHENTICATION_FAILED"}
+        try:
+            if capability_probe:
+                records, meta = self._fetch_capability_probe(
+                    "TaiwanStockHoldingSharesPer",
+                    data_id=canary,
+                    start_date=query_start,
+                    end_date=query_end,
+                )
+            else:
+                records, meta = self.fetch(
+                    "TaiwanStockHoldingSharesPer",
+                    canary,
+                    query_start,
+                    query_end,
+                    persist_raw=False,
+                )
+        except FinMindError as exc:
+            return {**base, "status": "ERROR", "error_code": exc.code, "status_code": exc.status_code, "classification": exc.code}
+        returned_dates = sorted({str(row.get("date") or row.get("source_date"))[:10] for row in records if row.get("date") or row.get("source_date")})
+        observed = bool(_record_observation_dates("TaiwanStockHoldingSharesPer", canary, records, {target.isoformat()}))
+        return {
+            **base,
+            "status": "OBSERVED" if observed else "NOT_OBSERVED",
+            "observed_target": observed,
+            "returned_row_count": len(records),
+            "returned_date_range": {"start": returned_dates[0] if returned_dates else None, "end": returned_dates[-1] if returned_dates else None},
+            "provider_source_date": meta.get("source_date"),
+            "provider_http_status": meta.get("provider_http_status"),
+            "empty_reason": meta.get("empty_reason"),
+        }
+
     def _normalize_record(self, dataset: str, record: Any) -> dict[str, Any]:
         if not isinstance(record, dict):
             raise SchemaMismatch("SCHEMA_MISMATCH", f"{dataset} returned a non-object row")
@@ -799,6 +872,10 @@ class FinMindClient:
         entries = checkpoint.setdefault("entries", {})
         publication_target = expected_strings[-1] if dataset in WEEKLY_OBSERVATION_DATASETS and expected_strings else None
         publication_wait = checkpoint.get("publication_wait") if isinstance(checkpoint.get("publication_wait"), dict) else None
+        publication_wait_state = str(publication_wait.get("state")) if publication_wait and publication_wait.get("target_date") == publication_target else None
+        publication_detected = publication_wait_state == HOLDING_PUBLICATION_PARTIAL_STATE
+        publication_wait_invalidated = False
+        publication_probe: dict[str, Any] | None = None
         publication_recheck_due = False
         if publication_target and publication_wait and publication_wait.get("target_date") == publication_target:
             next_check = publication_wait.get("next_eligible_check_at")
@@ -823,26 +900,34 @@ class FinMindClient:
         request_ranges: dict[str, tuple[str, str]] = {}
         request_periods: dict[str, set[str]] = {}
         initial_complete: set[str] = set()
-        for stock_id in ordered_stock_ids:
-            covered = set(entries.get(stock_id, {}).get("covered_dates", [])) & requested_observations
-            missing = [day for day in expected_strings if day not in covered]
-            if not missing:
-                initial_complete.add(stock_id)
-                continue
-            pending.append(stock_id)
-            first_index = expected_strings.index(missing[0])
-            block = [missing[0]]
-            for source_day in expected_strings[first_index + 1:]:
-                if source_day in covered:
-                    break
-                block.append(source_day)
-            request_periods[stock_id] = set(block)
-            if dataset in WEEKLY_OBSERVATION_DATASETS:
-                requested_start = max(date.fromisoformat(start_date), date.fromisoformat(block[0]) - timedelta(days=4))
-                requested_end = min(date.fromisoformat(end_date), date.fromisoformat(block[-1]) + timedelta(days=4))
-                request_ranges[stock_id] = (requested_start.isoformat(), requested_end.isoformat())
-            else:
-                request_ranges[stock_id] = (block[0], block[-1])
+
+        def rebuild_pending() -> None:
+            pending.clear()
+            request_ranges.clear()
+            request_periods.clear()
+            initial_complete.clear()
+            for stock_id in ordered_stock_ids:
+                covered = set(entries.get(stock_id, {}).get("covered_dates", [])) & requested_observations
+                missing = [day for day in expected_strings if day not in covered]
+                if not missing:
+                    initial_complete.add(stock_id)
+                    continue
+                pending.append(stock_id)
+                first_index = expected_strings.index(missing[0])
+                block = [missing[0]]
+                for source_day in expected_strings[first_index + 1:]:
+                    if source_day in covered:
+                        break
+                    block.append(source_day)
+                request_periods[stock_id] = set(block)
+                if dataset in WEEKLY_OBSERVATION_DATASETS:
+                    requested_start = max(date.fromisoformat(start_date), date.fromisoformat(block[0]) - timedelta(days=4))
+                    requested_end = min(date.fromisoformat(end_date), date.fromisoformat(block[-1]) + timedelta(days=4))
+                    request_ranges[stock_id] = (requested_start.isoformat(), requested_end.isoformat())
+                else:
+                    request_ranges[stock_id] = (block[0], block[-1])
+
+        rebuild_pending()
 
         checkpoint_content_hash_before = hashlib.sha256(
             json.dumps(checkpoint, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
@@ -890,18 +975,13 @@ class FinMindClient:
             "missing_values_imputed_as_zero": 0,
             "previous_global_fatal": previous_global_fatal,
             "per_stock": {key: value for key, value in entries.items() if key in initial_complete},
+            "publication_state": publication_wait_state,
+            "publication_target_date": publication_target,
+            "publication_probe_requests": 0,
+            "publication_probe": None,
+            "publication_check_performed": False,
+            "publication_wait_invalidated": False,
         }
-
-        if publication_target and publication_wait and not publication_recheck_due:
-            metrics.update({
-                "publication_state": publication_wait.get("state", "WAITING_FOR_PROVIDER_PUBLICATION"),
-                "publication_check_deferred": True,
-                "next_publication_check_at": publication_wait.get("next_eligible_check_at"),
-                "publication_target_date": publication_target,
-                "physical_requests": 0,
-                "retryable_pending": 0,
-            })
-            return metrics
 
         async def persist() -> None:
             checkpoint["manifest"] = manifest
@@ -913,6 +993,98 @@ class FinMindClient:
             metrics["checkpoint_content_hash_after"] = hashlib.sha256(
                 json.dumps(checkpoint, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
             ).hexdigest()
+
+        def invalidate_unobserved_target() -> None:
+            """Remove only unverified target coverage before a real retry."""
+            if not publication_target:
+                return
+            for entry in entries.values():
+                if not isinstance(entry, dict):
+                    continue
+                if publication_target in set(entry.get("verified_record_dates", [])):
+                    continue
+                for field in ("covered_dates", "verified_missing_dates", "verified_no_data_dates", "unresolved_dates"):
+                    entry[field] = sorted(set(entry.get(field, [])) - {publication_target})
+            checkpoint["completed"] = sorted(set(checkpoint.get("completed", [])) - set(stock_ids))
+            checkpoint["no_data_but_valid"] = sorted(set(checkpoint.get("no_data_but_valid", [])) - set(stock_ids))
+
+        # A publication wait is a throttle for the expensive full-universe
+        # fetch, not a claim that the provider can never publish the target.
+        # Before returning from the throttle, spend one deterministic canary
+        # request to detect a newly published target.  A partial state is
+        # never throttled: it must keep resuming the authoritative per-stock
+        # checkpoint until every stock passes the 15-bucket contract.
+        if publication_target and publication_wait and publication_wait.get("target_date") == publication_target:
+            if publication_wait_state == HOLDING_PUBLICATION_WAIT_STATE and not publication_recheck_due:
+                canary_stock_id = HOLDING_PUBLICATION_CANARY_STOCK_ID if HOLDING_PUBLICATION_CANARY_STOCK_ID in stock_ids else (stock_ids[0] if stock_ids else None)
+                if canary_stock_id and self.settings.finmind_api_token:
+                    metrics["publication_probe_requests"] = 1
+                    metrics["publication_check_performed"] = True
+                    publication_probe = self.probe_holding_publication(publication_target, stock_id=canary_stock_id, capability_probe=False)
+                else:
+                    publication_probe = {
+                        "status": "NOT_PERFORMED",
+                        "error_code": "NO_PUBLICATION_CANARY",
+                        "observed_target": False,
+                        "target_date": publication_target,
+                        "stock_id": canary_stock_id,
+                        "query_type": "per_stock_target_week_canary",
+                        "probe_only": False,
+                        "secrets_included": False,
+                    }
+                metrics["publication_probe"] = publication_probe
+                now = datetime.now(timezone.utc).isoformat()
+                updated_wait = {
+                    **publication_wait,
+                    "target_date": publication_target,
+                    "last_provider_publication_check_at": now,
+                    "last_check_result": "TARGET_OBSERVED" if publication_probe.get("observed_target") else ("PROBE_FAILED" if publication_probe.get("error_code") else "TARGET_NOT_OBSERVED"),
+                    "publication_evidence_source": "live_finmind_per_stock_canary",
+                    "publication_query_type": "per_stock_target_week_canary",
+                    "publication_probe": publication_probe,
+                }
+                if publication_probe.get("observed_target") is True:
+                    # The prior wait is now stale knowledge.  Keep a durable
+                    # audit trail of that invalidation while opening the
+                    # normal quota-aware full-universe retry.
+                    publication_wait_invalidated = True
+                    publication_detected = True
+                    invalidate_unobserved_target()
+                    rebuild_pending()
+                    updated_wait.update({
+                        "state": HOLDING_PUBLICATION_PARTIAL_STATE,
+                        "wait_invalidated": True,
+                        "wait_invalidated_at": now,
+                        "publication_detected_at": now,
+                        "next_eligible_check_at": now,
+                    })
+                    publication_wait_state = HOLDING_PUBLICATION_PARTIAL_STATE
+                    metrics["publication_state"] = HOLDING_PUBLICATION_PARTIAL_STATE
+                    metrics["publication_wait_invalidated"] = True
+                else:
+                    checkpoint["publication_wait"] = updated_wait
+                    metrics.update({
+                        "publication_state": HOLDING_PUBLICATION_WAIT_STATE,
+                        "publication_check_deferred": publication_probe.get("status") == "NOT_PERFORMED",
+                        "next_publication_check_at": publication_wait.get("next_eligible_check_at"),
+                        "physical_requests": 0,
+                        "retryable_pending": 0,
+                    })
+                    await persist()
+                    return metrics
+                checkpoint["publication_wait"] = updated_wait
+            elif publication_wait_state == HOLDING_PUBLICATION_WAIT_STATE and publication_recheck_due:
+                invalidate_unobserved_target()
+                publication_wait_invalidated = True
+                metrics["publication_check_performed"] = True
+                metrics["publication_wait_invalidated"] = True
+                checkpoint["publication_wait"] = {
+                    **publication_wait,
+                    "last_provider_publication_check_at": datetime.now(timezone.utc).isoformat(),
+                    "last_check_result": "FULL_MARKET_REVALIDATION_DUE",
+                    "publication_evidence_source": "production_per_stock_full_market_fetch",
+                    "publication_query_type": "per_stock_date_range",
+                }
 
         if checkpoint_state.startswith("migrated_"):
             await persist()
@@ -1113,14 +1285,47 @@ class FinMindClient:
             metrics["publication_target_date"] = publication_target
             metrics["publication_target_records"] = target_records
             metrics["publication_target_stocks"] = len(stock_ids)
-            if target_records < len(stock_ids) and metrics.get("fatal_code") is None and metrics.get("failed", 0) == 0:
-                next_check = datetime.now(timezone.utc) + timedelta(hours=max(1, self.settings.holding_publication_check_interval_hours))
-                state = "WAITING_FOR_PROVIDER_PUBLICATION" if target_records == 0 else "HOLDING_PUBLICATION_PARTIAL"
-                checkpoint["publication_wait"] = {"state": state, "target_date": publication_target, "next_eligible_check_at": next_check.isoformat(), "confirmed_at": datetime.now(timezone.utc).isoformat(), "target_records": target_records, "target_stocks": len(stock_ids)}
+            if target_records < len(stock_ids):
+                now = datetime.now(timezone.utc)
+                prior_wait = checkpoint.get("publication_wait") if isinstance(checkpoint.get("publication_wait"), dict) else {}
+                prior_state = str(prior_wait.get("state") or "")
+                observed_in_this_run = publication_detected or target_records > 0
+                state = HOLDING_PUBLICATION_PARTIAL_STATE if observed_in_this_run or prior_state == HOLDING_PUBLICATION_PARTIAL_STATE else HOLDING_PUBLICATION_WAIT_STATE
+                if state == HOLDING_PUBLICATION_WAIT_STATE:
+                    next_check = now + timedelta(hours=max(1, self.settings.holding_publication_check_interval_hours))
+                else:
+                    # Partial publication is actionable pending work, so it
+                    # must not be blocked by the old wait interval.  Keep a
+                    # due timestamp as provenance for the next resumable run.
+                    next_check = now
+                check_result = "TARGET_OBSERVED" if observed_in_this_run else "TARGET_NOT_OBSERVED"
+                evidence_source = "live_finmind_per_stock_canary" if publication_probe else "production_per_stock_full_market_fetch"
+                wait_record = {
+                    **prior_wait,
+                    "state": state,
+                    "target_date": publication_target,
+                    "last_provider_publication_check_at": prior_wait.get("last_provider_publication_check_at") or now.isoformat(),
+                    "last_check_result": prior_wait.get("last_check_result") or check_result,
+                    "next_eligible_check_at": next_check.isoformat(),
+                    "target_records": target_records,
+                    "target_stocks": len(stock_ids),
+                    "publication_evidence_source": prior_wait.get("publication_evidence_source") or evidence_source,
+                    "publication_query_type": prior_wait.get("publication_query_type") or ("per_stock_target_week_canary" if publication_probe else "per_stock_date_range"),
+                    "wait_invalidated": bool(prior_wait.get("wait_invalidated") or publication_wait_invalidated),
+                    "wait_invalidated_at": prior_wait.get("wait_invalidated_at"),
+                    "publication_detected_at": prior_wait.get("publication_detected_at") or (now.isoformat() if observed_in_this_run else None),
+                    "publication_probe": publication_probe or prior_wait.get("publication_probe"),
+                }
+                checkpoint["publication_wait"] = wait_record
                 metrics["publication_state"] = state
                 metrics["next_publication_check_at"] = next_check.isoformat()
+                metrics["publication_last_check_result"] = wait_record["last_check_result"]
+                metrics["publication_evidence_source"] = wait_record["publication_evidence_source"]
+                metrics["publication_wait_invalidated"] = bool(wait_record["wait_invalidated"])
             else:
                 checkpoint.pop("publication_wait", None)
+                metrics["publication_state"] = "HOLDING_PUBLICATION_COMPLETE"
+                metrics["publication_last_check_result"] = "TARGET_COMPLETE_FOR_UNIVERSE"
             await persist()
         return metrics
 
@@ -1161,6 +1366,16 @@ def capability_evidence(client: FinMindClient, *, source_revision: str) -> dict[
         append_probe(dataset, "broad", False)
         if dataset != "TaiwanStockInfo":
             append_probe(dataset, "per_stock", dataset != "TaiwanStockTradingDailyReportSecIdAgg")
+    holding_target = expected_observation_dates(
+        "TaiwanStockHoldingSharesPer",
+        date.today() - timedelta(days=14),
+        date.today(),
+    )[-1].isoformat()
+    holding_publication_probe = client.probe_holding_publication(
+        holding_target,
+        stock_id=HOLDING_PUBLICATION_CANARY_STOCK_ID,
+        capability_probe=True,
+    )
     dataset_policy = {
         "production_s_datasets": sorted(PRODUCTION_S_DATASETS),
         "reference_datasets": sorted(REFERENCE_DATASETS),
@@ -1199,6 +1414,9 @@ def capability_evidence(client: FinMindClient, *, source_revision: str) -> dict[
             "probe_path_can_ingest": False,
         },
         "results": results,
+        "holding_publication_probe": holding_publication_probe,
+        "holding_publication_target_date": holding_target,
+        "holding_publication_probe_is_bounded_canary": True,
         "sanitized_request_mode": True,
         "secret_values_included": False,
     }

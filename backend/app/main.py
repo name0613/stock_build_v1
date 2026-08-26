@@ -539,6 +539,8 @@ def _provider_state(sync: list[DataSyncStatus]) -> dict[str, Any]:
             continue
         if dataset == "TaiwanStockTradingDailyReport" and int(coverage.get("retryable_pending", 0) or 0) > 0:
             blockers.append({"dataset": dataset, "reason_code": "BROKER_RETRY_PENDING", "retryable_pending": int(coverage.get("retryable_pending", 0))})
+        if dataset == HOLDING_DISTRIBUTION_DATASET and coverage.get("publication_state") == "HOLDING_PUBLICATION_PARTIAL":
+            blockers.append({"dataset": dataset, "reason_code": "HOLDING_PUBLICATION_PARTIAL", "expected_source_date": row.expected_latest_source_date, "actual_source_date": row.latest_source_date, "publication_probe": coverage.get("publication_probe")})
         if row.status not in {"SUCCESS", "REUSED"}:
             blockers.append({"dataset": dataset, "reason_code": row.last_error_code or "INCOMPLETE_PROVIDER_COVERAGE", "status": row.status})
             continue
@@ -553,7 +555,7 @@ def _provider_state(sync: list[DataSyncStatus]) -> dict[str, Any]:
             elif holding_schema.get("complete") is not True:
                 blockers.append({"dataset": dataset, "reason_code": "HOLDING_BUCKETS_INCOMPLETE", **holding_schema})
     if blockers:
-        reason = next((item["reason_code"] for item in blockers if item["reason_code"] in {"WAITING_FOR_PROVIDER_PUBLICATION", "QUOTA_EXHAUSTED", "BROKER_RETRY_PENDING", "HOLDING_BUCKETS_INCOMPLETE"}), blockers[0]["reason_code"])
+        reason = next((item["reason_code"] for item in blockers if item["reason_code"] in {"WAITING_FOR_PROVIDER_PUBLICATION", "HOLDING_PUBLICATION_PARTIAL", "QUOTA_EXHAUSTED", "BROKER_RETRY_PENDING", "HOLDING_BUCKETS_INCOMPLETE"}), blockers[0]["reason_code"])
         status = "WAITING_FOR_PROVIDER_PUBLICATION" if reason == "WAITING_FOR_PROVIDER_PUBLICATION" else ("QUOTA_EXHAUSTED" if reason == "QUOTA_EXHAUSTED" else "PARTIAL")
         return blocked(status, reason, blocking_sources=blockers)
     return {"status": "AVAILABLE", "reason_code": None, "provider": "FinMind", "score_policy": SCORE_VERSION.upper().replace("-", "_"), "numeric_scores_allowed": True, "score_ready": False, "score_blocked": False, "score_blocking_reason": None, "blocking_sources": []}

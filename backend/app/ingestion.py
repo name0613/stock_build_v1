@@ -789,7 +789,8 @@ def score_source_coverage_gate(db: Session, target_date: date) -> dict[str, Any]
         if dataset == "TaiwanStockTradingDailyReport" and retryable_pending:
             blockers.append({"dataset": dataset, "reason_code": "BROKER_RETRY_PENDING", "retryable_pending": retryable_pending, "next_retry_at": coverage.get("next_retry_at")})
         if row.status not in {"SUCCESS", "REUSED"}:
-            blockers.append({"dataset": dataset, "reason_code": row.last_error_code or f"SOURCE_{row.status}", "status": row.status})
+            partial_reason = "HOLDING_PUBLICATION_PARTIAL" if dataset == "TaiwanStockHoldingSharesPer" and coverage.get("publication_state") == "HOLDING_PUBLICATION_PARTIAL" else None
+            blockers.append({"dataset": dataset, "reason_code": partial_reason or row.last_error_code or f"SOURCE_{row.status}", "status": row.status})
             continue
         if row.expected_latest_source_date is None or row.latest_source_date is None:
             blockers.append({"dataset": dataset, "reason_code": "SOURCE_DATE_MISSING", "expected_source_date": row.expected_latest_source_date, "actual_source_date": row.latest_source_date})
@@ -805,7 +806,7 @@ def score_source_coverage_gate(db: Session, target_date: date) -> dict[str, Any]
             elif holding_coverage.get("complete") is not True:
                 blockers.append({"dataset": dataset, "reason_code": "HOLDING_BUCKETS_INCOMPLETE", **holding_coverage})
     if blockers:
-        reason_code = next((item["reason_code"] for item in blockers if item["reason_code"] in {"WAITING_FOR_PROVIDER_PUBLICATION", "QUOTA_EXHAUSTED", "BROKER_RETRY_PENDING", "HOLDING_BUCKETS_INCOMPLETE"}), blockers[0]["reason_code"])
+        reason_code = next((item["reason_code"] for item in blockers if item["reason_code"] in {"WAITING_FOR_PROVIDER_PUBLICATION", "HOLDING_PUBLICATION_PARTIAL", "QUOTA_EXHAUSTED", "BROKER_RETRY_PENDING", "HOLDING_BUCKETS_INCOMPLETE"}), blockers[0]["reason_code"])
         return {"ready": False, "status": "SCORE_BLOCKED_BY_SOURCE_COVERAGE", "reason_code": reason_code, "target_date": target_date.isoformat(), "blocking_sources": blockers, "score_rows_processed": 0}
     return {"ready": True, "status": "READY", "reason_code": None, "target_date": target_date.isoformat(), "blocking_sources": [], "score_rows_processed": 0}
 
@@ -983,6 +984,12 @@ async def _catch_up_locked(db: Session, client: FinMindClient, end_date: date | 
                     coverage["next_publication_check_at"] = metrics.get("next_publication_check_at")
                     coverage["publication_target_date"] = metrics.get("publication_target_date")
                     coverage["publication_target_records"] = metrics.get("publication_target_records")
+                    coverage["publication_probe_requests"] = int(metrics.get("publication_probe_requests", 0))
+                    coverage["publication_probe"] = metrics.get("publication_probe")
+                    coverage["publication_check_performed"] = bool(metrics.get("publication_check_performed", False))
+                    coverage["publication_last_check_result"] = metrics.get("publication_last_check_result")
+                    coverage["publication_evidence_source"] = metrics.get("publication_evidence_source")
+                    coverage["publication_wait_invalidated"] = bool(metrics.get("publication_wait_invalidated", False))
                     if holding_schema["complete"]:
                         status = "REUSED" if physical_requests == 0 and len(stock_ids) > 0 else "SUCCESS"
                         code = None
@@ -991,7 +998,7 @@ async def _catch_up_locked(db: Session, client: FinMindClient, end_date: date | 
                         code = "WAITING_FOR_PROVIDER_PUBLICATION"
                     else:
                         status = "PARTIAL"
-                        code = "HOLDING_BUCKETS_INCOMPLETE"
+                        code = "HOLDING_PUBLICATION_PARTIAL" if metrics.get("publication_state") == "HOLDING_PUBLICATION_PARTIAL" else "HOLDING_BUCKETS_INCOMPLETE"
             else:
                 records, meta = client.fetch(dataset, start_date=(start - timedelta(days=30)).isoformat(), end_date=end.isoformat())
                 received = len(records)
