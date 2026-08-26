@@ -1,38 +1,59 @@
 {
-  "format": "holding-publication-wait-production-evidence-v1",
-  "source_revision": "b257f34ca3b42a6bbe32f0e9b370dd10cdf80020",
+  "format": "holding-publication-state-machine-evidence-v2",
+  "source_revision": "a68f85f793ed1fc85d18297266cf53bc6c66bcb4",
   "dataset": "TaiwanStockHoldingSharesPer",
-  "first_check": {
-    "status": "WAITING_FOR_PROVIDER_PUBLICATION",
-    "publication_target_date": "2026-08-21",
-    "required_bucket_count": 15,
-    "requested_stocks": 2148,
-    "stocks_with_rows": 0,
-    "complete_stocks": 0,
-    "incomplete_stocks": 2148,
-    "physical_requests": 0,
-    "missing_values_imputed_as_zero": 0,
-    "next_publication_check_at": "2026-08-26T20:59:29.508452+08:00"
+  "target_date": "2026-08-21",
+  "bounded_canary": {
+    "checked_at": "2026-08-26T14:29:22.937988+00:00",
+    "dataset": "TaiwanStockHoldingSharesPer",
+    "target_date": "2026-08-21",
+    "stock_id": "2330",
+    "query_shape": {
+      "dataset": "TaiwanStockHoldingSharesPer",
+      "data_id": "2330",
+      "start_date": "2026-08-17",
+      "end_date": "2026-08-25",
+      "target_date": "2026-08-21",
+      "query_type": "per_stock_target_week_canary",
+      "capability_probe": true
+    },
+    "query_type": "per_stock_target_week_canary",
+    "probe_only": true,
+    "observed_target": false,
+    "returned_row_count": 0,
+    "returned_date_range": {
+      "start": null,
+      "end": null
+    },
+    "source": "FinMind",
+    "secrets_included": false,
+    "status": "ERROR",
+    "error_code": "QUOTA_EXHAUSTED",
+    "status_code": 402,
+    "classification": "QUOTA_EXHAUSTED"
   },
-  "second_check_before_eligible_time": {
-    "status": "WAITING_FOR_PROVIDER_PUBLICATION",
-    "publication_target_date": "2026-08-21",
-    "required_bucket_count": 15,
+  "live_production_revalidation": {
+    "source": "production_per_stock_full_market_fetch",
+    "publication_state": "HOLDING_PUBLICATION_PARTIAL",
+    "publication_wait_invalidated": true,
+    "publication_target_records": 2031,
+    "complete_stocks": 2031,
     "requested_stocks": 2148,
-    "stocks_with_rows": 0,
-    "complete_stocks": 0,
-    "incomplete_stocks": 2148,
-    "physical_requests": 0,
-    "rows_received": 0,
-    "checkpoint_content_hash_before": "146928306feb4ab6130a3ab02910797f7724058c4fddd20fe4ac436f8c3a2bda",
-    "checkpoint_content_hash_after": "146928306feb4ab6130a3ab02910797f7724058c4fddd20fe4ac436f8c3a2bda",
-    "next_publication_check_at": "2026-08-26T20:59:29.508452+08:00"
+    "incomplete_stocks": 117,
+    "required_bucket_count": 15,
+    "physical_requests": 698,
+    "next_publication_check_at": "2026-08-26T15:02:51.194730+00:00",
+    "publication_last_check_result": "FULL_MARKET_REVALIDATION_DUE",
+    "missing_values_imputed_as_zero": 0
   },
   "assertions": {
+    "persisted_wait_is_not_exposed_as_current_after_target_observed": true,
+    "one_stock_does_not_mark_universe_complete": true,
     "all_15_canonical_buckets_required": true,
-    "missing_bucket_fill_as_zero": false,
-    "second_check_issued_zero_physical_requests": true,
-    "old_date_relabelled_as_target": false
+    "incomplete_stocks_remain_non_numeric": true,
+    "missing_holding_values_are_not_zero_filled": true,
+    "restart_resume_preserves_partial_state": true,
+    "deterministic_unit_tests_cover_canary_and_restart": true
   },
   "sanitized": true,
   "secrets_included": false

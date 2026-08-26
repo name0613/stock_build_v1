@@ -1,11 +1,12 @@
 {
-  "format": "score-fail-closed-production-evidence-v1",
-  "source_revision": "b257f34ca3b42a6bbe32f0e9b370dd10cdf80020",
-  "deployed_source_revision": "b257f34ca3b42a6bbe32f0e9b370dd10cdf80020",
+  "format": "score-fail-closed-production-evidence-v2",
+  "source_revision": "a68f85f793ed1fc85d18297266cf53bc6c66bcb4",
+  "deployed_source_revision": "a68f85f793ed1fc85d18297266cf53bc6c66bcb4",
   "base_url": "http://192.168.31.138:18080",
   "provider_state": {
-    "status": "WAITING_FOR_PROVIDER_PUBLICATION",
-    "reason_code": "WAITING_FOR_PROVIDER_PUBLICATION",
+    "status": "QUOTA_EXHAUSTED",
+    "reason_code": "QUOTA_EXHAUSTED",
+    "provider": "FinMind",
     "score_policy": "FAIL_CLOSED",
     "numeric_scores_allowed": false,
     "score_ready": false,
@@ -13,72 +14,85 @@
     "score_blocking_reason": "SCORE_BLOCKED_BY_SOURCE_COVERAGE",
     "blocking_sources": [
       {
-        "dataset": "TaiwanStockHoldingSharesPer",
-        "reason_code": "WAITING_FOR_PROVIDER_PUBLICATION",
-        "expected_source_date": "2026-08-21",
-        "actual_source_date": "2026-08-14",
-        "next_check_at": "2026-08-26T12:59:29.508452+00:00"
-      },
-      {
-        "dataset": "TaiwanStockTradingDailyReport",
-        "reason_code": "BROKER_RETRY_PENDING",
-        "retryable_pending": 3637
-      },
-      {
-        "dataset": "TaiwanStockTradingDailyReport",
-        "reason_code": "BROKER_PARTIAL",
-        "status": "PARTIAL"
+        "dataset": "TaiwanStockPrice",
+        "reason_code": "QUOTA_EXHAUSTED"
       }
-    ]
+    ],
+    "source_coverage_numeric_scores_allowed": false,
+    "score_readiness": {
+      "ready": false,
+      "reason_code": "QUOTA_EXHAUSTED",
+      "target_date": null
+    }
   },
   "score_job": {
     "dataset": "score",
     "status": "SCORE_BLOCKED_BY_SOURCE_COVERAGE",
     "requested_date": "2026-08-24",
-    "started_at": "2026-08-25T14:40:17.585082Z",
-    "finished_at": "2026-08-25T14:40:17.594364Z",
-    "error_code": "WAITING_FOR_PROVIDER_PUBLICATION",
+    "requested_start_date": "2026-08-24",
+    "requested_end_date": "2026-08-24",
+    "started_at": "2026-08-26T15:07:13.023797Z",
+    "finished_at": "2026-08-26T15:07:13.031253Z",
+    "records": 0,
+    "duration_ms": 7,
+    "retry_count": 0,
     "stocks_attempted": 0,
     "stocks_completed": 0,
     "stocks_failed": 0,
     "checkpoint_state": {
       "ready": false,
       "status": "SCORE_BLOCKED_BY_SOURCE_COVERAGE",
-      "reason_code": "WAITING_FOR_PROVIDER_PUBLICATION",
+      "reason_code": "HOLDING_PUBLICATION_PARTIAL",
       "target_date": "2026-08-24",
       "blocking_sources": [
         {
+          "status": "PARTIAL",
+          "dataset": "TaiwanStockInstitutionalInvestorsBuySellWide",
+          "reason_code": "STOCK_PARTIAL"
+        },
+        {
+          "status": "PARTIAL",
+          "dataset": "TaiwanStockShareholding",
+          "reason_code": "STOCK_PARTIAL"
+        },
+        {
+          "status": "PARTIAL",
           "dataset": "TaiwanStockHoldingSharesPer",
-          "reason_code": "WAITING_FOR_PROVIDER_PUBLICATION",
-          "expected_source_date": "2026-08-21"
+          "reason_code": "HOLDING_PUBLICATION_PARTIAL"
         },
         {
           "dataset": "TaiwanStockTradingDailyReport",
           "reason_code": "BROKER_RETRY_PENDING",
           "next_retry_at": null,
-          "retryable_pending": 3637
+          "retryable_pending": 5230
         },
         {
           "status": "PARTIAL",
           "dataset": "TaiwanStockTradingDailyReport",
           "reason_code": "BROKER_PARTIAL"
+        },
+        {
+          "dataset": "TaiwanStockPrice",
+          "reason_code": "QUOTA_EXHAUSTED"
         }
       ],
       "score_rows_processed": 0
-    }
+    },
+    "error_code": "HOLDING_PUBLICATION_PARTIAL",
+    "error": null
   },
   "score_gate": {
     "status": "SCORE_BLOCKED_BY_SOURCE_COVERAGE",
-    "reason_code": "SCORE_BLOCKED_BY_SOURCE_COVERAGE",
+    "reason_code": "HOLDING_PUBLICATION_PARTIAL",
     "stocks_attempted": 0,
-    "stock_loop_entered": false
+    "stock_loop_entered": false,
+    "score_rows_processed": 0
   },
   "api_visible_numeric_scores": {
     "summary_stock_count": 2148,
     "summary_data_insufficient_count": 2148,
-    "all_stock_pages_count": 2148,
-    "numeric_score_count": 0,
     "ranking_item_count": 0,
+    "numeric_score_count": 0,
     "latest_score_date": null,
     "numeric_scores_allowed": false
   },
@@ -88,7 +102,8 @@
     "stocks_attempted": 0,
     "numeric_scores_allowed": false,
     "numeric_score_count": 0,
-    "synthetic_zero_fill": false
+    "synthetic_zero_fill": false,
+    "stale_weekly_relabeling": false
   },
   "sanitized": true,
   "secrets_included": false

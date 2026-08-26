@@ -1,8 +1,8 @@
 {
   "command": "python -m pytest backend/tests -q --junitxml=test_results/backend-junit.xml",
   "status": "PASS",
-  "tests": 146,
-  "passed": 146,
+  "tests": 149,
+  "passed": 149,
   "failed": 0,
   "skipped": 0,
   "secrets_included": false

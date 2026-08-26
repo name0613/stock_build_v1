@@ -1,7 +1,7 @@
 {
   "format": "browser-acceptance-evidence-v2",
-  "acceptance_run_id": "20260825T-final-b257",
-  "source_revision": "b257f34ca3b42a6bbe32f0e9b370dd10cdf80020",
+  "acceptance_run_id": "20260826T-final-a68f",
+  "source_revision": "a68f85f793ed1fc85d18297266cf53bc6c66bcb4",
   "base_url": "http://192.168.31.138:18080",
   "playwright": {
     "expected": 13,
@@ -9,7 +9,7 @@
     "flaky": 0,
     "passed": true
   },
-  "lan_data_ready_ms": 963.71,
+  "lan_data_ready_ms": 1482.81,
   "lan_data_ready_budget_ms": 2000.0,
   "lan_data_ready_pass": true,
   "broker_disclaimer": true,
@@ -29,7 +29,7 @@
   ],
   "score_version": "s-only-v6",
   "formula_hash": "21df6cf28188f6ef3973e8283cb6f482d9895203e9f023f3dc9c69bec926f99b",
-  "frontend_image_digest": "sha256:2992e4355db4f982a97cec5eca55f9818cd9cee3bc4d1e962aa686b41168cabd",
+  "frontend_image_digest": "sha256:6fe4b7c13f9872139764d477a2328c9fcfe26bcb1a6b351241a8f858af9365aa",
   "sanitized": true,
   "secrets_included": false
 }

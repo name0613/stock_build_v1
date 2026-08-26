@@ -1,7 +1,7 @@
 {
-  "generated_at": "2026-08-25T14:41:52.039445+00:00",
+  "generated_at": "2026-08-26T15:08:38.318545+00:00",
   "status": "PASS",
-  "source_revision": "b257f34ca3b42a6bbe32f0e9b370dd10cdf80020",
+  "source_revision": "a68f85f793ed1fc85d18297266cf53bc6c66bcb4",
   "official_broker_source": "TaiwanStockTradingDailyReport",
   "capability_only_source": "TaiwanStockTradingDailyReportSecIdAgg",
   "broker_sources": [

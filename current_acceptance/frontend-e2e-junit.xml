@@ -1,40 +1,40 @@
-<testsuites id="" name="" tests="13" failures="0" skipped="0" errors="0" time="11.804535">
-<testsuite name="dashboard.spec.ts" timestamp="2026-08-25T14:43:50.557Z" hostname="" tests="4" failures="0" skipped="0" time="4.475" errors="0">
-<testcase name="dashboard loads and exposes evidence controls" classname="dashboard.spec.ts" time="0.314">
+<testsuites id="" name="" tests="13" failures="0" skipped="0" errors="0" time="85.261638">
+<testsuite name="dashboard.spec.ts" timestamp="2026-08-26T14:34:12.337Z" hostname="" tests="4" failures="0" skipped="0" time="5.045" errors="0">
+<testcase name="dashboard loads and exposes evidence controls" classname="dashboard.spec.ts" time="0.328">
 </testcase>
-<testcase name="search and insufficient-data state are visible" classname="dashboard.spec.ts" time="1.508">
+<testcase name="search and insufficient-data state are visible" classname="dashboard.spec.ts" time="2.001">
 </testcase>
-<testcase name="NAS detail exposes S-level charts, provenance and missing-data gaps" classname="dashboard.spec.ts" time="1.457">
+<testcase name="NAS detail exposes S-level charts, provenance and missing-data gaps" classname="dashboard.spec.ts" time="1.416">
 </testcase>
-<testcase name="filters, rankings, freshness and score hash are exposed" classname="dashboard.spec.ts" time="1.196">
-</testcase>
-</testsuite>
-<testsuite name="deterministic.spec.ts" timestamp="2026-08-25T14:43:50.557Z" hostname="" tests="6" failures="0" skipped="0" time="3.726" errors="0">
-<testcase name="summary count invariant and deterministic ranking contract are exact" classname="deterministic.spec.ts" time="0.564">
-</testcase>
-<testcase name="holding status is requested once per page load and again after refresh" classname="deterministic.spec.ts" time="0.312">
-</testcase>
-<testcase name="market status and minimum-score filters compose through the UI" classname="deterministic.spec.ts" time="0.299">
-</testcase>
-<testcase name="a delayed initial response cannot overwrite newer search results" classname="deterministic.spec.ts" time="0.644">
-</testcase>
-<testcase name="score pagination keeps numeric values ahead of null and sorting resets page" classname="deterministic.spec.ts" time="1.243">
-</testcase>
-<testcase name="detail exposes provenance formula broker caveat 5-percent unavailable and null gaps" classname="deterministic.spec.ts" time="0.664">
+<testcase name="filters, rankings, freshness and score hash are exposed" classname="dashboard.spec.ts" time="1.3">
 </testcase>
 </testsuite>
-<testsuite name="live-contract.spec.ts" timestamp="2026-08-25T14:43:50.557Z" hostname="" tests="3" failures="0" skipped="0" time="2.785" errors="0">
-<testcase name="live health build metadata score specification and summary are coherent" classname="live-contract.spec.ts" time="1.069">
+<testsuite name="deterministic.spec.ts" timestamp="2026-08-26T14:34:12.337Z" hostname="" tests="6" failures="0" skipped="0" time="3.668" errors="0">
+<testcase name="summary count invariant and deterministic ranking contract are exact" classname="deterministic.spec.ts" time="0.556">
+</testcase>
+<testcase name="holding status is requested once per page load and again after refresh" classname="deterministic.spec.ts" time="0.297">
+</testcase>
+<testcase name="market status and minimum-score filters compose through the UI" classname="deterministic.spec.ts" time="0.305">
+</testcase>
+<testcase name="a delayed initial response cannot overwrite newer search results" classname="deterministic.spec.ts" time="0.666">
+</testcase>
+<testcase name="score pagination keeps numeric values ahead of null and sorting resets page" classname="deterministic.spec.ts" time="1.218">
+</testcase>
+<testcase name="detail exposes provenance formula broker caveat 5-percent unavailable and null gaps" classname="deterministic.spec.ts" time="0.626">
+</testcase>
+</testsuite>
+<testsuite name="live-contract.spec.ts" timestamp="2026-08-26T14:34:12.337Z" hostname="" tests="3" failures="0" skipped="0" time="3.323" errors="0">
+<testcase name="live health build metadata score specification and summary are coherent" classname="live-contract.spec.ts" time="1.605">
 <properties>
-<property name="lan_data_ready_ms" value="947.56">
+<property name="lan_data_ready_ms" value="1482.81">
 </property>
 <property name="lan_data_ready_budget_ms" value="2000">
 </property>
 </properties>
 </testcase>
-<testcase name="live list filters pagination ranking and numeric-null ordering obey the API contract" classname="live-contract.spec.ts" time="0.272">
+<testcase name="live list filters pagination ranking and numeric-null ordering obey the API contract" classname="live-contract.spec.ts" time="0.271">
 </testcase>
-<testcase name="live detail renders exact provenance formula unavailable policy broker caveat and chart segments" classname="live-contract.spec.ts" time="1.444">
+<testcase name="live detail renders exact provenance formula unavailable policy broker caveat and chart segments" classname="live-contract.spec.ts" time="1.447">
 <properties>
 <property name="broker_disclaimer" value="true">
 </property>

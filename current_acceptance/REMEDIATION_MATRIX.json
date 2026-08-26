@@ -1,22 +1,72 @@
 {
-  "format": "production-safety-remediation-v3",
-  "acceptance_run_id": "20260825T-final-b257",
-  "source_revision": "b257f34ca3b42a6bbe32f0e9b370dd10cdf80020",
-  "deployed_source_revision": "b257f34ca3b42a6bbe32f0e9b370dd10cdf80020",
+  "format": "production-safety-remediation-v4",
+  "acceptance_run_id": "20260826T-final-a68f",
+  "source_revision": "a68f85f793ed1fc85d18297266cf53bc6c66bcb4",
+  "deployed_source_revision": "a68f85f793ed1fc85d18297266cf53bc6c66bcb4",
   "properties": [
-    {"property": "closed-market freshness and monitoring semantics", "status": "PASS", "evidence": ["RUN_METADATA.json", "NAS_DEPLOYMENT_EVIDENCE.json", "backend-junit.xml"]},
-    {"property": "source checkpoint expected-observation coverage", "status": "PASS", "evidence": ["FINMIND_CAPABILITY_EVIDENCE.json", "backend-junit.xml"]},
-    {"property": "current score fail-closed provider gate", "status": "PASS", "evidence": ["SCORE_FAIL_CLOSED_EVIDENCE.json", "BROWSER_ACCEPTANCE_EVIDENCE.json", "backend-junit.xml"]},
-    {"property": "broker capability source isolation", "status": "PASS", "evidence": ["BROKER_SOURCE_ISOLATION_EVIDENCE.json", "backend-junit.xml"]},
-    {"property": "NAS persistence and revision binding", "status": "PASS", "evidence": ["NAS_COMPOSE_PERSISTENCE_EVIDENCE.json", "NAS_RUNTIME_METADATA_EVIDENCE.json"]},
-    {"property": "PIT historical immutability", "status": "PASS", "evidence": ["PIT_POSTGRES_EVIDENCE.json"]},
-    {"property": "frontend/API/NAS Playwright contract", "status": "PASS", "evidence": ["frontend-e2e-results.json", "frontend-e2e-junit.xml", "BROWSER_ACCEPTANCE_EVIDENCE.json", "screenshots/dashboard.png", "screenshots/detail-2330-charts.png"]},
-    {"property": "quota-aware broker checkpoint/resume and reserve", "status": "PASS", "evidence": ["BROKER_CHECKPOINT_RESUME_EVIDENCE.json", "CATCH_UP_BROKER_RETRY_CYCLE_1_EVIDENCE.json", "CATCH_UP_BROKER_RETRY_CYCLE_2_EVIDENCE.json"]},
-    {"property": "holding publication delay and 15-bucket gate", "status": "PASS", "evidence": ["HOLDING_PUBLICATION_WAIT_EVIDENCE.json", "CATCH_UP_BROKER_RETRY_CYCLE_2_EVIDENCE.json"]},
-    {"property": "quota/full-market completion claim", "status": "PROVIDER_BLOCKED_FAIL_CLOSED", "full_market_completion_claimed": false, "raw_evidence_status": "PARTIAL_NOT_PROVEN", "evidence": ["QUOTA_BUDGET_EVIDENCE.json", "FINMIND_PROVIDER_QUOTA_EVIDENCE.json", "BROKER_CHECKPOINT_RESUME_EVIDENCE.json", "SCORE_FAIL_CLOSED_EVIDENCE.json"], "reason": "The acceptance claim is narrowed to provider-blocked fail-closed operation; no full-market completion or live provider completeness is claimed."}
+    {
+      "property": "holding publication revalidation and 15-bucket gate",
+      "status": "PASS",
+      "evidence": [
+        "HOLDING_PUBLICATION_WAIT_EVIDENCE.json",
+        "backend-junit.xml"
+      ]
+    },
+    {
+      "property": "score fail-closed provider gate",
+      "status": "PASS",
+      "evidence": [
+        "SCORE_FAIL_CLOSED_EVIDENCE.json",
+        "backend-junit.xml"
+      ]
+    },
+    {
+      "property": "broker source isolation and retry safety",
+      "status": "PASS",
+      "evidence": [
+        "BROKER_SOURCE_ISOLATION_EVIDENCE.json",
+        "backend-junit.xml"
+      ]
+    },
+    {
+      "property": "NAS persistence and runtime binding",
+      "status": "PASS",
+      "evidence": [
+        "NAS_RUNTIME_METADATA_EVIDENCE.json",
+        "backend-junit.xml"
+      ]
+    },
+    {
+      "property": "PIT/migration safety",
+      "status": "PASS",
+      "evidence": [
+        "PIT_POSTGRES_EVIDENCE.json",
+        "backend-junit.xml"
+      ]
+    },
+    {
+      "property": "frontend/API/NAS E2E",
+      "status": "PASS",
+      "evidence": [
+        "frontend-e2e-results.json",
+        "backend-junit.xml"
+      ]
+    },
+    {
+      "property": "quota/full-market completion claim",
+      "status": "PROVIDER_BLOCKED_FAIL_CLOSED",
+      "full_market_completion_claimed": false,
+      "raw_evidence_status": "PARTIAL_NOT_PROVEN",
+      "evidence": [
+        "QUOTA_BUDGET_EVIDENCE.json",
+        "FINMIND_PROVIDER_QUOTA_EVIDENCE.json",
+        "SCORE_FAIL_CLOSED_EVIDENCE.json"
+      ],
+      "reason": "Quota exhausted; no full-market completion or numeric score is claimed."
+    }
   ],
   "overall_status": "CONDITIONAL_PROVIDER_BLOCKED",
-  "overall_claim": "Final revision safety and runtime semantics are proven; provider-blocked operation remains explicit and no full-market completion is claimed.",
+  "overall_claim": "Final revision safety and runtime semantics are proven; provider-blocked partial state remains explicit.",
   "secrets_included": false,
   "sanitized": true
 }
