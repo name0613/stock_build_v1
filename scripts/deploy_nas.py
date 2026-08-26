@@ -7,6 +7,7 @@ import secrets
 import shlex
 import subprocess
 import hashlib
+import json
 from datetime import datetime, timezone
 import sys
 from pathlib import Path
@@ -180,7 +181,11 @@ def main() -> None:
         database_password = secret_file.read().decode("utf-8").strip()
         secret_file.close()
         sftp.close()
-        remote(ssh, f"cd {project} && docker compose build", sudo=True)
+        # A plain cached build can leave the running image on the previous
+        # source revision even though the host-side revision marker changed.
+        # Rebuild the application images without cache so build metadata and
+        # copied source are guaranteed to be bound to this deployment.
+        remote(ssh, f"cd {project} && docker compose build --no-cache api worker frontend", sudo=True)
         remote(
             ssh,
             f"cd {project} && docker compose up -d postgres && "
@@ -190,8 +195,13 @@ def main() -> None:
             sudo=True,
         )
         sync_database_password(ssh, project, database_password)
-        remote(ssh, f"cd {project} && docker compose up -d", sudo=True)
-        remote(ssh, f"cd {project} && docker compose up -d --force-recreate nginx", sudo=True)
+        remote(ssh, f"cd {project} && docker compose up -d --force-recreate api worker frontend nginx", sudo=True)
+        worker_metadata = json.loads(remote(ssh, f"cd {project} && docker compose exec -T worker cat /app/build-metadata.json", sudo=True))
+        frontend_metadata = json.loads(remote(ssh, f"cd {project} && docker compose exec -T frontend cat /usr/share/nginx/html/build-metadata.json", sudo=True))
+        if worker_metadata.get("source_revision") != SOURCE_REVISION:
+            raise RuntimeError("worker image source revision does not match deployed source revision")
+        if frontend_metadata.get("source_revision") != SOURCE_REVISION:
+            raise RuntimeError("frontend image source revision does not match deployed source revision")
         print(remote(ssh, f"cd {project} && docker compose ps", sudo=True))
         print(remote(ssh, f"cd {project} && docker compose ps --format json", sudo=True))
         print(f"NAS deployment completed at {project}; credentials were not printed")
