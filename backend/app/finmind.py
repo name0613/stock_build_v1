@@ -1075,9 +1075,8 @@ class FinMindClient:
                 checkpoint["publication_wait"] = updated_wait
             elif publication_wait_state == HOLDING_PUBLICATION_WAIT_STATE and publication_recheck_due:
                 invalidate_unobserved_target()
-                publication_wait_invalidated = True
                 metrics["publication_check_performed"] = True
-                metrics["publication_wait_invalidated"] = True
+                metrics["publication_recheck_due"] = True
                 checkpoint["publication_wait"] = {
                     **publication_wait,
                     "last_provider_publication_check_at": datetime.now(timezone.utc).isoformat(),

@@ -987,6 +987,7 @@ async def _catch_up_locked(db: Session, client: FinMindClient, end_date: date | 
                     coverage["publication_probe_requests"] = int(metrics.get("publication_probe_requests", 0))
                     coverage["publication_probe"] = metrics.get("publication_probe")
                     coverage["publication_check_performed"] = bool(metrics.get("publication_check_performed", False))
+                    coverage["publication_recheck_due"] = bool(metrics.get("publication_recheck_due", False))
                     coverage["publication_last_check_result"] = metrics.get("publication_last_check_result")
                     coverage["publication_evidence_source"] = metrics.get("publication_evidence_source")
                     coverage["publication_wait_invalidated"] = bool(metrics.get("publication_wait_invalidated", False))
