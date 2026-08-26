@@ -31,7 +31,7 @@ PASSWORD = os.getenv("NAS_PASSWORD")
 FINMIND_TOKEN = os.getenv("FINMIND_API_TOKEN")
 REMOTE_CANDIDATES = ["/volume1/docker", "/share/Container", "/share/CACHEDEV1_DATA/Container", "/mnt/user/appdata"]
 EXCLUDED = {".git", ".venv", "node_modules", "dist", "data", "secrets", "test-results", "test_results", "deployment_evidence", "current_acceptance", "__pycache__", ".pytest_cache", ".ruff_cache"}
-EXCLUDED_PREFIXES = ("review_bundle_", "historical_acceptance")
+EXCLUDED_PREFIXES = ("review_bundle_", "historical_acceptance", "historical_non_acceptance")
 
 
 def remote(
@@ -77,7 +77,7 @@ def iter_files() -> list[Path]:
         relative = path.relative_to(ROOT)
         if any(part in EXCLUDED or part.startswith(EXCLUDED_PREFIXES) for part in relative.parts):
             continue
-        if path.name in {".env", "postgres_password"}:
+        if path.name in {".env", "postgres_password", "accumulation.db"}:
             continue
         files.append(path)
     return files
