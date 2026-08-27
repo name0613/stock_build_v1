@@ -643,14 +643,20 @@ def _daily_coverage(rows: list[dict[str, Any]], as_of: date, count: int) -> tupl
     return not missing, missing
 
 
-def calculate_stock_features_and_score(db: Session, stock_id: str, as_of: date | None = None, knowledge_cutoff: datetime | None = None) -> AccumulationScore:
-    as_of = as_of or date.today()
-    cutoff = knowledge_cutoff or _now()
-    inst, inst_hashes = _model_rows(db, InstitutionalDaily, stock_id, as_of, cutoff, "TaiwanStockInstitutionalInvestorsBuySellWide", 20)
-    foreign, foreign_hashes = _model_rows(db, ForeignShareholdingDaily, stock_id, as_of, cutoff, "TaiwanStockShareholding", 21)
-    holdings, holding_hashes = _model_rows(db, HoldingDistribution, stock_id, as_of, cutoff, "TaiwanStockHoldingSharesPer", 100)
-    brokers, broker_hashes = _model_rows(db, BrokerDaily, stock_id, as_of, cutoff, "TaiwanStockTradingDailyReport", 2000)
-    prices, price_hashes = _model_rows(db, PriceDaily, stock_id, as_of, cutoff, "TaiwanStockPrice", 21)
+def _evaluate_stock_inputs(db: Session, stock_id: str, as_of: date, knowledge_cutoff: datetime) -> dict[str, Any]:
+    """Evaluate one stock against the authoritative scoring contract.
+
+    This is deliberately side-effect free.  Both the production scoring loop
+    and the readiness audit use this function so that a stock cannot be
+    reported as ready by an audit while being rejected by scoring (or vice
+    versa).  The point-in-time cutoff is supplied by the caller and is shared
+    by a complete scoring run.
+    """
+    inst, inst_hashes = _model_rows(db, InstitutionalDaily, stock_id, as_of, knowledge_cutoff, "TaiwanStockInstitutionalInvestorsBuySellWide", 20)
+    foreign, foreign_hashes = _model_rows(db, ForeignShareholdingDaily, stock_id, as_of, knowledge_cutoff, "TaiwanStockShareholding", 21)
+    holdings, holding_hashes = _model_rows(db, HoldingDistribution, stock_id, as_of, knowledge_cutoff, "TaiwanStockHoldingSharesPer", 100)
+    brokers, broker_hashes = _model_rows(db, BrokerDaily, stock_id, as_of, knowledge_cutoff, "TaiwanStockTradingDailyReport", 2000)
+    prices, price_hashes = _model_rows(db, PriceDaily, stock_id, as_of, knowledge_cutoff, "TaiwanStockPrice", 21)
     features = build_features(inst, foreign, holdings, brokers, prices)
     inst_ok, inst_missing = _daily_coverage(inst, as_of, 20)
     foreign_ok, foreign_missing = _daily_coverage(foreign, as_of, 21)
@@ -682,17 +688,94 @@ def calculate_stock_features_and_score(db: Session, stock_id: str, as_of: date |
         "missing_sessions": {"institutional": inst_missing, "foreign_holding": foreign_missing, "broker": broker_missing, "price": price_missing},
         "holding_missing_weeks": holding_coverage.get("missing_weeks", []),
     }
-    result = calculate_score(features, coverage)
-    now = _now()
     input_hashes = sorted(inst_hashes + foreign_hashes + holding_hashes + broker_hashes + price_hashes)
-    snapshot_hash = hashlib.sha256(json.dumps(input_hashes, separators=(",", ":")).encode()).hexdigest()
     s_dates = [str(row.get("source_date") or row.get("date")) for row in inst + foreign + holdings + brokers if row.get("source_date") or row.get("date")]
+    readiness_reason_codes: list[str] = []
+    if not coverage["InstitutionalDataAvailable"]:
+        readiness_reason_codes.append("missing_institutional")
+    if not coverage["ForeignHoldingDataAvailable"]:
+        readiness_reason_codes.append("missing_foreign_holding")
+    if not coverage["HoldingDistributionAvailable"]:
+        readiness_reason_codes.append("tdcc_required_buckets_incomplete")
+    if not coverage["BrokerDataAvailable"]:
+        readiness_reason_codes.append("missing_broker")
+    if not coverage["PriceDataAvailable"]:
+        readiness_reason_codes.append("missing_price")
+    # The detailed session lists are the authoritative explanation for a
+    # stock-level miss.  Keep a stable top-level code for machine-auditable
+    # metrics while retaining the existing human-readable reasons.
+    coverage["readiness_reason_codes"] = readiness_reason_codes
+    score_result = calculate_score(features, coverage)
+    return {
+        "stock_id": stock_id,
+        "as_of": as_of,
+        "knowledge_cutoff": knowledge_cutoff,
+        "features": features,
+        "coverage": coverage,
+        "score_result": score_result,
+        "input_hashes": input_hashes,
+        "snapshot_hash": hashlib.sha256(json.dumps(input_hashes, separators=(",", ":")).encode()).hexdigest(),
+        "latest_source_date": max(s_dates, default=None),
+        "ready": score_result.score is not None,
+        "missing_reasons": readiness_reason_codes,
+    }
+
+
+def evaluate_stock_readiness(db: Session, stock_id: str, as_of: date, knowledge_cutoff: datetime | None = None) -> dict[str, Any]:
+    """Return deterministic, side-effect-free readiness for one stock."""
+    evaluation = _evaluate_stock_inputs(db, stock_id, as_of, knowledge_cutoff or _now())
+    return {
+        "stock_id": stock_id,
+        "ready": evaluation["ready"],
+        "missing_reasons": list(evaluation["missing_reasons"]),
+        "coverage": evaluation["coverage"],
+        "source_date": as_of.isoformat(),
+        "knowledge_cutoff": evaluation["knowledge_cutoff"].isoformat(),
+    }
+
+
+def evaluate_universe_readiness(db: Session, stock_ids: list[str], as_of: date, knowledge_cutoff: datetime | None = None) -> dict[str, Any]:
+    """Audit every eligible stock without creating feature or score rows."""
+    cutoff = knowledge_cutoff or _now()
+    items: list[dict[str, Any]] = []
+    reason_counts: dict[str, int] = {}
+    for stock_id in stock_ids:
+        item = evaluate_stock_readiness(db, stock_id, as_of, cutoff)
+        items.append(item)
+        for reason in item["missing_reasons"]:
+            reason_counts[reason] = reason_counts.get(reason, 0) + 1
+    ready = sum(1 for item in items if item["ready"])
+    return {
+        "source_date": as_of.isoformat(),
+        "knowledge_cutoff": cutoff.isoformat(),
+        "evaluated_stock_count": len(items),
+        "ready_stock_count": ready,
+        "not_ready_stock_count": len(items) - ready,
+        "accounting_invariant": ready + (len(items) - ready) == len(items),
+        "missing_reason_counts": reason_counts,
+        "items": items,
+    }
+
+
+def _persist_stock_evaluation(db: Session, evaluation: dict[str, Any]) -> AccumulationScore:
+    """Persist one evaluated stock, including explicit fail-closed results."""
+    now = _now()
+    stock_id = evaluation["stock_id"]
+    as_of = evaluation["as_of"]
+    cutoff = evaluation["knowledge_cutoff"]
     feature_filters = {"stock_id": stock_id, "source_date": as_of, "knowledge_cutoff": cutoff}
-    _upsert(db, AccumulationFeature, feature_filters, {"values": features, "coverage": coverage, "latest_source_date": max(s_dates, default=None), "calculated_at": now, "input_snapshot_hash": snapshot_hash})
+    _upsert(db, AccumulationFeature, feature_filters, {"values": evaluation["features"], "coverage": evaluation["coverage"], "latest_source_date": evaluation["latest_source_date"], "calculated_at": now, "input_snapshot_hash": evaluation["snapshot_hash"]})
+    result = evaluation["score_result"]
     score_filters = {"stock_id": stock_id, "source_date": as_of, "score_version": SCORE_VERSION, "knowledge_cutoff": cutoff}
-    score = _upsert(db, AccumulationScore, score_filters, {"score": result.score, "status": result.status, "components": result.components, "explanation": result.explanation, "coverage": coverage, "calculated_at": now, "input_snapshot_hash": snapshot_hash, "input_source_hashes": input_hashes, "formula_hash": FORMULA_HASH})
+    score = _upsert(db, AccumulationScore, score_filters, {"score": result.score, "status": result.status, "components": result.components, "explanation": result.explanation, "coverage": evaluation["coverage"], "calculated_at": now, "input_snapshot_hash": evaluation["snapshot_hash"], "input_source_hashes": evaluation["input_hashes"], "formula_hash": FORMULA_HASH})
     db.commit()
     return score
+
+
+def calculate_stock_features_and_score(db: Session, stock_id: str, as_of: date | None = None, knowledge_cutoff: datetime | None = None) -> AccumulationScore:
+    """Evaluate and persist one stock using the shared readiness source of truth."""
+    evaluation = _evaluate_stock_inputs(db, stock_id, as_of or date.today(), knowledge_cutoff or _now())
+    return _persist_stock_evaluation(db, evaluation)
 
 
 def seed_score_version(db: Session) -> None:
@@ -824,7 +907,12 @@ def holding_coverage_state(db: Session, stock_ids: list[str], target_date: date)
 
 
 def score_source_coverage_gate(db: Session, target_date: date) -> dict[str, Any]:
-    """Decide whether Score may enter the per-stock computation loop."""
+    """Report global source coverage as advisory observability.
+
+    This intentionally does not decide whether the production score loop may
+    run.  Individual stock readiness is evaluated by
+    :func:`_evaluate_stock_inputs` for every eligible stock.
+    """
     blockers: list[dict[str, Any]] = []
     expected_by_dataset = {dataset: authoritative_expected_latest_source_date(dataset) for dataset in SCORE_READINESS_DATASETS}
     for dataset in SCORE_READINESS_DATASETS:
@@ -983,12 +1071,11 @@ async def _catch_up_locked(db: Session, client: FinMindClient, end_date: date | 
         result["datasets"]["TaiwanStockInfo"] = {"status": "FAILED", "error_code": code}
         result["status"] = "PARTIAL"
         result["fatal_code"] = code
-        result["provider_work_deferred"] = {"reason": "dynamic universe refresh failed; later provider work and scoring were not launched", "error_code": code}
-        score_gate = score_source_coverage_gate(db, end)
-        result["score_preflight"] = score_gate
-        result["scores"] = record_score_blocked(db, end, score_gate)
-        result["score_status"] = "SCORE_BLOCKED_BY_SOURCE_COVERAGE"
-        return result
+        result["provider_work_deferred"] = {"reason": "dynamic universe refresh failed; existing local universe will be evaluated", "error_code": code}
+        # Do not spend provider quota after a systemic universe failure.  The
+        # existing active universe remains eligible for local readiness and
+        # scoring, exactly like a quota-exhausted source run.
+        required = []
     stock_ids = list(db.scalars(select(Stock.stock_id).where(Stock.is_common_stock.is_(True))).all())
     for dataset in required:
         refresh_stock_ids = prioritize_stock_ids(db, stock_ids, dataset)
@@ -1093,16 +1180,34 @@ async def _catch_up_locked(db: Session, client: FinMindClient, end_date: date | 
     fatal_code = result.get("fatal_code")
     if fatal_code:
         result["provider_work_deferred"] = {"reason": "global provider failure; later source and broker requests were not launched", "error_code": fatal_code}
-        score_gate = score_source_coverage_gate(db, end)
-        result["score_preflight"] = score_gate
-        result["scores"] = record_score_blocked(db, end, score_gate)
-        result["score_status"] = "SCORE_BLOCKED_BY_SOURCE_COVERAGE"
-        return result
+        # Keep the global failure visible, but do not let it veto local
+        # per-stock scoring below.  Broker work is explicitly marked deferred
+        # because a quota/auth/schema failure must never be bypassed.
+        broker_metrics = {
+            "requested": len(stock_ids),
+            "requested_keys": len(stock_ids) * 20,
+            "skipped_checkpoint": 0,
+            "physical_requests": 0,
+            "rows": 0,
+            "rows_received": 0,
+            "failed": 0,
+            "retryable_pending": 0,
+            "success": 0,
+            "stocks_completed": 0,
+            "stocks_failed": 0,
+            "deferred": True,
+            "deferred_reason": fatal_code,
+        }
+        result["datasets"]["TaiwanStockTradingDailyReport"] = {
+            **broker_metrics,
+            "status": "DEFERRED",
+        }
     broker_start = expected_trading_sessions(end, 20)[0]
     pending_broker_rebuilds = _pending_broker_rebuild_stock_ids(db)
     progress("TaiwanStockTradingDailyReport")
     broker_job = _job_start(db, "TaiwanStockTradingDailyReport", broker_start, end, stocks_attempted=len(stock_ids))
-    broker_metrics: dict[str, Any] = {}
+    if not fatal_code:
+        broker_metrics = {}
     broker_buffer: list[dict[str, Any]] = []
     stored = 0
     broker_versioned = 0
@@ -1120,8 +1225,9 @@ async def _catch_up_locked(db: Session, client: FinMindClient, end_date: date | 
         return stored
 
     try:
-        refresh_stock_ids = prioritize_stock_ids(db, stock_ids, "TaiwanStockTradingDailyReport")
-        broker_metrics = await client.fetch_broker_stocks(refresh_stock_ids, broker_start.isoformat(), end.isoformat(), record_sink=broker_sink, progress_callback=progress)
+        if not fatal_code:
+            refresh_stock_ids = prioritize_stock_ids(db, stock_ids, "TaiwanStockTradingDailyReport")
+            broker_metrics = await client.fetch_broker_stocks(refresh_stock_ids, broker_start.isoformat(), end.isoformat(), record_sink=broker_sink, progress_callback=progress)
         if broker_buffer:
             revisions_before = db.scalar(select(func.count()).select_from(SourceRevision).where(SourceRevision.dataset == "TaiwanStockTradingDailyReport")) or 0
             stored_now = ingest_records(db, "TaiwanStockTradingDailyReport", broker_buffer)
@@ -1143,45 +1249,94 @@ async def _catch_up_locked(db: Session, client: FinMindClient, end_date: date | 
         if broker_metrics.get("fatal_code"):
             result["fatal_code"] = broker_metrics["fatal_code"]
             result["provider_work_deferred"] = {
-                "reason": "global provider failure; scoring was not launched after broker work stopped",
+                "reason": "global provider failure; broker work and further ingestion were deferred",
                 "error_code": broker_metrics["fatal_code"],
             }
-            score_gate = score_source_coverage_gate(db, end)
-            result["score_preflight"] = score_gate
-            result["scores"] = record_score_blocked(db, end, score_gate)
-            result["score_status"] = "SCORE_BLOCKED_BY_SOURCE_COVERAGE"
-            return result
     except Exception as exc:
         db.rollback()
         code = getattr(exc, "code", "UNEXPECTED")
         _job_finish(db, broker_job, "FAILED", error_code=code, error=str(exc), stocks_failed=len(stock_ids))
         result["datasets"]["TaiwanStockTradingDailyReport"] = {"status": "FAILED", "error_code": code}
         result["status"] = "PARTIAL"
+    # The global source gate remains useful observability, but it is advisory
+    # only.  A PARTIAL/stale/quota-exhausted source means that *some* stocks
+    # are missing data; it does not prove that every stock is unscoreable.
     score_gate = score_source_coverage_gate(db, end)
-    result["score_preflight"] = score_gate
-    if not score_gate["ready"]:
-        result["scores"] = record_score_blocked(db, end, score_gate)
-        result["score_status"] = "SCORE_BLOCKED_BY_SOURCE_COVERAGE"
-        result["status"] = "PARTIAL"
-        return result
-    existing_scores = db.scalars(select(AccumulationScore).where(AccumulationScore.source_date == end, AccumulationScore.score_version == SCORE_VERSION, AccumulationScore.knowledge_cutoff.is_not(None))).all()
-    reuse_ready = len(existing_scores) >= len(stock_ids) and all(len(score.input_source_hashes or []) >= 20 for score in existing_scores)
-    if broker_metrics.get("skipped_checkpoint", 0) >= len(stock_ids) * 20 and reuse_ready:
-        score_job = _job_start(db, "score", end, end, stocks_attempted=len(stock_ids))
-        _job_finish(db, score_job, "REUSED", stocks_completed=len(stock_ids), checkpoint_state={"reused_existing_scores": True, **score_readiness_checkpoint(db, end, len(stock_ids))})
-        result["scores"] = {status: count for status, count in db.execute(select(AccumulationScore.status, func.count()).where(AccumulationScore.source_date == end, AccumulationScore.score_version == SCORE_VERSION, AccumulationScore.knowledge_cutoff.is_not(None)).group_by(AccumulationScore.status)).all()}
-        return result
+    score_cutoff = _now()
+    result["score_preflight"] = {**score_gate, "scope": "advisory_global_observability", "per_stock_gate": True}
     score_job = _job_start(db, "score", end, end, stocks_attempted=len(stock_ids))
     progress("score")
+    ready_stock_count = 0
+    not_ready_stock_count = 0
+    reason_counts: dict[str, int] = {}
     for stock_id in stock_ids:
         try:
-            score = calculate_stock_features_and_score(db, stock_id, end)
+            evaluation = _evaluate_stock_inputs(db, stock_id, end, score_cutoff)
+            if evaluation["ready"]:
+                ready_stock_count += 1
+            else:
+                not_ready_stock_count += 1
+                for reason in evaluation["missing_reasons"]:
+                    reason_counts[reason] = reason_counts.get(reason, 0) + 1
+            score = _persist_stock_evaluation(db, evaluation)
             result["scores"][score.status] = result["scores"].get(score.status, 0) + 1
         except Exception:
             result["status"] = "PARTIAL"
+            not_ready_stock_count += 1
+            reason_counts["score_evaluation_failed"] = reason_counts.get("score_evaluation_failed", 0) + 1
+            # Preserve an explicit fail-closed row for an isolated evaluation
+            # error so no stock silently disappears from the run accounting.
+            # The original failure remains visible in score_rows_failed.
+            try:
+                failure_coverage = {
+                    "InstitutionalDataAvailable": False,
+                    "ForeignHoldingDataAvailable": False,
+                    "HoldingDistributionAvailable": False,
+                    "BrokerDataAvailable": False,
+                    "PriceDataAvailable": False,
+                    "RequiredFeatureValidation": {},
+                    "missing_reasons": ["score evaluation failed before readiness could be proven"],
+                    "readiness_reason_codes": ["score_evaluation_failed"],
+                    "calendar_version": CALENDAR_VERSION,
+                }
+                failure_evaluation = {
+                    "stock_id": stock_id,
+                    "as_of": end,
+                    "knowledge_cutoff": score_cutoff,
+                    "features": {},
+                    "coverage": failure_coverage,
+                    "score_result": calculate_score({}, failure_coverage),
+                    "input_hashes": [],
+                    "snapshot_hash": hashlib.sha256(b"[]").hexdigest(),
+                    "latest_source_date": None,
+                    "ready": False,
+                    "missing_reasons": ["score_evaluation_failed"],
+                }
+                _persist_stock_evaluation(db, failure_evaluation)
+                result["scores"]["DATA_INSUFFICIENT"] = result["scores"].get("DATA_INSUFFICIENT", 0) + 1
+            except Exception:
+                db.rollback()
             result["scores"]["FAILED"] = result["scores"].get("FAILED", 0) + 1
     failures = result["scores"].get("FAILED", 0)
-    _job_finish(db, score_job, "SUCCESS" if failures == 0 else "PARTIAL", stocks_completed=len(stock_ids) - failures, stocks_failed=failures, checkpoint_state={"scores": result["scores"], **score_readiness_checkpoint(db, end, len(stock_ids))})
+    score_rows_data_insufficient = result["scores"].get("DATA_INSUFFICIENT", 0)
+    score_rows_processed = sum(count for status, count in result["scores"].items() if status not in {"DATA_INSUFFICIENT", "FAILED"})
+    result["score_metrics"] = {
+        "universe_stock_count": len(stock_ids),
+        "evaluated_stock_count": len(stock_ids),
+        "ready_stock_count": ready_stock_count,
+        "not_ready_stock_count": not_ready_stock_count,
+        "score_rows_processed": score_rows_processed,
+        "score_rows_data_insufficient": score_rows_data_insufficient,
+        "score_rows_failed": failures,
+        "missing_reason_counts": reason_counts,
+        "accounting_invariant": ready_stock_count + not_ready_stock_count == len(stock_ids),
+    }
+    result["score_preflight"]["per_stock_summary"] = result["score_metrics"]
+    # Preserve an explicit zero-ready outcome for operational dashboards while
+    # allowing a mixed run to complete with numeric and fail-closed rows.
+    score_job_status = "SCORE_BLOCKED_BY_SOURCE_COVERAGE" if ready_stock_count == 0 and failures == 0 else ("SUCCESS" if failures == 0 else "PARTIAL")
+    _job_finish(db, score_job, score_job_status, stocks_completed=len(stock_ids) - failures, stocks_failed=failures, checkpoint_state={"scores": result["scores"], "score_metrics": result["score_metrics"], **score_readiness_checkpoint(db, end, len(stock_ids))})
+    result["score_status"] = score_job_status
     rebuilt = _mark_broker_rebuilds_complete(db, pending_broker_rebuilds, end)
     if pending_broker_rebuilds:
         result["broker_source_remediation"] = {

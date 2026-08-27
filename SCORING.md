@@ -18,7 +18,7 @@ Holding levels are parsed by explicit unit patterns. Because FinMind buckets are
 
 Broker persistence uses directly observed, schema-valid positive-net rows in true 5/10/20-session windows. A broker branch is an execution venue aggregate and is never described as one beneficial owner. Omitted branches are `unknown`, never zero-filled; empty reports, missing sessions and unproven completeness make the affected window unavailable. Concentration and broker one-day-spike metrics remain unavailable until independent live evidence proves report completeness, so the current v6 score cannot claim those semantics.
 
-Every required feature has an authoritative validation record: expected window, cadence, present, valid and reason. `5/5 sources` is only emitted when the score inputs are calculable; missing 19/20/21 sessions and unknown holding buckets remain `DATA_INSUFFICIENT` or `SCHEMA_MISMATCH`, never numeric zero. The exchange calendar is versioned as `tw-exchange-2026-v1`; dates outside its coverage fail closed as `CALENDAR_UNKNOWN`.
+Every required feature has an authoritative validation record: expected window, cadence, present, valid and reason. `5/5 sources` is only emitted for an individual stock when its score inputs are calculable; missing 19/20/21 sessions and unknown holding buckets remain `DATA_INSUFFICIENT` or `SCHEMA_MISMATCH`, never numeric zero. A globally partial source does not block unrelated ready stocks: the worker evaluates every eligible stock independently and records ready/not-ready counts in the score JobRun checkpoint. The exchange calendar is versioned as `tw-exchange-2026-v1`; dates outside its coverage fail closed as `CALENDAR_UNKNOWN`.
 
 Classification:
 

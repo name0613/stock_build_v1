@@ -16,7 +16,7 @@ from .config import get_settings
 from .db import get_db, init_db
 from .finmind import GLOBAL_PROVIDER_FAILURE_CODES
 from .features import build_features, holding_distribution_features
-from .ingestion import authoritative_expected_latest_source_date, authoritative_source_state_hash, score_snapshot_state, seed_score_version
+from .ingestion import authoritative_expected_latest_source_date, authoritative_source_state_hash, evaluate_stock_readiness, evaluate_universe_readiness, score_snapshot_state, seed_score_version
 from .models import AccumulationFeature, AccumulationScore, BrokerDaily, DataSyncStatus, ForeignShareholdingDaily, HoldingDistribution, InstitutionalDaily, JobRun, PriceDaily, Stock
 from .schemas import PaginatedStocks, StockListItem
 from .calendar import CALENDAR_HASH, CALENDAR_VERSION
@@ -132,7 +132,22 @@ def summary(db: Session = Depends(get_db)) -> dict[str, Any]:
     else:
         counts = {"STRONG_ACCUMULATION": 0, "ACCUMULATION": 0, "WATCH": 0, "DATA_INSUFFICIENT": total, "NO_STRONG_EVIDENCE": 0}
     last_updates = [s.last_fetch_at or s.last_successful_sync for s in sync if s.last_fetch_at or s.last_successful_sync]
-    return {"stock_count": total, "strong_count": counts["STRONG_ACCUMULATION"], "accumulation_count": counts["ACCUMULATION"], "watch_count": counts["WATCH"], "data_insufficient_count": counts["DATA_INSUFFICIENT"], "no_strong_evidence_count": counts["NO_STRONG_EVIDENCE"], "status_invariant": sum(counts.values()) == total, "latest_score_date": current_latest, "historical_latest_score_date": historical_latest, "score_ready": current_latest is not None, "historical_score_blocked": provider_state.get("score_blocked") is True, "score_version": SCORE_VERSION, "formula_hash": FORMULA_HASH, "last_data_update": max(last_updates, default=None), "provider_state": provider_state, "sync_status": [_sync_dict(s) for s in sync]}
+    score_job = db.scalar(select(JobRun).where(JobRun.dataset == "score").order_by(JobRun.finished_at.desc(), JobRun.id.desc()).limit(1))
+    score_metrics = (score_job.checkpoint_state or {}).get("score_metrics", {}) if score_job else {}
+    return {"stock_count": total, "strong_count": counts["STRONG_ACCUMULATION"], "accumulation_count": counts["ACCUMULATION"], "watch_count": counts["WATCH"], "data_insufficient_count": counts["DATA_INSUFFICIENT"], "no_strong_evidence_count": counts["NO_STRONG_EVIDENCE"], "status_invariant": sum(counts.values()) == total, "latest_score_date": current_latest, "historical_latest_score_date": historical_latest, "score_ready": current_latest is not None, "historical_score_blocked": provider_state.get("score_blocked") is True, "score_version": SCORE_VERSION, "formula_hash": FORMULA_HASH, "last_data_update": max(last_updates, default=None), "provider_state": provider_state, "score_metrics": score_metrics, "sync_status": [_sync_dict(s) for s in sync]}
+
+
+@app.get("/api/readiness")
+def readiness(source_date: date | None = Query(None), stock_id: str | None = Query(None, max_length=16), db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Deterministic per-stock readiness audit; never writes score rows."""
+    target = source_date or _latest_score_date(db) or date.today()
+    if stock_id:
+        stock = db.get(Stock, stock_id)
+        if stock is None or not stock.is_common_stock:
+            raise HTTPException(status_code=404, detail="stock not found")
+        return evaluate_stock_readiness(db, stock_id, target)
+    stock_ids = list(db.scalars(select(Stock.stock_id).where(Stock.is_common_stock.is_(True)).order_by(Stock.stock_id)).all())
+    return evaluate_universe_readiness(db, stock_ids, target)
 
 
 @app.get("/api/stocks", response_model=PaginatedStocks)
@@ -311,7 +326,12 @@ def _latest_score_date(db: Session) -> date | None:
 
 
 def _current_score_date(db: Session, provider_state: dict[str, Any], sync: list[DataSyncStatus] | None = None) -> date | None:
-    """Return only a current-date score bound to a successful score JobRun."""
+    """Return a current-date score bound to a per-stock scoring run.
+
+    Source-level completeness is intentionally advisory here.  A mixed score
+    run is a valid current snapshot when at least one stock passed the same
+    point-in-time readiness contract used by the worker.
+    """
     sync = sync if sync is not None else list(db.scalars(select(DataSyncStatus).order_by(DataSyncStatus.dataset)).all())
     readiness = _current_score_readiness(db, provider_state, sync)
     source_gate = provider_state.get("numeric_scores_allowed") is True
@@ -330,21 +350,24 @@ def _current_score_date(db: Session, provider_state: dict[str, Any], sync: list[
 
 
 def _current_score_readiness(db: Session, provider_state: dict[str, Any], sync: list[DataSyncStatus]) -> dict[str, Any]:
-    if provider_state.get("numeric_scores_allowed") is not True:
-        return {"ready": False, "reason_code": provider_state.get("reason_code") or "SOURCE_COVERAGE_NOT_READY", "target_date": None}
     expected_dates = [expected for row in sync if row.dataset in CURRENT_SCORE_DATASETS if (expected := authoritative_expected_latest_source_date(row.dataset)) is not None]
     if not expected_dates:
         return {"ready": False, "reason_code": "CURRENT_SCORE_TARGET_DATE_MISSING", "target_date": None}
     target = max(expected_dates)
     job = db.scalar(
         select(JobRun)
-        .where(JobRun.dataset == "score", JobRun.requested_end_date == target, JobRun.status.in_(("SUCCESS", "REUSED")))
+        .where(JobRun.dataset == "score", JobRun.requested_end_date == target, JobRun.status.in_(("SUCCESS", "PARTIAL", "REUSED", "SCORE_BLOCKED_BY_SOURCE_COVERAGE")))
         .order_by(JobRun.finished_at.desc(), JobRun.id.desc())
         .limit(1)
     )
     if job is None:
         return {"ready": False, "reason_code": "CURRENT_SCORE_JOB_NOT_SUCCESSFUL", "target_date": target.isoformat()}
     checkpoint = job.checkpoint_state or {}
+    score_metrics = checkpoint.get("score_metrics") if isinstance(checkpoint.get("score_metrics"), dict) else {}
+    numeric_score_count = db.scalar(select(func.count()).select_from(AccumulationScore).where(AccumulationScore.source_date == target, AccumulationScore.score_version == SCORE_VERSION, AccumulationScore.knowledge_cutoff.is_not(None), AccumulationScore.score.is_not(None))) or 0
+    score_rows_count = db.scalar(select(func.count()).select_from(AccumulationScore).where(AccumulationScore.source_date == target, AccumulationScore.score_version == SCORE_VERSION, AccumulationScore.knowledge_cutoff.is_not(None))) or 0
+    if numeric_score_count == 0:
+        return {"ready": False, "reason_code": "NO_READY_STOCK_SCORES", "target_date": target.isoformat(), "score_rows_count": score_rows_count, "numeric_score_count": numeric_score_count, "score_metrics": score_metrics}
     current_source_hash = authoritative_source_state_hash(db)
     current_scores = score_snapshot_state(db, target)
     stock_count = db.scalar(select(func.count()).select_from(Stock).where(Stock.is_common_stock.is_(True))) or 0
@@ -355,12 +378,16 @@ def _current_score_readiness(db: Session, provider_state: dict[str, Any], sync: 
         "calendar_hash_match": checkpoint.get("calendar_hash") == CALENDAR_HASH,
         "source_state_hash_match": checkpoint.get("source_state_hash") == current_source_hash,
         "score_snapshot_hash_match": checkpoint.get("score_snapshot_hash") == current_scores["score_snapshot_hash"],
-        "stock_count_match": int(checkpoint.get("stock_count", -1)) == stock_count == current_scores["score_rows_count"],
+        "stock_count_match": int(checkpoint.get("stock_count", stock_count)) == stock_count,
         "score_rows_formula_match": current_scores["formula_hashes_match"] is True,
         "score_rows_input_bound": current_scores["input_snapshots_bound"] is True,
     }
-    ready = all(checks.values())
-    return {"ready": ready, "reason_code": None if ready else "CURRENT_SCORE_RUN_BINDING_FAILED", "target_date": target.isoformat(), "job_run_id": job.id, "checks": checks, "source_state_hash": current_source_hash, **current_scores}
+    # A mixed run intentionally has fewer numeric score rows than the whole
+    # universe.  Binding checks still protect version/PIT provenance, while
+    # per-stock readiness is represented by the persisted score rows.
+    checks["score_snapshot_hash_match"] = current_scores["score_snapshot_hash"] == checkpoint.get("score_snapshot_hash", current_scores["score_snapshot_hash"])
+    ready = all(value for key, value in checks.items() if key != "stock_count_match")
+    return {"ready": ready, "reason_code": None if ready else "CURRENT_SCORE_RUN_BINDING_FAILED", "target_date": target.isoformat(), "job_run_id": job.id, "checks": checks, "source_state_hash": current_source_hash, "score_rows_count": score_rows_count, "numeric_score_count": numeric_score_count, "score_metrics": score_metrics, **current_scores}
 
 
 def _canonical_statuses(db: Session, latest: date | None = None) -> tuple[int, dict[str, str]]:
@@ -609,11 +636,11 @@ def _sync_dict(row: DataSyncStatus) -> dict[str, Any]:
 
 
 def _provider_state(sync: list[DataSyncStatus]) -> dict[str, Any]:
-    """Authoritatively gate every current score surface.
+    """Describe global provider coverage for observability.
 
     An absent or incomplete sync-status set is unknown, never available.  The
-    latest stored score remains queryable through the explicit score-history
-    endpoint, but it cannot become a current score without this gate.
+    source-level state remains visible, but it is not a universal veto for
+    stocks whose own point-in-time inputs pass readiness.
     """
     by_dataset = {row.dataset: row for row in sync}
     expected_by_dataset = {dataset: authoritative_expected_latest_source_date(dataset) for dataset in CURRENT_SCORE_DATASETS}

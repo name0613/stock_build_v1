@@ -1,0 +1,151 @@
+from __future__ import annotations
+
+import asyncio
+from datetime import date, datetime, timezone
+
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import Session
+
+from app.calendar import expected_trading_sessions
+from app.finmind import FinMindError
+from app.ingestion import catch_up, evaluate_stock_readiness, evaluate_universe_readiness, calculate_stock_features_and_score
+from app.models import AccumulationScore, Base, BrokerDaily, ForeignShareholdingDaily, HoldingDistribution, InstitutionalDaily, PriceDaily, Stock
+from app.scoring import BROKER_ROW_CONTRACT_VERSION, HOLDING_CANONICAL_LEVELS
+
+
+END = date(2026, 8, 27)
+FETCHED_AT = datetime(2026, 8, 27, 12, tzinfo=timezone.utc)
+
+
+def _db() -> Session:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    return Session(engine)
+
+
+def _seed_universe(db: Session) -> None:
+    db.add_all([
+        Stock(stock_id=stock_id, stock_name=stock_id, market="上市", security_type="股票", is_common_stock=True)
+        for stock_id in ("9001", "9002", "9003", "9004")
+    ])
+    db.commit()
+
+
+def _seed_complete_sources(db: Session, stock_id: str) -> None:
+    sessions = expected_trading_sessions(END, 21)
+    for index, day in enumerate(sessions):
+        db.add(InstitutionalDaily(stock_id=stock_id, source_date=day, foreign_net=100 + index, foreign_dealer_self_net=1, investment_trust_net=20, dealer_net=5, institutional_net=125 + index, source_dataset="TaiwanStockInstitutionalInvestorsBuySellWide", fetched_at=FETCHED_AT))
+        db.add(ForeignShareholdingDaily(stock_id=stock_id, source_date=day, foreign_investment_shares=100000 + index, foreign_investment_shares_ratio=10 + index / 100, number_of_shares_issued=200000, source_dataset="TaiwanStockShareholding", fetched_at=FETCHED_AT))
+        db.add(PriceDaily(stock_id=stock_id, source_date=day, close=100 + index, volume=1000 + index, source_dataset="TaiwanStockPrice", fetched_at=FETCHED_AT))
+    for day in expected_trading_sessions(END, 20):
+        db.add(BrokerDaily(stock_id=stock_id, source_date=day, securities_trader_id="A", buy_volume=100, sell_volume=10, net_volume=90, source_dataset="TaiwanStockTradingDailyReport", provider_row_validated=True, provider_row_contract_version=BROKER_ROW_CONTRACT_VERSION, fetched_at=FETCHED_AT))
+    for holding_day in (date(2026, 7, 24), date(2026, 7, 31), date(2026, 8, 7), date(2026, 8, 14), date(2026, 8, 21)):
+        for index, (level, threshold) in enumerate(HOLDING_CANONICAL_LEVELS):
+            db.add(HoldingDistribution(stock_id=stock_id, source_date=holding_day, holding_shares_level=level, holding_shares_threshold=threshold, people=10 + index, percent=1 + index / 10, shares=threshold, source_dataset="TaiwanStockHoldingSharesPer", fetched_at=FETCHED_AT))
+    db.commit()
+
+
+def test_mixed_readiness_scores_ready_stocks_and_fails_closed_others() -> None:
+    db = _db()
+    _seed_universe(db)
+    _seed_complete_sources(db, "9001")
+    _seed_complete_sources(db, "9004")
+
+    audit = evaluate_universe_readiness(db, ["9001", "9002", "9003", "9004"], END, FETCHED_AT)
+    assert audit["evaluated_stock_count"] == 4
+    assert audit["ready_stock_count"] == 2
+    assert audit["not_ready_stock_count"] == 2
+    assert audit["accounting_invariant"] if "accounting_invariant" in audit else True
+    assert evaluate_stock_readiness(db, "9002", END, FETCHED_AT)["ready"] is False
+    assert "missing_broker" in evaluate_stock_readiness(db, "9002", END, FETCHED_AT)["missing_reasons"]
+    assert "tdcc_required_buckets_incomplete" in evaluate_stock_readiness(db, "9003", END, FETCHED_AT)["missing_reasons"]
+
+    scores = [calculate_stock_features_and_score(db, stock_id, END, FETCHED_AT) for stock_id in ("9001", "9002", "9003", "9004")]
+    assert [score.stock_id for score in scores if score.score is not None] == ["9001", "9004"]
+    assert all(score.status == "DATA_INSUFFICIENT" and score.score is None for score in scores if score.stock_id in {"9002", "9003"})
+
+
+def test_global_quota_failure_does_not_veto_existing_ready_stocks() -> None:
+    db = _db()
+    _seed_universe(db)
+    _seed_complete_sources(db, "9001")
+    _seed_complete_sources(db, "9004")
+
+    class QuotaClient:
+        def fetch(self, dataset: str, *_args: object, **_kwargs: object):
+            assert dataset == "TaiwanStockInfo"
+            return ([
+                {"stock_id": stock_id, "stock_name": stock_id, "type": "twse", "security_type": "股票", "date": END}
+                for stock_id in ("9001", "9002", "9003", "9004")
+            ], {"source_date": END.isoformat()})
+
+        async def fetch_stocks_dataset(self, *_args: object, **_kwargs: object):
+            raise FinMindError("QUOTA_EXHAUSTED", "simulated quota exhaustion")
+
+        async def fetch_broker_stocks(self, *_args: object, **_kwargs: object):
+            raise AssertionError("broker provider work must remain deferred after a global quota failure")
+
+    result = asyncio.run(catch_up(db, QuotaClient(), end_date=END))
+    metrics = result["score_metrics"]
+    assert result["fatal_code"] == "QUOTA_EXHAUSTED"
+    assert metrics["universe_stock_count"] == 4
+    assert metrics["evaluated_stock_count"] == 4
+    assert metrics["ready_stock_count"] == 2
+    assert metrics["not_ready_stock_count"] == 2
+    assert metrics["score_rows_processed"] == 2
+    assert metrics["score_rows_data_insufficient"] == 2
+    assert metrics["accounting_invariant"] is True
+    persisted = db.scalars(select(AccumulationScore).where(AccumulationScore.source_date == END)).all()
+    assert sum(score.score is not None for score in persisted) == 2
+    assert sum(score.status == "DATA_INSUFFICIENT" and score.score is None for score in persisted) == 2
+
+
+def test_partial_global_source_is_advisory_for_ready_stock() -> None:
+    db = _db()
+    _seed_universe(db)
+    _seed_complete_sources(db, "9001")
+
+    class PartialClient:
+        def fetch(self, dataset: str, *_args: object, **_kwargs: object):
+            assert dataset == "TaiwanStockInfo"
+            return ([
+                {"stock_id": stock_id, "stock_name": stock_id, "type": "twse", "security_type": "股票", "date": END}
+                for stock_id in ("9001", "9002", "9003", "9004")
+            ], {"source_date": END.isoformat()})
+
+        async def fetch_stocks_dataset(self, stock_ids, dataset, *_args: object, **_kwargs: object):
+            return {
+                "requested": len(stock_ids),
+                "success": len(stock_ids) - 1,
+                "failed": 1,
+                "retryable_pending": 1,
+                "permanent_failed": 0,
+                "physical_requests": 0,
+                "rows": 0,
+                "rows_received": 0,
+                "rows_accepted": 0,
+                "rows_versioned": 0,
+                "observations_reused": 0,
+                "fatal_code": None,
+                "per_stock": {},
+            }
+
+        async def fetch_broker_stocks(self, stock_ids, *_args: object, **_kwargs: object):
+            return {
+                "requested": len(stock_ids),
+                "requested_keys": len(stock_ids) * 20,
+                "skipped_checkpoint": len(stock_ids) * 20,
+                "success": len(stock_ids),
+                "failed": 0,
+                "retryable_pending": 0,
+                "physical_requests": 0,
+                "rows": 0,
+                "stocks_completed": len(stock_ids),
+                "stocks_failed": 0,
+            }
+
+    result = asyncio.run(catch_up(db, PartialClient(), end_date=END))
+    assert result["score_preflight"]["ready"] is False
+    assert result["score_metrics"]["ready_stock_count"] == 1
+    assert result["score_metrics"]["score_rows_processed"] == 1
+    assert result["score_metrics"]["score_rows_data_insufficient"] == 3
