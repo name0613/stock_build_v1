@@ -26,7 +26,10 @@ def _clear_sync_status() -> None:
 
 
 @pytest.fixture(autouse=True)
-def clean_sync_status() -> None:
+def clean_sync_status(monkeypatch) -> None:
+    # These API fixtures model a frozen snapshot.  Production evaluates the
+    # live calendar policy, so keep the fixture policy clock deterministic.
+    monkeypatch.setattr("app.main.authoritative_expected_latest_source_date", lambda _dataset: CURRENT_DATE)
     _clear_sync_status()
     yield
     _clear_sync_status()

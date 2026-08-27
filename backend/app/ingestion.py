@@ -10,7 +10,7 @@ from sqlalchemy import func, inspect, select, text, tuple_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from .calendar import CALENDAR_HASH, CALENDAR_VERSION, expected_trading_sessions, missing_sessions
+from .calendar import CALENDAR_HASH, CALENDAR_VERSION, completed_source_end_date, expected_trading_sessions, missing_sessions
 from .features import build_features
 from .finmind import CAPABILITY_ONLY_DATASETS, GLOBAL_PROVIDER_FAILURE_CODES, FinMindClient, FinMindError, SchemaMismatch
 from .models import (
@@ -440,6 +440,18 @@ def _expected_latest_source_date(dataset: str, as_of: date | None) -> date | Non
     return expected_trading_sessions(as_of, 1)[-1]
 
 
+def authoritative_expected_latest_source_date(dataset: str, now: datetime | None = None) -> date | None:
+    """Return the current freshness target, independent of an attempt target.
+
+    ``catch_up(end_date=...)`` may intentionally backfill an older date.  That
+    date is attempt provenance only; current readiness must follow the
+    publication/calendar policy at evaluation time.  Holding distribution is
+    still projected through its weekly publication rule by
+    ``_expected_latest_source_date``.
+    """
+    return _expected_latest_source_date(dataset, completed_source_end_date(now))
+
+
 SYNC_COUNTER_SEMANTICS_VERSION = "attempt-v5-reconciled-v1"
 
 
@@ -466,8 +478,15 @@ def _mark_sync(db: Session, dataset: str, status: str, records: int, latest: dat
     item.attempt_latest_source_date = latest
     if latest is not None and (item.latest_source_date is None or latest > item.latest_source_date):
         item.latest_source_date = latest
-    item.expected_latest_source_date = expected_latest
-    item.source_age_days = (expected_latest - item.latest_source_date).days if expected_latest and item.latest_source_date else None
+    current_expected = authoritative_expected_latest_source_date(dataset)
+    # The caller's value is derived from the attempt end date and is retained
+    # only as a compatibility fallback.  Never let a historical attempt move
+    # the durable authoritative expectation backwards.
+    candidate_expected = current_expected or expected_latest
+    if item.expected_latest_source_date and candidate_expected:
+        candidate_expected = max(item.expected_latest_source_date, candidate_expected)
+    item.expected_latest_source_date = candidate_expected
+    item.source_age_days = (candidate_expected - item.latest_source_date).days if candidate_expected and item.latest_source_date else None
     item.rows_received_this_attempt = received_count
     item.rows_accepted_this_attempt = accepted_count
     item.rows_rejected_this_attempt = rejected_count
@@ -498,7 +517,7 @@ def _mark_sync(db: Session, dataset: str, status: str, records: int, latest: dat
         item.staleness_state = "PARTIAL"
     elif item.latest_source_date is None:
         item.staleness_state = "PARTIAL"
-    elif expected_latest and item.latest_source_date < expected_latest:
+    elif candidate_expected and item.latest_source_date < candidate_expected:
         item.staleness_state = "STALE"
     else:
         item.staleness_state = "FRESH"
@@ -770,6 +789,7 @@ def holding_coverage_state(db: Session, stock_ids: list[str], target_date: date)
 def score_source_coverage_gate(db: Session, target_date: date) -> dict[str, Any]:
     """Decide whether Score may enter the per-stock computation loop."""
     blockers: list[dict[str, Any]] = []
+    expected_by_dataset = {dataset: authoritative_expected_latest_source_date(dataset) for dataset in SCORE_READINESS_DATASETS}
     for dataset in SCORE_READINESS_DATASETS:
         row = db.get(DataSyncStatus, dataset)
         if row is None:
@@ -780,7 +800,7 @@ def score_source_coverage_gate(db: Session, target_date: date) -> dict[str, Any]
         if not isinstance(coverage, dict):
             coverage = metadata if isinstance(metadata, dict) else {}
         if row.status == "WAITING_FOR_PROVIDER_PUBLICATION":
-            blockers.append({"dataset": dataset, "reason_code": "WAITING_FOR_PROVIDER_PUBLICATION", "expected_source_date": row.expected_latest_source_date})
+            blockers.append({"dataset": dataset, "reason_code": "WAITING_FOR_PROVIDER_PUBLICATION", "expected_source_date": expected_by_dataset[dataset]})
             continue
         if row.status == "QUOTA_EXHAUSTED" or row.last_error_code == "QUOTA_EXHAUSTED" or coverage.get("fatal_code") == "QUOTA_EXHAUSTED":
             blockers.append({"dataset": dataset, "reason_code": "QUOTA_EXHAUSTED"})
@@ -792,15 +812,16 @@ def score_source_coverage_gate(db: Session, target_date: date) -> dict[str, Any]
             partial_reason = "HOLDING_PUBLICATION_PARTIAL" if dataset == "TaiwanStockHoldingSharesPer" and coverage.get("publication_state") == "HOLDING_PUBLICATION_PARTIAL" else None
             blockers.append({"dataset": dataset, "reason_code": partial_reason or row.last_error_code or f"SOURCE_{row.status}", "status": row.status})
             continue
-        if row.expected_latest_source_date is None or row.latest_source_date is None:
-            blockers.append({"dataset": dataset, "reason_code": "SOURCE_DATE_MISSING", "expected_source_date": row.expected_latest_source_date, "actual_source_date": row.latest_source_date})
-        elif row.latest_source_date < row.expected_latest_source_date or row.staleness_state != "FRESH":
-            blockers.append({"dataset": dataset, "reason_code": "SOURCE_DATE_STALE", "expected_source_date": row.expected_latest_source_date, "actual_source_date": row.latest_source_date, "staleness": row.staleness_state})
+        expected = expected_by_dataset[dataset]
+        if expected is None or row.latest_source_date is None:
+            blockers.append({"dataset": dataset, "reason_code": "SOURCE_DATE_MISSING", "expected_source_date": expected, "actual_source_date": row.latest_source_date})
+        elif row.latest_source_date < expected or row.staleness_state != "FRESH":
+            blockers.append({"dataset": dataset, "reason_code": "SOURCE_DATE_STALE", "expected_source_date": expected, "actual_source_date": row.latest_source_date, "staleness": row.staleness_state})
         if dataset == "TaiwanStockHoldingSharesPer":
             holding_coverage = coverage.get("holding_schema")
-            if not isinstance(holding_coverage, dict) and row.expected_latest_source_date is not None:
+            if not isinstance(holding_coverage, dict) and expected is not None:
                 stock_ids = list(db.scalars(select(Stock.stock_id).where(Stock.is_common_stock.is_(True))).all())
-                holding_coverage = holding_coverage_state(db, stock_ids, row.expected_latest_source_date)
+                holding_coverage = holding_coverage_state(db, stock_ids, expected)
             if not isinstance(holding_coverage, dict):
                 blockers.append({"dataset": dataset, "reason_code": "HOLDING_COVERAGE_NOT_VERIFIED"})
             elif holding_coverage.get("complete") is not True:

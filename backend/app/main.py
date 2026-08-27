@@ -16,7 +16,7 @@ from .config import get_settings
 from .db import get_db, init_db
 from .finmind import GLOBAL_PROVIDER_FAILURE_CODES
 from .features import holding_distribution_features
-from .ingestion import authoritative_source_state_hash, score_snapshot_state, seed_score_version
+from .ingestion import authoritative_expected_latest_source_date, authoritative_source_state_hash, score_snapshot_state, seed_score_version
 from .models import AccumulationFeature, AccumulationScore, BrokerDaily, DataSyncStatus, ForeignShareholdingDaily, HoldingDistribution, InstitutionalDaily, JobRun, PriceDaily, Stock
 from .schemas import PaginatedStocks, StockListItem
 from .calendar import CALENDAR_HASH, CALENDAR_VERSION
@@ -321,7 +321,7 @@ def _current_score_date(db: Session, provider_state: dict[str, Any], sync: list[
 def _current_score_readiness(db: Session, provider_state: dict[str, Any], sync: list[DataSyncStatus]) -> dict[str, Any]:
     if provider_state.get("numeric_scores_allowed") is not True:
         return {"ready": False, "reason_code": provider_state.get("reason_code") or "SOURCE_COVERAGE_NOT_READY", "target_date": None}
-    expected_dates = [row.expected_latest_source_date for row in sync if row.dataset in CURRENT_SCORE_DATASETS and row.expected_latest_source_date]
+    expected_dates = [authoritative_expected_latest_source_date(row.dataset) for row in sync if row.dataset in CURRENT_SCORE_DATASETS]
     if not expected_dates:
         return {"ready": False, "reason_code": "CURRENT_SCORE_TARGET_DATE_MISSING", "target_date": None}
     target = max(expected_dates)
@@ -471,7 +471,7 @@ def _source_status(db: Session, stock_id: str) -> dict[str, Any]:
         latest = db.scalar(select(func.max(model.source_date)).where(model.stock_id == stock_id, model.source_dataset == dataset))
         fetched = db.scalar(select(func.max(model.fetched_at)).where(model.stock_id == stock_id, model.source_dataset == dataset))
         sync = db.get(DataSyncStatus, dataset)
-        expected = sync.expected_latest_source_date if sync else None
+        expected = authoritative_expected_latest_source_date(dataset) if sync else None
         stock_staleness = "NO_DATA" if latest is None else ("STALE" if expected and latest < expected else "FRESH")
         result[name] = {"provider": "FinMind", "dataset": dataset, "latest_source_date": latest, "fetched_at": fetched, "last_successful_fetch": sync.last_http_success_at if sync else None, "last_fully_successful_sync": sync.last_fully_successful_sync if sync else None, "last_usable_data_at": sync.last_usable_data_at if sync else None, "attempt_latest_source_date": sync.attempt_latest_source_date if sync else None, "expected_latest_source_date": expected, "source_age_days": (expected - latest).days if expected and latest else None, "row_count": db.scalar(select(func.count()).select_from(model).where(model.stock_id == stock_id, model.source_dataset == dataset)) or 0, "staleness": stock_staleness, "global_sync_staleness": sync.staleness_state if sync else "UNKNOWN", "fallback": "not_used"}
     result["major_shareholder_5pct"] = {"provider": "TWSE/TPEx/MOPS", "dataset": None, "status": "UNAVAILABLE_NOT_CONFIGURED", "fallback": "none"}
@@ -493,7 +493,12 @@ def _holding_chart_series(db: Session, stock_id: str, limit: int) -> dict[str, l
 
 def _sync_dict(row: DataSyncStatus) -> dict[str, Any]:
     metadata = row.metadata_json or {}
-    return {"dataset": row.dataset, "status": row.status, "latest_source_date": row.latest_source_date, "attempt_latest_source_date": row.attempt_latest_source_date, "expected_latest_source_date": row.expected_latest_source_date, "source_age_days": row.source_age_days, "last_attempt_at": row.last_attempt_at, "last_fetch_at": row.last_fetch_at, "last_http_success_at": row.last_http_success_at, "last_fully_successful_sync": row.last_fully_successful_sync, "last_usable_data_at": row.last_usable_data_at, "last_successful_sync": row.last_successful_sync, "records": row.records, "usable_records": row.usable_records, "stored_records": row.stored_records, "physical_requests_this_attempt": row.physical_requests_this_attempt, "rows_received_this_attempt": row.rows_received_this_attempt, "rows_accepted_this_attempt": row.rows_accepted_this_attempt, "rows_rejected_this_attempt": row.rows_rejected_this_attempt, "rows_versioned_this_attempt": row.rows_versioned_this_attempt, "observations_reused_this_attempt": row.observations_reused_this_attempt, "stored_rows_total": row.stored_rows_total, "counter_attempt_id": row.counter_attempt_id, "counter_semantics_version": row.counter_semantics_version, "counters_are_current_attempt": row.counters_are_current_attempt, "historical_pre_v5_counters": metadata.get("legacy_pre_v5_counter_snapshot"), "blocking_reason": row.last_error_code or metadata.get("blocking_reason"), "staleness": row.staleness_state, "metadata": metadata, "error_code": row.last_error_code}
+    expected = authoritative_expected_latest_source_date(row.dataset)
+    source_age_days = (expected - row.latest_source_date).days if expected and row.latest_source_date else None
+    staleness = row.staleness_state
+    if expected and row.latest_source_date and row.latest_source_date < expected and row.status in {"SUCCESS", "REUSED"}:
+        staleness = "STALE"
+    return {"dataset": row.dataset, "status": row.status, "latest_source_date": row.latest_source_date, "attempt_latest_source_date": row.attempt_latest_source_date, "expected_latest_source_date": expected, "source_age_days": source_age_days, "last_attempt_at": row.last_attempt_at, "last_fetch_at": row.last_fetch_at, "last_http_success_at": row.last_http_success_at, "last_fully_successful_sync": row.last_fully_successful_sync, "last_usable_data_at": row.last_usable_data_at, "last_successful_sync": row.last_successful_sync, "records": row.records, "usable_records": row.usable_records, "stored_records": row.stored_records, "physical_requests_this_attempt": row.physical_requests_this_attempt, "rows_received_this_attempt": row.rows_received_this_attempt, "rows_accepted_this_attempt": row.rows_accepted_this_attempt, "rows_rejected_this_attempt": row.rows_rejected_this_attempt, "rows_versioned_this_attempt": row.rows_versioned_this_attempt, "observations_reused_this_attempt": row.observations_reused_this_attempt, "stored_rows_total": row.stored_rows_total, "counter_attempt_id": row.counter_attempt_id, "counter_semantics_version": row.counter_semantics_version, "counters_are_current_attempt": row.counters_are_current_attempt, "historical_pre_v5_counters": metadata.get("legacy_pre_v5_counter_snapshot"), "blocking_reason": row.last_error_code or metadata.get("blocking_reason"), "staleness": staleness, "metadata": metadata, "error_code": row.last_error_code}
 
 
 def _provider_state(sync: list[DataSyncStatus]) -> dict[str, Any]:
@@ -504,6 +509,7 @@ def _provider_state(sync: list[DataSyncStatus]) -> dict[str, Any]:
     endpoint, but it cannot become a current score without this gate.
     """
     by_dataset = {row.dataset: row for row in sync}
+    expected_by_dataset = {dataset: authoritative_expected_latest_source_date(dataset) for dataset in CURRENT_SCORE_DATASETS}
     def blocked(status: str, reason_code: str, *, blocking_sources: list[dict[str, Any]] | None = None, **extra: Any) -> dict[str, Any]:
         return {"status": status, "reason_code": reason_code, "provider": "FinMind", "score_policy": "FAIL_CLOSED", "numeric_scores_allowed": False, "score_ready": False, "score_blocked": True, "score_blocking_reason": "SCORE_BLOCKED_BY_SOURCE_COVERAGE", "blocking_sources": blocking_sources or [], **extra}
 
@@ -529,10 +535,11 @@ def _provider_state(sync: list[DataSyncStatus]) -> dict[str, Any]:
     blockers: list[dict[str, Any]] = []
     for dataset in CURRENT_SCORE_DATASETS:
         row = by_dataset[dataset]
+        expected = expected_by_dataset[dataset]
         metadata = row.metadata_json or {}
         coverage = metadata.get("coverage") if isinstance(metadata, dict) and isinstance(metadata.get("coverage"), dict) else (metadata if isinstance(metadata, dict) else {})
         if row.status == "WAITING_FOR_PROVIDER_PUBLICATION":
-            blockers.append({"dataset": dataset, "reason_code": "WAITING_FOR_PROVIDER_PUBLICATION", "expected_source_date": row.expected_latest_source_date, "actual_source_date": row.latest_source_date, "next_check_at": coverage.get("next_publication_check_at")})
+            blockers.append({"dataset": dataset, "reason_code": "WAITING_FOR_PROVIDER_PUBLICATION", "expected_source_date": expected, "actual_source_date": row.latest_source_date, "next_check_at": coverage.get("next_publication_check_at")})
             continue
         if row.status == "QUOTA_EXHAUSTED" or coverage.get("fatal_code") == "QUOTA_EXHAUSTED":
             blockers.append({"dataset": dataset, "reason_code": "QUOTA_EXHAUSTED"})
@@ -540,14 +547,14 @@ def _provider_state(sync: list[DataSyncStatus]) -> dict[str, Any]:
         if dataset == "TaiwanStockTradingDailyReport" and int(coverage.get("retryable_pending", 0) or 0) > 0:
             blockers.append({"dataset": dataset, "reason_code": "BROKER_RETRY_PENDING", "retryable_pending": int(coverage.get("retryable_pending", 0))})
         if dataset == HOLDING_DISTRIBUTION_DATASET and coverage.get("publication_state") == "HOLDING_PUBLICATION_PARTIAL":
-            blockers.append({"dataset": dataset, "reason_code": "HOLDING_PUBLICATION_PARTIAL", "expected_source_date": row.expected_latest_source_date, "actual_source_date": row.latest_source_date, "publication_probe": coverage.get("publication_probe")})
+            blockers.append({"dataset": dataset, "reason_code": "HOLDING_PUBLICATION_PARTIAL", "expected_source_date": expected, "actual_source_date": row.latest_source_date, "publication_probe": coverage.get("publication_probe")})
         if row.status not in {"SUCCESS", "REUSED"}:
             blockers.append({"dataset": dataset, "reason_code": row.last_error_code or "INCOMPLETE_PROVIDER_COVERAGE", "status": row.status})
             continue
-        if row.expected_latest_source_date is None or row.latest_source_date is None:
-            blockers.append({"dataset": dataset, "reason_code": "NO_AUTHORITATIVE_CURRENT_SOURCE_DATE", "expected_source_date": row.expected_latest_source_date, "actual_source_date": row.latest_source_date})
-        elif row.staleness_state != "FRESH" or row.latest_source_date < row.expected_latest_source_date:
-            blockers.append({"dataset": dataset, "reason_code": "STALE_PROVIDER_COVERAGE", "expected_source_date": row.expected_latest_source_date, "actual_source_date": row.latest_source_date, "staleness": row.staleness_state})
+        if expected is None or row.latest_source_date is None:
+            blockers.append({"dataset": dataset, "reason_code": "NO_AUTHORITATIVE_CURRENT_SOURCE_DATE", "expected_source_date": expected, "actual_source_date": row.latest_source_date})
+        elif row.staleness_state != "FRESH" or row.latest_source_date < expected:
+            blockers.append({"dataset": dataset, "reason_code": "STALE_PROVIDER_COVERAGE", "expected_source_date": expected, "actual_source_date": row.latest_source_date, "staleness": row.staleness_state})
         if dataset == HOLDING_DISTRIBUTION_DATASET:
             holding_schema = coverage.get("holding_schema")
             if not isinstance(holding_schema, dict):

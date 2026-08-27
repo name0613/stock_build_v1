@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.calendar import CalendarUnknownError, expected_trading_sessions
 from app.finmind import FinMindClient, FinMindError
-from app.ingestion import _model_rows, _natural_key, calculate_stock_features_and_score, ingest_records, normalize_institutional, normalize_stock, seed_score_version, sync_universe
+from app.ingestion import _model_rows, _natural_key, authoritative_expected_latest_source_date, calculate_stock_features_and_score, ingest_records, normalize_institutional, normalize_stock, seed_score_version, sync_universe
 from app.models import AccumulationFeature, AccumulationScore, Base, BrokerDaily, DataSyncStatus, InstitutionalDaily, ScoreVersion, SourceRevision, Stock
 from app.scoring import FORMULA_HASH, SCORE_VERSION
 from app.scoring import BROKER_ROW_CONTRACT_VERSION, HOLDING_CANONICAL_LEVELS, parse_holding_level
@@ -109,7 +109,7 @@ def test_universe_refresh_failure_is_persisted_and_blocks_scoring() -> None:
     assert result["fatal_code"] == "NETWORK_ERROR"
     assert result["provider_work_deferred"]["error_code"] == "NETWORK_ERROR"
     assert sync is not None and sync.status == "FAILED" and sync.last_error_code == "NETWORK_ERROR"
-    assert sync.expected_latest_source_date == date(2026, 8, 20)
+    assert sync.expected_latest_source_date == authoritative_expected_latest_source_date("TaiwanStockInfo")
     assert jobs and jobs[-1].status == "FAILED" and jobs[-1].error_code == "NETWORK_ERROR"
     score_jobs = db.scalars(select(JobRun).where(JobRun.dataset == "score")).all()
     assert score_jobs and score_jobs[-1].status == "SCORE_BLOCKED_BY_SOURCE_COVERAGE"
@@ -133,7 +133,7 @@ def test_universe_failure_does_not_mutate_previous_active_universe() -> None:
     assert db.get(Stock, "2330").is_common_stock is True
     assert db.get(Stock, "2317").is_common_stock is False
     sync = db.get(DataSyncStatus, "TaiwanStockInfo")
-    assert sync is not None and sync.status == "FAILED" and sync.expected_latest_source_date == date(2026, 8, 20)
+    assert sync is not None and sync.status == "FAILED" and sync.expected_latest_source_date == authoritative_expected_latest_source_date("TaiwanStockInfo")
 
 
 def test_holding_schema_unknown_duplicate_and_null_are_explicit() -> None:
