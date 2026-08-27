@@ -321,7 +321,7 @@ def _current_score_date(db: Session, provider_state: dict[str, Any], sync: list[
 def _current_score_readiness(db: Session, provider_state: dict[str, Any], sync: list[DataSyncStatus]) -> dict[str, Any]:
     if provider_state.get("numeric_scores_allowed") is not True:
         return {"ready": False, "reason_code": provider_state.get("reason_code") or "SOURCE_COVERAGE_NOT_READY", "target_date": None}
-    expected_dates = [authoritative_expected_latest_source_date(row.dataset) for row in sync if row.dataset in CURRENT_SCORE_DATASETS]
+    expected_dates = [expected for row in sync if row.dataset in CURRENT_SCORE_DATASETS if (expected := authoritative_expected_latest_source_date(row.dataset)) is not None]
     if not expected_dates:
         return {"ready": False, "reason_code": "CURRENT_SCORE_TARGET_DATE_MISSING", "target_date": None}
     target = max(expected_dates)

@@ -80,6 +80,7 @@ def _seed_score_job(*, status: str = "SUCCESS", checkpoint_overrides: dict | Non
 def _assert_current_score_surfaces_are_blocked() -> None:
     with TestClient(app) as client:
         summary = client.get("/api/summary").json()
+        data_status = client.get("/api/data-status").json()
         stocks = client.get("/api/stocks?page=1&page_size=50&sort=score").json()
         minimum_score_stocks = client.get("/api/stocks?page=1&page_size=50&sort=score&min_score=0").json()
         rankings = client.get("/api/rankings?kind=top&limit=50").json()
@@ -92,6 +93,8 @@ def _assert_current_score_surfaces_are_blocked() -> None:
     assert summary["accumulation_count"] == 0
     assert summary["watch_count"] == 0
     assert summary["data_insufficient_count"] == summary["stock_count"]
+    assert data_status["provider_state"]["numeric_scores_allowed"] is False
+    assert data_status["latest_score_date"] is None
     assert rankings["items"] == []
     assert all(item["score"] is None and item["status"] == "DATA_INSUFFICIENT" for item in stocks["items"])
     assert minimum_score_stocks["total"] == 0
