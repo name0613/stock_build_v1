@@ -379,6 +379,43 @@ _DATASET_MODELS = {
 }
 
 
+def prioritize_stock_ids(db: Session, stock_ids: list[str], dataset: str) -> list[str]:
+    """Return a durable per-dataset refresh order.
+
+    Stocks with no persisted rows are always first. The remaining stocks are
+    ordered by their oldest persisted write time, then source date and code.
+    The worker passes this order into the checkpointed FinMind client, which
+    resumes from its durable cursor and therefore cycles fairly as quota is
+    consumed.
+    """
+    unique_ids = list(dict.fromkeys(str(stock_id) for stock_id in stock_ids))
+    if len(unique_ids) <= 1:
+        return unique_ids
+    model = _DATASET_MODELS.get(dataset)
+    if model is None:
+        return unique_ids
+    query = select(model.stock_id, func.max(model.source_date), func.max(model.fetched_at)).where(model.stock_id.in_(unique_ids))
+    if model is Stock:
+        query = query.where(Stock.is_common_stock.is_(True))
+    else:
+        query = query.where(model.source_dataset == dataset)
+    persisted = {
+        str(stock_id): (latest_source_date, latest_fetched_at)
+        for stock_id, latest_source_date, latest_fetched_at in db.execute(query.group_by(model.stock_id)).all()
+    }
+
+    def sort_key(stock_id: str) -> tuple[int, str, str, str]:
+        latest_source_date, latest_fetched_at = persisted.get(stock_id, (None, None))
+        has_data = 1 if stock_id in persisted else 0
+        # ISO strings preserve chronological ordering for date/datetime values
+        # and avoid mixing timezone-aware and naive database timestamps.
+        fetched_key = latest_fetched_at.isoformat() if latest_fetched_at is not None else ""
+        source_key = latest_source_date.isoformat() if latest_source_date is not None else ""
+        return has_data, fetched_key, source_key, stock_id
+
+    return sorted(unique_ids, key=sort_key)
+
+
 def _stored_rows_total(db: Session, dataset: str) -> int:
     model = _DATASET_MODELS.get(dataset)
     if model is None:
@@ -954,6 +991,7 @@ async def _catch_up_locked(db: Session, client: FinMindClient, end_date: date | 
         return result
     stock_ids = list(db.scalars(select(Stock.stock_id).where(Stock.is_common_stock.is_(True))).all())
     for dataset in required:
+        refresh_stock_ids = prioritize_stock_ids(db, stock_ids, dataset)
         progress(dataset)
         job = _job_start(db, dataset, start, end, stocks_attempted=len(stock_ids))
         received = accepted = versioned = 0
@@ -980,7 +1018,7 @@ async def _catch_up_locked(db: Session, client: FinMindClient, end_date: date | 
 
         try:
             if hasattr(client, "fetch_stocks_dataset"):
-                metrics = await client.fetch_stocks_dataset(stock_ids, dataset, (start - timedelta(days=30)).isoformat(), end.isoformat(), record_sink=sink, progress_callback=progress)
+                metrics = await client.fetch_stocks_dataset(refresh_stock_ids, dataset, (start - timedelta(days=30)).isoformat(), end.isoformat(), record_sink=sink, progress_callback=progress)
                 received = int(metrics.get("rows_received", metrics.get("rows", 0)))
                 accepted = int(metrics.get("rows_accepted", accepted))
                 versioned = int(metrics.get("rows_versioned", versioned))
@@ -1082,7 +1120,8 @@ async def _catch_up_locked(db: Session, client: FinMindClient, end_date: date | 
         return stored
 
     try:
-        broker_metrics = await client.fetch_broker_stocks(stock_ids, broker_start.isoformat(), end.isoformat(), record_sink=broker_sink, progress_callback=progress)
+        refresh_stock_ids = prioritize_stock_ids(db, stock_ids, "TaiwanStockTradingDailyReport")
+        broker_metrics = await client.fetch_broker_stocks(refresh_stock_ids, broker_start.isoformat(), end.isoformat(), record_sink=broker_sink, progress_callback=progress)
         if broker_buffer:
             revisions_before = db.scalar(select(func.count()).select_from(SourceRevision).where(SourceRevision.dataset == "TaiwanStockTradingDailyReport")) or 0
             stored_now = ingest_records(db, "TaiwanStockTradingDailyReport", broker_buffer)

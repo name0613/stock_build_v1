@@ -19,6 +19,10 @@ class StockListItem(BaseModel):
     features: dict[str, Any] = Field(default_factory=dict)
     coverage: dict[str, Any] = Field(default_factory=dict)
     latest_data: str | None = None
+    data_status: str = "NO_DATA"
+    data_latest_source_date: str | None = None
+    last_updated_at: Any | None = None
+    data_sources: dict[str, Any] = Field(default_factory=dict)
 
 
 class PaginatedStocks(BaseModel):
@@ -26,4 +30,3 @@ class PaginatedStocks(BaseModel):
     total: int
     page: int
     page_size: int
-

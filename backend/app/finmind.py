@@ -623,6 +623,7 @@ class FinMindClient:
             from .calendar import expected_trading_sessions
             days = [day.isoformat() for day in expected_trading_sessions(date.fromisoformat(end_date), 20) if date.fromisoformat(start_date) <= day <= date.fromisoformat(end_date)]
 
+        stock_ids = list(dict.fromkeys(str(stock_id) for stock_id in stock_ids))
         requested_keys = {f"{stock_id}:{requested_date}" for stock_id in stock_ids for requested_date in days}
         universe_hash = hashlib.sha256(json.dumps(sorted(set(stock_ids)), separators=(",", ":")).encode()).hexdigest()
         session_hash = hashlib.sha256(json.dumps(days, separators=(",", ":")).encode()).hexdigest()
@@ -664,9 +665,10 @@ class FinMindClient:
         checkpoint_lock = asyncio.Lock()
         sink_lock = asyncio.Lock()
         fatal_event = asyncio.Event()
-        metrics = {"requested": len(stock_ids), "requested_keys": len(requested_keys), "skipped_checkpoint": len(completed), "reused_complete": len(completed), "reused_valid_no_data": 0, "observations_reused": len(completed), "newly_fetched": 0, "physical_requests": 0, "checkpoint_state": checkpoint_state, "checkpoint_manifest_hash": manifest_hash, "requested_start_date": start_date, "requested_end_date": end_date, "session_set_hash": session_hash, "universe_hash": universe_hash, "selection_policy": "date_major_round_robin", "success": len(completed), "failed": 0, "stocks_completed": 0, "stocks_failed": 0, "retryable_failed": 0, "permanent_failed": len(permanent_failed), "retryable_pending": len(candidate_keys) + len(deferred_retry_keys), "retry_deferred": len(deferred_retry_keys), "rows": 0, "rows_received": 0, "contract_validated_rows": 0, "retries": 0, "fatal_code": None, "quota_probe_status": "NOT_CONFIGURED", "quota_remaining": None, "quota_reserve": max(0, int(self.settings.broker_quota_reserve)), "usable_quota": None, "quota_selected_pending_count": 0, "quota_estimated_cost_per_item": max(1, self.settings.broker_max_retries + 1)}
+        metrics = {"requested": len(stock_ids), "requested_keys": len(requested_keys), "skipped_checkpoint": len(completed), "reused_complete": len(completed), "reused_valid_no_data": 0, "observations_reused": len(completed), "newly_fetched": 0, "physical_requests": 0, "checkpoint_state": checkpoint_state, "checkpoint_manifest_hash": manifest_hash, "requested_start_date": start_date, "requested_end_date": end_date, "session_set_hash": session_hash, "universe_hash": universe_hash, "selection_policy": "no_data_then_oldest_updated_stock_cycle_v1", "success": len(completed), "failed": 0, "stocks_completed": 0, "stocks_failed": 0, "retryable_failed": 0, "permanent_failed": len(permanent_failed), "retryable_pending": len(candidate_keys) + len(deferred_retry_keys), "retry_deferred": len(deferred_retry_keys), "rows": 0, "rows_received": 0, "contract_validated_rows": 0, "retries": 0, "fatal_code": None, "quota_probe_status": "NOT_CONFIGURED", "quota_remaining": None, "quota_reserve": max(0, int(self.settings.broker_quota_reserve)), "usable_quota": None, "quota_selected_pending_count": 0, "quota_estimated_cost_per_item": max(1, self.settings.broker_max_retries + 1)}
 
-        selected_keys = sorted(candidate_keys, key=lambda key: (key.split(":", 1)[1], key.split(":", 1)[0]))
+        stock_order = {stock_id: index for index, stock_id in enumerate(stock_ids)}
+        selected_keys = sorted(candidate_keys, key=lambda key: (stock_order.get(key.split(":", 1)[0], len(stock_order)), key.split(":", 1)[1]))
         quota_probe = getattr(self, "provider_quota", None)
         if candidate_keys and self.settings.finmind_api_token and callable(quota_probe):
             try:
@@ -783,12 +785,12 @@ class FinMindClient:
                     queue.task_done()
 
         workers = [asyncio.create_task(worker()) for _ in range(max(1, self.settings.broker_concurrency))]
-        # Date-major ordering gives each stock a fair opportunity in every
-        # newly opened trading session instead of draining one stock's full
-        # rolling window before starting the next stock.
+        # Stock-priority ordering starts with no-data/oldest stocks and lets
+        # the durable cursor cycle through that order instead of draining a
+        # single stock's full rolling window first.
         selected_set = set(selected_keys)
-        for requested_date in days:
-            for stock_id in stock_ids:
+        for stock_id in stock_ids:
+            for requested_date in days:
                 if f"{stock_id}:{requested_date}" in selected_set:
                     await queue.put((stock_id, requested_date))
         await queue.join()
@@ -803,8 +805,8 @@ class FinMindClient:
 
     async def fetch_stocks_dataset(self, stock_ids: list[str], dataset: str, start_date: str, end_date: str, *, record_sink: Callable[[list[dict[str, Any]]], int | dict[str, Any]] | None = None, progress_callback: Callable[[str], None] | None = None) -> dict[str, Any]:
         """Fetch per-stock history with observation-verified checkpoint coverage."""
-        stock_ids = sorted(set(stock_ids))
-        universe_hash = hashlib.sha256(json.dumps(stock_ids, separators=(",", ":")).encode()).hexdigest()
+        stock_ids = list(dict.fromkeys(str(stock_id) for stock_id in stock_ids))
+        universe_hash = hashlib.sha256(json.dumps(sorted(set(stock_ids)), separators=(",", ":")).encode()).hexdigest()
         expected_days = expected_observation_dates(dataset, date.fromisoformat(start_date), date.fromisoformat(end_date))
         expected_strings = [day.isoformat() for day in expected_days]
         requested_observations = set(expected_strings)
@@ -964,7 +966,7 @@ class FinMindClient:
             "requested_start_date": start_date,
             "requested_end_date": end_date,
             "universe_hash": universe_hash,
-            "selection_policy": "durable_round_robin_stock_cursor_observation_resume",
+            "selection_policy": "no_data_then_oldest_updated_stock_cycle_v1",
             "fair_cursor_start_stock_id": cursor_start,
             "success": 0,
             "usable_success": 0,

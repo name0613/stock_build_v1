@@ -21,7 +21,7 @@ def _runtime(*, complete: bool = True) -> dict:
             "counter_semantics_version": "attempt-v5-reconciled-v1",
             "counters_are_current_attempt": True,
             "historical_pre_v5_counters": None,
-            "metadata": {"coverage": {"requested": 1000, "success": 1000 if complete else 500, "physical_requests": 500, "verified_observations": 1000, "unresolved_observations": 0 if complete else 500, "selection_policy": "durable_round_robin_stock_cursor_observation_resume", "fair_cursor_start_stock_id": "1000", "fair_cursor_end_stock_id": "1500"}},
+            "metadata": {"coverage": {"requested": 1000, "success": 1000 if complete else 500, "physical_requests": 500, "verified_observations": 1000, "unresolved_observations": 0 if complete else 500, "selection_policy": "no_data_then_oldest_updated_stock_cycle_v1", "fair_cursor_start_stock_id": "1000", "fair_cursor_end_stock_id": "1500"}},
         })
     jobs = [
         {"dataset": SOURCE_DATASETS[0], "started_at": "2026-08-21T01:00:00+00:00", "checkpoint_state": {"physical_requests": 500, "success": 400, "fair_cursor_end_stock_id": "1400", "unresolved_observations": 600, "observations_reused": 100, "checkpoint_manifest_hash": "a" * 64, "checkpoint_content_hash_before": "0" * 64, "checkpoint_content_hash_after": "1" * 64}},

@@ -4,7 +4,7 @@ import logging
 import json
 import re
 from pathlib import Path
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query
@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from .config import get_settings
 from .db import get_db, init_db
 from .finmind import GLOBAL_PROVIDER_FAILURE_CODES
-from .features import holding_distribution_features
+from .features import build_features, holding_distribution_features
 from .ingestion import authoritative_expected_latest_source_date, authoritative_source_state_hash, score_snapshot_state, seed_score_version
 from .models import AccumulationFeature, AccumulationScore, BrokerDaily, DataSyncStatus, ForeignShareholdingDaily, HoldingDistribution, InstitutionalDaily, JobRun, PriceDaily, Stock
 from .schemas import PaginatedStocks, StockListItem
@@ -41,6 +41,14 @@ CURRENT_SCORE_DATASETS = (
     "TaiwanStockPrice",
 )
 HOLDING_DISTRIBUTION_DATASET = "TaiwanStockHoldingSharesPer"
+
+PARTIAL_SOURCE_SPECS = {
+    "institutional": (InstitutionalDaily, "TaiwanStockInstitutionalInvestorsBuySellWide"),
+    "foreign_holding": (ForeignShareholdingDaily, "TaiwanStockShareholding"),
+    "holding_distribution": (HoldingDistribution, "TaiwanStockHoldingSharesPer"),
+    "broker": (BrokerDaily, "TaiwanStockTradingDailyReport"),
+    "price": (PriceDaily, "TaiwanStockPrice"),
+}
 
 
 @app.on_event("startup")
@@ -160,7 +168,8 @@ def stocks(
     base = base.order_by(nulls_last(direction) if sort == "score" else direction, asc(Stock.stock_id))
     total = db.scalar(select(func.count()).select_from(base.subquery())) or 0
     rows = db.execute(base.offset((page - 1) * page_size).limit(page_size)).all()
-    items = [_stock_item_from_row(row) for row in rows]
+    partial_data = _partial_stock_snapshots(db, [row[0].stock_id for row in rows])
+    items = [_stock_item_from_row(row, partial_data.get(row[0].stock_id)) for row in rows]
     return PaginatedStocks(items=items, total=total, page=page, page_size=page_size)
 
 
@@ -185,7 +194,9 @@ def stock_detail(stock_id: str, limit: int = Query(365, ge=1, le=1000), db: Sess
     sync = db.scalars(select(DataSyncStatus).order_by(DataSyncStatus.dataset)).all()
     provider_state = _provider_state(sync)
     latest = _current_score_date(db, provider_state, sync)
-    return {"stock": {"stock_id": stock.stock_id, "stock_name": stock.stock_name, "market": stock.market, "industry": stock.industry}, "score": _score_dict(db, stock_id, latest), "provider_state": provider_state, "sources": _source_status(db, stock_id), "institutional": _rows(db, InstitutionalDaily, stock_id, min(limit, 365), "TaiwanStockInstitutionalInvestorsBuySellWide"), "foreign_holding": _rows(db, ForeignShareholdingDaily, stock_id, min(limit, 365), "TaiwanStockShareholding"), "holding_distribution": _rows(db, HoldingDistribution, stock_id, min(limit, 200), "TaiwanStockHoldingSharesPer"), "holding_series": _holding_chart_series(db, stock_id, min(limit, 200)), "brokers": _broker_summary(db, stock_id), "prices": _rows(db, PriceDaily, stock_id, min(limit, 365), "TaiwanStockPrice"), "score_history": _score_history(db, stock_id, min(limit, 365)), "calendar_version": CALENDAR_VERSION}
+    partial_data = _partial_stock_snapshots(db, [stock_id]).get(stock_id, {})
+    stock_payload = {"stock_id": stock.stock_id, "stock_name": stock.stock_name, "market": stock.market, "industry": stock.industry, **{key: partial_data.get(key) for key in ("data_status", "data_latest_source_date", "last_updated_at", "data_sources", "features", "coverage")}}
+    return {"stock": stock_payload, "score": _score_dict(db, stock_id, latest), "provider_state": provider_state, "sources": _source_status(db, stock_id), "institutional": _rows(db, InstitutionalDaily, stock_id, min(limit, 365), "TaiwanStockInstitutionalInvestorsBuySellWide"), "foreign_holding": _rows(db, ForeignShareholdingDaily, stock_id, min(limit, 365), "TaiwanStockShareholding"), "holding_distribution": _rows(db, HoldingDistribution, stock_id, min(limit, 200), "TaiwanStockHoldingSharesPer"), "holding_series": _holding_chart_series(db, stock_id, min(limit, 200)), "brokers": _broker_summary(db, stock_id), "prices": _rows(db, PriceDaily, stock_id, min(limit, 365), "TaiwanStockPrice"), "score_history": _score_history(db, stock_id, min(limit, 365)), "calendar_version": CALENDAR_VERSION}
 
 
 @app.get("/api/holdings/status")
@@ -387,9 +398,20 @@ def _feature_subqueries(latest: date | None):
     return (select(AccumulationFeature.values).where(AccumulationFeature.stock_id == Stock.stock_id, AccumulationFeature.source_date == latest).order_by(AccumulationFeature.calculated_at.desc()).limit(1).correlate(Stock).scalar_subquery(), select(AccumulationFeature.latest_source_date).where(AccumulationFeature.stock_id == Stock.stock_id, AccumulationFeature.source_date == latest).order_by(AccumulationFeature.calculated_at.desc()).limit(1).correlate(Stock).scalar_subquery())
 
 
-def _stock_item_from_row(row: Any) -> StockListItem:
+def _stock_item_from_row(row: Any, partial_data: dict[str, Any] | None = None) -> StockListItem:
     stock, score, status, score_version, coverage, price, price_change, features, latest_data = row
-    return StockListItem(stock_id=stock.stock_id, stock_name=stock.stock_name, market=stock.market, industry=stock.industry, price=price, price_change=price_change, score=score, status=status or "DATA_INSUFFICIENT", score_version=score_version, features=_json_dict(features), coverage=_json_dict(coverage), latest_data=latest_data)
+    raw_features = _json_dict(features)
+    raw_coverage = _json_dict(coverage)
+    partial_data = partial_data or {}
+    if not raw_features:
+        raw_features = partial_data.get("features", {})
+    if not raw_coverage:
+        raw_coverage = partial_data.get("coverage", {})
+    latest_source_date = latest_data or partial_data.get("data_latest_source_date")
+    latest_source_date = latest_source_date.isoformat() if isinstance(latest_source_date, (date, datetime)) else latest_source_date
+    partial_latest_source_date = partial_data.get("data_latest_source_date")
+    partial_latest_source_date = partial_latest_source_date.isoformat() if isinstance(partial_latest_source_date, (date, datetime)) else partial_latest_source_date
+    return StockListItem(stock_id=stock.stock_id, stock_name=stock.stock_name, market=stock.market, industry=stock.industry, price=price, price_change=price_change, score=score, status=status or "DATA_INSUFFICIENT", score_version=score_version, features=raw_features, coverage=raw_coverage, latest_data=latest_source_date, data_status=partial_data.get("data_status", "NO_DATA"), data_latest_source_date=partial_latest_source_date, last_updated_at=partial_data.get("last_updated_at"), data_sources=partial_data.get("data_sources", {}))
 
 
 def _json_dict(value: Any) -> dict[str, Any]:
@@ -402,6 +424,91 @@ def _json_dict(value: Any) -> dict[str, Any]:
             return {}
         return parsed if isinstance(parsed, dict) else {}
     return {}
+
+
+def _partial_stock_snapshots(db: Session, stock_ids: list[str]) -> dict[str, dict[str, Any]]:
+    """Build display-only features from whatever rows are already persisted.
+
+    This deliberately does not create Score rows.  A stock can therefore show
+    useful partial source data while the global Score surface remains
+    fail-closed until every required source is current and complete.
+    """
+    unique_ids = list(dict.fromkeys(stock_ids))
+    if not unique_ids:
+        return {}
+    rows_by_source: dict[str, dict[str, list[dict[str, Any]]]] = {
+        name: {stock_id: [] for stock_id in unique_ids} for name in PARTIAL_SOURCE_SPECS
+    }
+    source_totals: dict[str, dict[str, tuple[date | None, datetime | None, int]]] = {name: {} for name in PARTIAL_SOURCE_SPECS}
+    for name, (model, dataset) in PARTIAL_SOURCE_SPECS.items():
+        source_totals[name] = {
+            str(stock_id): (latest_source_date, latest_fetched_at, int(row_count))
+            for stock_id, latest_source_date, latest_fetched_at, row_count in db.execute(
+                select(model.stock_id, func.max(model.source_date), func.max(model.fetched_at), func.count())
+                .where(model.stock_id.in_(unique_ids), model.source_dataset == dataset)
+                .group_by(model.stock_id)
+            ).all()
+        }
+        # Ninety calendar days cover the 20-session windows; holdings need
+        # extra room for the eight-week comparison periods. Keep the list
+        # endpoint bounded even when the database retains long history.
+        lookback_days = 180 if name == "holding_distribution" else 90
+        cutoff = date.today() - timedelta(days=lookback_days)
+        rows = db.scalars(
+            select(model)
+            .where(model.stock_id.in_(unique_ids), model.source_dataset == dataset, model.source_date >= cutoff)
+            .order_by(model.stock_id, model.source_date.asc(), model.id.asc())
+        ).all()
+        for row in rows:
+            payload = {key: getattr(row, key) for key in row.__table__.columns.keys() if key != "id"}
+            rows_by_source[name].setdefault(row.stock_id, []).append(payload)
+
+    result: dict[str, dict[str, Any]] = {}
+    coverage_keys = {
+        "institutional": "InstitutionalDataAvailable",
+        "foreign_holding": "ForeignHoldingDataAvailable",
+        "holding_distribution": "HoldingDistributionAvailable",
+        "broker": "BrokerDataAvailable",
+        "price": "PriceDataAvailable",
+    }
+    for stock_id in unique_ids:
+        source_rows = {name: rows_by_source[name].get(stock_id, []) for name in PARTIAL_SOURCE_SPECS}
+        features = build_features(
+            source_rows["institutional"],
+            source_rows["foreign_holding"],
+            source_rows["holding_distribution"],
+            source_rows["broker"],
+            source_rows["price"],
+        )
+        data_sources: dict[str, Any] = {}
+        source_dates: list[date] = []
+        fetched_at: list[datetime] = []
+        raw_coverage: dict[str, bool] = {}
+        for name, rows in source_rows.items():
+            latest_source_date, latest_fetched_at, row_count = source_totals[name].get(stock_id, (None, None, 0))
+            if latest_source_date:
+                source_dates.append(latest_source_date)
+            if latest_fetched_at:
+                fetched_at.append(latest_fetched_at)
+            available = stock_id in source_totals[name]
+            raw_coverage[coverage_keys[name]] = available
+            data_sources[name] = {
+                "dataset": PARTIAL_SOURCE_SPECS[name][1],
+                "available": available,
+                "row_count": row_count,
+                "latest_source_date": latest_source_date,
+                "last_updated_at": latest_fetched_at,
+            }
+        available_count = sum(raw_coverage.values())
+        result[stock_id] = {
+            "features": features,
+            "coverage": {**raw_coverage, "raw_source_count": available_count, "raw_source_complete": available_count == len(PARTIAL_SOURCE_SPECS)},
+            "data_status": "NO_DATA" if available_count == 0 else ("COMPLETE" if available_count == len(PARTIAL_SOURCE_SPECS) else "PARTIAL"),
+            "data_latest_source_date": max(source_dates, default=None),
+            "last_updated_at": max(fetched_at, default=None),
+            "data_sources": data_sources,
+        }
+    return result
 
 
 def _score_dict(db: Session, stock_id: str, latest: date | None) -> dict[str, Any]:
@@ -473,7 +580,7 @@ def _source_status(db: Session, stock_id: str) -> dict[str, Any]:
         sync = db.get(DataSyncStatus, dataset)
         expected = authoritative_expected_latest_source_date(dataset) if sync else None
         stock_staleness = "NO_DATA" if latest is None else ("STALE" if expected and latest < expected else "FRESH")
-        result[name] = {"provider": "FinMind", "dataset": dataset, "latest_source_date": latest, "fetched_at": fetched, "last_successful_fetch": sync.last_http_success_at if sync else None, "last_fully_successful_sync": sync.last_fully_successful_sync if sync else None, "last_usable_data_at": sync.last_usable_data_at if sync else None, "attempt_latest_source_date": sync.attempt_latest_source_date if sync else None, "expected_latest_source_date": expected, "source_age_days": (expected - latest).days if expected and latest else None, "row_count": db.scalar(select(func.count()).select_from(model).where(model.stock_id == stock_id, model.source_dataset == dataset)) or 0, "staleness": stock_staleness, "global_sync_staleness": sync.staleness_state if sync else "UNKNOWN", "fallback": "not_used"}
+        result[name] = {"provider": "FinMind", "dataset": dataset, "status": stock_staleness, "latest_source_date": latest, "fetched_at": fetched, "last_successful_fetch": sync.last_http_success_at if sync else None, "last_fully_successful_sync": sync.last_fully_successful_sync if sync else None, "last_usable_data_at": sync.last_usable_data_at if sync else None, "attempt_latest_source_date": sync.attempt_latest_source_date if sync else None, "expected_latest_source_date": expected, "source_age_days": (expected - latest).days if expected and latest else None, "row_count": db.scalar(select(func.count()).select_from(model).where(model.stock_id == stock_id, model.source_dataset == dataset)) or 0, "staleness": stock_staleness, "global_sync_staleness": sync.staleness_state if sync else "UNKNOWN", "fallback": "not_used"}
     result["major_shareholder_5pct"] = {"provider": "TWSE/TPEx/MOPS", "dataset": None, "status": "UNAVAILABLE_NOT_CONFIGURED", "fallback": "none"}
     return result
 
