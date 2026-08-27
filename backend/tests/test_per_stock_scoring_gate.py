@@ -51,7 +51,10 @@ def test_mixed_readiness_scores_ready_stocks_and_fails_closed_others() -> None:
     _seed_complete_sources(db, "9001")
     _seed_complete_sources(db, "9004")
 
+    before_scores = len(db.scalars(select(AccumulationScore).where(AccumulationScore.source_date == END)).all())
     audit = evaluate_universe_readiness(db, ["9001", "9002", "9003", "9004"], END, FETCHED_AT)
+    after_scores = len(db.scalars(select(AccumulationScore).where(AccumulationScore.source_date == END)).all())
+    assert after_scores == before_scores
     assert audit["evaluated_stock_count"] == 4
     assert audit["ready_stock_count"] == 2
     assert audit["not_ready_stock_count"] == 2
