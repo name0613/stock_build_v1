@@ -1237,10 +1237,18 @@ async def _catch_up_locked(db: Session, client: FinMindClient, end_date: date | 
             broker_buffer.clear()
         checkpoint_complete = broker_metrics.get("skipped_checkpoint", 0) >= broker_metrics.get("requested_keys", len(stock_ids) * 20)
         no_work_reused = checkpoint_complete and broker_metrics.get("physical_requests", 0) == 0 and broker_metrics.get("rows", 0) == 0 and broker_metrics.get("failed", 0) == 0
-        broker_status = "QUOTA_EXHAUSTED" if broker_metrics.get("fatal_code") == "QUOTA_EXHAUSTED" else ("REUSED" if no_work_reused else ("SUCCESS" if broker_metrics.get("failed", 0) == 0 and broker_metrics.get("retryable_pending", 0) == 0 and (broker_metrics.get("rows", 0) > 0 or not stock_ids) else "PARTIAL"))
-        if no_work_reused:
-            broker_metrics["reuse_reason"] = "all requested stock-session keys already completed; no new physical requests"
-        broker_error = None if broker_status in {"SUCCESS", "REUSED"} else (broker_metrics.get("fatal_code") or "BROKER_PARTIAL")
+        if fatal_code:
+            # A fatal provider error occurred before this phase.  Keep the
+            # broker work explicitly deferred instead of relabelling it as a
+            # misleading partial attempt or pretending that the checkpoint
+            # was inspected successfully.
+            broker_status = "DEFERRED"
+            broker_error = fatal_code
+        else:
+            broker_status = "QUOTA_EXHAUSTED" if broker_metrics.get("fatal_code") == "QUOTA_EXHAUSTED" else ("REUSED" if no_work_reused else ("SUCCESS" if broker_metrics.get("failed", 0) == 0 and broker_metrics.get("retryable_pending", 0) == 0 and (broker_metrics.get("rows", 0) > 0 or not stock_ids) else "PARTIAL"))
+            if no_work_reused:
+                broker_metrics["reuse_reason"] = "all requested stock-session keys already completed; no new physical requests"
+            broker_error = None if broker_status in {"SUCCESS", "REUSED"} else (broker_metrics.get("fatal_code") or "BROKER_PARTIAL")
         _mark_sync(db, "TaiwanStockTradingDailyReport", broker_status, stored, end if stored else None, broker_error, fetched_at=_now(), expected_latest=_expected_latest_source_date("TaiwanStockTradingDailyReport", end), rows_received=broker_metrics.get("rows_received", broker_metrics.get("rows", 0)), rows_accepted=stored, rows_rejected=max(0, broker_metrics.get("rows_received", broker_metrics.get("rows", 0)) - stored), rows_versioned=broker_versioned, observations_reused=int(broker_metrics.get("observations_reused", 0)), physical_requests=int(broker_metrics.get("physical_requests", 0)), stored_total=_stored_rows_total(db, "TaiwanStockTradingDailyReport"), metadata={"query_mode": "per_stock_per_session", "rows_versioned": broker_versioned, **broker_metrics})
         _job_finish(db, broker_job, broker_status, records=stored, retry_count=broker_metrics.get("retries", 0), stocks_completed=broker_metrics.get("stocks_completed", 0), stocks_failed=broker_metrics.get("stocks_failed", 0), error_code=broker_error, checkpoint_state=broker_metrics)
         result["datasets"]["TaiwanStockTradingDailyReport"] = {**broker_metrics, "stored_records": stored, "status": broker_status}
@@ -1268,6 +1276,7 @@ async def _catch_up_locked(db: Session, client: FinMindClient, end_date: date | 
     progress("score")
     ready_stock_count = 0
     not_ready_stock_count = 0
+    score_rows_failed = 0
     reason_counts: dict[str, int] = {}
     for stock_id in stock_ids:
         try:
@@ -1283,10 +1292,12 @@ async def _catch_up_locked(db: Session, client: FinMindClient, end_date: date | 
         except Exception:
             result["status"] = "PARTIAL"
             not_ready_stock_count += 1
+            score_rows_failed += 1
             reason_counts["score_evaluation_failed"] = reason_counts.get("score_evaluation_failed", 0) + 1
             # Preserve an explicit fail-closed row for an isolated evaluation
             # error so no stock silently disappears from the run accounting.
             # The original failure remains visible in score_rows_failed.
+            fallback_persisted = False
             try:
                 failure_coverage = {
                     "InstitutionalDataAvailable": False,
@@ -1313,11 +1324,12 @@ async def _catch_up_locked(db: Session, client: FinMindClient, end_date: date | 
                     "missing_reasons": ["score_evaluation_failed"],
                 }
                 _persist_stock_evaluation(db, failure_evaluation)
+                fallback_persisted = True
                 result["scores"]["DATA_INSUFFICIENT"] = result["scores"].get("DATA_INSUFFICIENT", 0) + 1
             except Exception:
                 db.rollback()
-            result["scores"]["FAILED"] = result["scores"].get("FAILED", 0) + 1
-    failures = result["scores"].get("FAILED", 0)
+            if not fallback_persisted:
+                result["scores"]["FAILED"] = result["scores"].get("FAILED", 0) + 1
     score_rows_data_insufficient = result["scores"].get("DATA_INSUFFICIENT", 0)
     score_rows_processed = sum(count for status, count in result["scores"].items() if status not in {"DATA_INSUFFICIENT", "FAILED"})
     result["score_metrics"] = {
@@ -1327,15 +1339,15 @@ async def _catch_up_locked(db: Session, client: FinMindClient, end_date: date | 
         "not_ready_stock_count": not_ready_stock_count,
         "score_rows_processed": score_rows_processed,
         "score_rows_data_insufficient": score_rows_data_insufficient,
-        "score_rows_failed": failures,
+        "score_rows_failed": score_rows_failed,
         "missing_reason_counts": reason_counts,
         "accounting_invariant": ready_stock_count + not_ready_stock_count == len(stock_ids),
     }
     result["score_preflight"]["per_stock_summary"] = result["score_metrics"]
     # Preserve an explicit zero-ready outcome for operational dashboards while
     # allowing a mixed run to complete with numeric and fail-closed rows.
-    score_job_status = "SCORE_BLOCKED_BY_SOURCE_COVERAGE" if ready_stock_count == 0 and failures == 0 else ("SUCCESS" if failures == 0 else "PARTIAL")
-    _job_finish(db, score_job, score_job_status, stocks_completed=len(stock_ids) - failures, stocks_failed=failures, checkpoint_state={"scores": result["scores"], "score_metrics": result["score_metrics"], **score_readiness_checkpoint(db, end, len(stock_ids))})
+    score_job_status = "SCORE_BLOCKED_BY_SOURCE_COVERAGE" if ready_stock_count == 0 and score_rows_failed == 0 else ("SUCCESS" if score_rows_failed == 0 else "PARTIAL")
+    _job_finish(db, score_job, score_job_status, stocks_completed=len(stock_ids) - score_rows_failed, stocks_failed=score_rows_failed, checkpoint_state={"scores": result["scores"], "score_metrics": result["score_metrics"], **score_readiness_checkpoint(db, end, len(stock_ids))})
     result["score_status"] = score_job_status
     rebuilt = _mark_broker_rebuilds_complete(db, pending_broker_rebuilds, end)
     if pending_broker_rebuilds:

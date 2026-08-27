@@ -84,6 +84,18 @@ def test_api_contract_exposes_score_hash_filters_rankings_and_sync_counters() ->
             assert row["rows_versioned_this_attempt"] <= row["rows_accepted_this_attempt"]
 
 
+def test_readiness_endpoint_exposes_side_effect_free_stock_audit() -> None:
+    with TestClient(app) as client:
+        response = client.get("/api/readiness", params={"source_date": "2026-08-27", "stock_id": "2330"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert set(("stock_id", "ready", "missing_reasons", "coverage", "source_date", "knowledge_cutoff")) <= set(payload)
+    assert payload["stock_id"] == "2330"
+    assert isinstance(payload["ready"], bool)
+    assert isinstance(payload["missing_reasons"], list)
+    assert payload["source_date"] == "2026-08-27"
+
+
 def test_detail_contract_exposes_provenance_version_reasons_and_null_safe_charts() -> None:
     with TestClient(app) as client:
         stocks = client.get("/api/stocks", params={"page": 1, "page_size": 1}).json()

@@ -88,6 +88,7 @@ def test_global_quota_failure_does_not_veto_existing_ready_stocks() -> None:
     result = asyncio.run(catch_up(db, QuotaClient(), end_date=END))
     metrics = result["score_metrics"]
     assert result["fatal_code"] == "QUOTA_EXHAUSTED"
+    assert result["datasets"]["TaiwanStockTradingDailyReport"]["status"] == "DEFERRED"
     assert metrics["universe_stock_count"] == 4
     assert metrics["evaluated_stock_count"] == 4
     assert metrics["ready_stock_count"] == 2
@@ -155,3 +156,96 @@ def test_partial_global_source_is_advisory_for_ready_stock() -> None:
     assert result["score_metrics"]["ready_stock_count"] == 1
     assert result["score_metrics"]["score_rows_processed"] == 1
     assert result["score_metrics"]["score_rows_data_insufficient"] == 3
+
+
+def test_isolated_stock_evaluation_failure_does_not_abort_other_stocks(monkeypatch) -> None:
+    db = _db()
+    _seed_universe(db)
+    _seed_complete_sources(db, "9001")
+
+    class PartialClient:
+        def fetch(self, dataset: str, *_args: object, **_kwargs: object):
+            assert dataset == "TaiwanStockInfo"
+            return ([
+                {"stock_id": stock_id, "stock_name": stock_id, "type": "twse", "security_type": "股票", "date": END}
+                for stock_id in ("9001", "9002", "9003", "9004")
+            ], {"source_date": END.isoformat()})
+
+        async def fetch_stocks_dataset(self, stock_ids, dataset, *_args: object, **_kwargs: object):
+            return {
+                "requested": len(stock_ids), "success": len(stock_ids), "failed": 0,
+                "retryable_pending": 0, "permanent_failed": 0, "physical_requests": 0,
+                "rows": 0, "rows_received": 0, "rows_accepted": 0, "rows_versioned": 0,
+                "observations_reused": 0, "fatal_code": None, "per_stock": {},
+            }
+
+        async def fetch_broker_stocks(self, stock_ids, *_args: object, **_kwargs: object):
+            return {
+                "requested": len(stock_ids), "requested_keys": len(stock_ids) * 20,
+                "skipped_checkpoint": len(stock_ids) * 20, "success": len(stock_ids),
+                "failed": 0, "retryable_pending": 0, "physical_requests": 0,
+                "rows": 0, "stocks_completed": len(stock_ids), "stocks_failed": 0,
+            }
+
+    import app.ingestion as ingestion_module
+
+    original_evaluator = ingestion_module._evaluate_stock_inputs
+
+    def fail_one(db_session, stock_id, as_of, cutoff):
+        if stock_id == "9002":
+            raise ValueError("simulated isolated validation failure")
+        return original_evaluator(db_session, stock_id, as_of, cutoff)
+
+    monkeypatch.setattr(ingestion_module, "_evaluate_stock_inputs", fail_one)
+    result = asyncio.run(catch_up(db, PartialClient(), end_date=END))
+
+    metrics = result["score_metrics"]
+    assert metrics["ready_stock_count"] == 1
+    assert metrics["not_ready_stock_count"] == 3
+    assert metrics["score_rows_processed"] == 1
+    assert metrics["score_rows_data_insufficient"] == 3
+    assert metrics["score_rows_failed"] == 1
+    assert metrics["accounting_invariant"] is True
+    persisted = db.scalars(select(AccumulationScore).where(AccumulationScore.source_date == END)).all()
+    assert len(persisted) == 4
+    failed_row = next(row for row in persisted if row.stock_id == "9002")
+    assert failed_row.status == "DATA_INSUFFICIENT"
+    assert failed_row.score is None
+
+
+def test_all_incomplete_universe_reports_zero_ready_without_zero_scores() -> None:
+    db = _db()
+    _seed_universe(db)
+
+    class EmptyClient:
+        def fetch(self, dataset: str, *_args: object, **_kwargs: object):
+            assert dataset == "TaiwanStockInfo"
+            return ([
+                {"stock_id": stock_id, "stock_name": stock_id, "type": "twse", "security_type": "股票", "date": END}
+                for stock_id in ("9001", "9002", "9003", "9004")
+            ], {"source_date": END.isoformat()})
+
+        async def fetch_stocks_dataset(self, stock_ids, dataset, *_args: object, **_kwargs: object):
+            return {
+                "requested": len(stock_ids), "success": len(stock_ids), "failed": 0,
+                "retryable_pending": 0, "permanent_failed": 0, "physical_requests": 0,
+                "rows": 0, "rows_received": 0, "rows_accepted": 0, "rows_versioned": 0,
+                "observations_reused": 0, "fatal_code": None, "per_stock": {},
+            }
+
+        async def fetch_broker_stocks(self, stock_ids, *_args: object, **_kwargs: object):
+            return {
+                "requested": len(stock_ids), "requested_keys": len(stock_ids) * 20,
+                "skipped_checkpoint": len(stock_ids) * 20, "success": len(stock_ids),
+                "failed": 0, "retryable_pending": 0, "physical_requests": 0,
+                "rows": 0, "stocks_completed": len(stock_ids), "stocks_failed": 0,
+            }
+
+    result = asyncio.run(catch_up(db, EmptyClient(), end_date=END))
+    assert result["score_metrics"]["ready_stock_count"] == 0
+    assert result["score_metrics"]["score_rows_processed"] == 0
+    assert result["score_metrics"]["score_rows_data_insufficient"] == 4
+    assert result["score_status"] == "SCORE_BLOCKED_BY_SOURCE_COVERAGE"
+    persisted = db.scalars(select(AccumulationScore).where(AccumulationScore.source_date == END)).all()
+    assert len(persisted) == 4
+    assert all(row.score is None and row.status == "DATA_INSUFFICIENT" for row in persisted)
