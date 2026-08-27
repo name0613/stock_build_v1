@@ -5,6 +5,7 @@ import json
 import re
 import shutil
 import stat
+import subprocess
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -92,6 +93,9 @@ def validate_acceptance_evidence(root: Path) -> dict[str, object]:
     run_id = manifest.get("acceptance_run_id")
     source_revision = manifest.get("source_revision")
     deployed_revision = manifest.get("deployed_source_revision")
+    current_head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    if source_revision != current_head:
+        errors.append(f"acceptance evidence source revision {source_revision!r} does not match current HEAD {current_head!r}")
     _assert_same(errors, "acceptance_run_id", {name: payload.get("acceptance_run_id") for name, payload in payloads.items() if name != "NAS_RUNTIME_METADATA_EVIDENCE.json"})
     _assert_same(errors, "source_revision", {name: payload.get("source_revision") for name, payload in payloads.items() if name != "NAS_RUNTIME_METADATA_EVIDENCE.json"})
     _assert_same(errors, "deployed_source_revision", {name: payload.get("deployed_source_revision") for name, payload in payloads.items() if name in {"RUN_METADATA.json", "LATEST_REMEDIATION_RUN.json", "REMEDIATION_MATRIX.json"}} | {"acceptance_manifest": deployed_revision})
