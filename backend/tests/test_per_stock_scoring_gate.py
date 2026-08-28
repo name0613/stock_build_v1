@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.calendar import expected_trading_sessions
 from app.finmind import FinMindError
-from app.ingestion import catch_up, evaluate_stock_readiness, evaluate_universe_readiness, calculate_stock_features_and_score, score_existing_data
+from app.ingestion import catch_up, evaluate_stock_readiness, evaluate_universe_readiness, calculate_stock_features_and_score, fetch_and_score_stock, score_existing_data
 from app.models import AccumulationScore, Base, BrokerDaily, DataSyncStatus, ForeignShareholdingDaily, HoldingDistribution, InstitutionalDaily, PriceDaily, Stock
 from app.scoring import BROKER_ROW_CONTRACT_VERSION, HOLDING_CANONICAL_LEVELS
 
@@ -86,6 +86,63 @@ def test_manual_existing_data_score_persists_mixed_results_without_provider_call
     assert len(rows) == 4
     assert next(row for row in rows if row.stock_id == "9001").score is not None
     assert all(row.score is None and row.status == "DATA_INSUFFICIENT" for row in rows if row.stock_id != "9001")
+
+
+def test_targeted_fetch_reuses_complete_sources_and_scores_after_missing_broker_is_filled() -> None:
+    db = _db()
+    _seed_universe(db)
+    _seed_complete_sources(db, "9001")
+    db.query(BrokerDaily).filter(BrokerDaily.stock_id == "9001").delete()
+    db.commit()
+
+    class TargetedClient:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str, str]] = []
+
+        async def fetch_stocks_dataset(self, stock_ids, dataset, start_date, end_date, *, record_sink=None, progress_callback=None):
+            self.calls.append((dataset, start_date, end_date))
+            raise AssertionError("complete source datasets should be reused locally")
+
+        async def fetch_broker_stocks(self, stock_ids, start_date, end_date, *, record_sink=None, progress_callback=None):
+            self.calls.append(("TaiwanStockTradingDailyReport", start_date, end_date))
+            rows = [
+                {
+                    "stock_id": "9001",
+                    "date": day.isoformat(),
+                    "securities_trader_id": "A",
+                    "securities_trader_name": "A",
+                    "buy": 100,
+                    "sell": 10,
+                    "provider_row_validated": True,
+                    "provider_row_contract_version": BROKER_ROW_CONTRACT_VERSION,
+                }
+                for day in expected_trading_sessions(END, 20)
+            ]
+            if record_sink:
+                record_sink(rows)
+            return {
+                "requested": 1,
+                "requested_keys": 20,
+                "skipped_checkpoint": 0,
+                "observations_reused": 0,
+                "physical_requests": 20,
+                "rows": len(rows),
+                "rows_received": len(rows),
+                "success": 20,
+                "failed": 0,
+                "retryable_pending": 0,
+                "fatal_code": None,
+            }
+
+    client = TargetedClient()
+    result = asyncio.run(fetch_and_score_stock(db, client, "9001", END))
+
+    assert result["status"] == "SUCCESS"
+    assert result["score"]["score"] is not None
+    assert result["readiness"]["ready"] is True
+    assert [call[0] for call in client.calls] == ["TaiwanStockTradingDailyReport"]
+    persisted = db.scalar(select(AccumulationScore).where(AccumulationScore.stock_id == "9001", AccumulationScore.source_date == END))
+    assert persisted is not None and persisted.score is not None
 
 
 def test_global_quota_failure_does_not_veto_existing_ready_stocks() -> None:

@@ -778,6 +778,171 @@ def calculate_stock_features_and_score(db: Session, stock_id: str, as_of: date |
     return _persist_stock_evaluation(db, evaluation)
 
 
+TARGETED_STOCK_SYNC_DATASET = "targeted_stock_sync_score"
+
+
+def _targeted_readiness_payload(evaluation: dict[str, Any]) -> dict[str, Any]:
+    """Return JSON-safe readiness evidence for a targeted stock run."""
+    return {
+        "stock_id": evaluation["stock_id"],
+        "ready": bool(evaluation["ready"]),
+        "missing_reasons": list(evaluation["missing_reasons"]),
+        "coverage": evaluation["coverage"],
+        "source_date": evaluation["as_of"].isoformat(),
+        "knowledge_cutoff": evaluation["knowledge_cutoff"].isoformat(),
+    }
+
+
+async def fetch_and_score_stock(
+    db: Session,
+    client: FinMindClient,
+    stock_id: str,
+    as_of: date | None = None,
+    *,
+    job: JobRun | None = None,
+    progress_callback: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
+    """Fetch one stock's missing scoring inputs, then score it immediately.
+
+    The provider client owns durable observation checkpoints.  Each request
+    therefore receives the complete scoring window, while already-covered
+    observations are reused and only unresolved observations consume provider
+    calls.  A failed source fetch never fabricates zeros: the final local
+    evaluation still records the exact remaining readiness reasons.
+    """
+    stock_id = str(stock_id).strip()
+    stock = db.get(Stock, stock_id)
+    if stock is None or not stock.is_common_stock:
+        raise ValueError("stock not found")
+    target = as_of or completed_source_end_date(_now())
+    score_cutoff = _now()
+    score_job = job or _job_start(db, TARGETED_STOCK_SYNC_DATASET, target, target, stocks_attempted=1)
+    datasets: dict[str, Any] = {}
+    fetch_errors: list[dict[str, str]] = []
+
+    def checkpoint(phase: str, **extra: Any) -> None:
+        state = score_job.checkpoint_state if isinstance(score_job.checkpoint_state, dict) else {}
+        score_job.checkpoint_state = {
+            **state,
+            "run_mode": "targeted_fetch_and_score",
+            "stock_id": stock_id,
+            "target_date": target.isoformat(),
+            "phase": phase,
+            "datasets": datasets,
+            **extra,
+        }
+        db.commit()
+        if progress_callback:
+            progress_callback(phase)
+
+    pre_evaluation = _evaluate_stock_inputs(db, stock_id, target, score_cutoff)
+    pre_readiness = _targeted_readiness_payload(pre_evaluation)
+    checkpoint("preflight", pre_readiness=pre_readiness, progress={"completed": 0, "total": 5})
+
+    # A single quota probe is recorded before any uncached provider work.  It
+    # is advisory here; the broker client still applies its own reserve-aware
+    # key selection, and all quota fields are sanitized to non-secret values.
+    quota: dict[str, Any] = {"status": "NOT_CONFIGURED"}
+    quota_probe = getattr(client, "provider_quota", None)
+    client_settings = getattr(client, "settings", None)
+    if callable(quota_probe) and getattr(client_settings, "finmind_api_token", None):
+        try:
+            raw_quota = quota_probe(source_revision=getattr(client_settings, "source_revision", "runtime"))
+            quota = {
+                "status": "PASS",
+                "remaining": raw_quota.get("provider_reported_remaining"),
+                "limit_per_hour": raw_quota.get("provider_reported_limit_per_hour"),
+                "plan": raw_quota.get("provider_plan"),
+            }
+        except FinMindError as exc:
+            quota = {"status": "FAILED", "error_code": exc.code}
+            fetch_errors.append({"dataset": "provider_quota", "error_code": exc.code})
+    checkpoint("quota_checked", quota=quota, pre_readiness=pre_readiness, progress={"completed": 0, "total": 5})
+
+    expected_daily = {
+        "TaiwanStockInstitutionalInvestorsBuySellWide": (20, "missing_institutional"),
+        "TaiwanStockShareholding": (21, "missing_foreign_holding"),
+        "TaiwanStockPrice": (21, "missing_price"),
+    }
+    plan: list[tuple[str, str, date, date, str]] = []
+    for dataset, (window, reason) in expected_daily.items():
+        start = expected_trading_sessions(target, window)[0]
+        plan.append((dataset, reason, start, target, "source"))
+    holding_target = _expected_latest_source_date("TaiwanStockHoldingSharesPer", target) or target
+    plan.append(("TaiwanStockHoldingSharesPer", "tdcc_required_buckets_incomplete", holding_target - timedelta(days=56), holding_target, "source"))
+    broker_start = expected_trading_sessions(target, 20)[0]
+    plan.append(("TaiwanStockTradingDailyReport", "missing_broker", broker_start, target, "broker"))
+
+    completed = 0
+    for dataset, reason, start, end, method in plan:
+        completed += 1
+        if reason not in set(pre_evaluation["missing_reasons"]):
+            datasets[dataset] = {"status": "REUSED_LOCAL", "physical_requests": 0, "reason": "stock readiness already satisfied before fetch"}
+            checkpoint(f"reused:{dataset}", pre_readiness=pre_readiness, quota=quota, progress={"completed": completed, "total": len(plan)})
+            continue
+        checkpoint(f"fetching:{dataset}", pre_readiness=pre_readiness, quota=quota, progress={"completed": completed - 1, "total": len(plan)})
+        accepted = 0
+        versioned = 0
+
+        def sink(rows: list[dict[str, Any]]) -> dict[str, Any]:
+            nonlocal accepted, versioned
+            before = int(db.scalar(select(func.count()).select_from(SourceRevision).where(SourceRevision.dataset == dataset)) or 0)
+            accepted_now = ingest_records(db, dataset, rows)
+            after = int(db.scalar(select(func.count()).select_from(SourceRevision).where(SourceRevision.dataset == dataset)) or 0)
+            accepted += accepted_now
+            versioned += max(0, after - before)
+            dates = sorted({value for value in (_as_date(_v(row, "date", "source_date")) for row in rows) if value is not None})
+            return {"accepted_count": accepted_now, "versioned_count": max(0, after - before), "accepted_dates": [value.isoformat() for value in dates]}
+
+        try:
+            def provider_progress(message: str) -> None:
+                if progress_callback:
+                    progress_callback(f"{dataset}:{message}")
+
+            if method == "broker":
+                metrics = await client.fetch_broker_stocks([stock_id], start.isoformat(), end.isoformat(), record_sink=sink, progress_callback=provider_progress)
+            else:
+                metrics = await client.fetch_stocks_dataset([stock_id], dataset, start.isoformat(), end.isoformat(), record_sink=sink, progress_callback=provider_progress)
+            datasets[dataset] = {**metrics, "records_accepted": accepted, "rows_versioned": versioned}
+            fatal = metrics.get("fatal_code") if isinstance(metrics, dict) else None
+            if fatal:
+                fetch_errors.append({"dataset": dataset, "error_code": str(fatal)})
+                if fatal in GLOBAL_PROVIDER_FAILURE_CODES:
+                    checkpoint("provider_blocked", datasets=datasets, fetch_errors=fetch_errors, quota=quota, progress={"completed": completed, "total": len(plan)})
+                    break
+        except FinMindError as exc:
+            datasets[dataset] = {"status": "FAILED", "error_code": exc.code, "records_accepted": accepted, "rows_versioned": versioned}
+            fetch_errors.append({"dataset": dataset, "error_code": exc.code})
+            if exc.code in GLOBAL_PROVIDER_FAILURE_CODES:
+                checkpoint("provider_blocked", datasets=datasets, fetch_errors=fetch_errors, quota=quota, progress={"completed": completed, "total": len(plan)})
+                break
+        except Exception as exc:
+            code = getattr(exc, "code", "UNEXPECTED")
+            datasets[dataset] = {"status": "FAILED", "error_code": code, "records_accepted": accepted, "rows_versioned": versioned}
+            fetch_errors.append({"dataset": dataset, "error_code": code})
+        checkpoint(f"fetched:{dataset}", datasets=datasets, fetch_errors=fetch_errors, quota=quota, progress={"completed": completed, "total": len(plan)})
+
+    checkpoint("scoring", datasets=datasets, fetch_errors=fetch_errors, quota=quota, progress={"completed": len(plan), "total": len(plan)})
+    final_evaluation = _evaluate_stock_inputs(db, stock_id, target, _now())
+    score = _persist_stock_evaluation(db, final_evaluation)
+    readiness = _targeted_readiness_payload(final_evaluation)
+    status = "SUCCESS" if final_evaluation["ready"] else "DATA_INSUFFICIENT"
+    result = {
+        "job_id": score_job.id,
+        "stock_id": stock_id,
+        "target_date": target.isoformat(),
+        "status": status,
+        "score": {"score": score.score, "status": score.status, "score_version": score.score_version, "formula_hash": score.formula_hash, "coverage": score.coverage, "components": score.components, "explanation": score.explanation, "calculated_at": score.calculated_at},
+        "pre_readiness": pre_readiness,
+        "readiness": readiness,
+        "datasets": datasets,
+        "fetch_errors": fetch_errors,
+        "quota": quota,
+    }
+    _job_finish(db, score_job, status, records=sum(int(item.get("records_accepted", 0)) for item in datasets.values()), stocks_completed=1 if final_evaluation["ready"] else 0, stocks_failed=0, error_code=(fetch_errors[0]["error_code"] if fetch_errors else None), checkpoint_state=_jsonable({"run_mode": "targeted_fetch_and_score", **result, "phase": "completed", "progress": {"completed": len(plan), "total": len(plan)}}))
+    return result
+
+
 def score_existing_data(
     db: Session,
     as_of: date,

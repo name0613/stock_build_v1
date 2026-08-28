@@ -17,7 +17,7 @@ from .config import get_settings
 from .db import SessionLocal, get_db, init_db
 from .finmind import GLOBAL_PROVIDER_FAILURE_CODES
 from .features import build_features, holding_distribution_features
-from .ingestion import authoritative_expected_latest_source_date, authoritative_source_state_hash, evaluate_stock_readiness, evaluate_universe_readiness, score_existing_data, score_snapshot_state, seed_score_version
+from .ingestion import TARGETED_STOCK_SYNC_DATASET, authoritative_expected_latest_source_date, authoritative_source_state_hash, evaluate_stock_readiness, evaluate_universe_readiness, fetch_and_score_stock, score_existing_data, score_snapshot_state, seed_score_version
 from .models import AccumulationFeature, AccumulationScore, BrokerDaily, DataSyncStatus, ForeignShareholdingDaily, HoldingDistribution, InstitutionalDaily, JobRun, PriceDaily, Stock
 from .schemas import PaginatedStocks, StockListItem
 from .calendar import CALENDAR_HASH, CALENDAR_VERSION
@@ -51,6 +51,7 @@ PARTIAL_SOURCE_SPECS = {
     "price": (PriceDaily, "TaiwanStockPrice"),
 }
 _MANUAL_SCORE_LOCK = Lock()
+_TARGETED_SCORE_LOCK = Lock()
 
 
 @app.on_event("startup")
@@ -222,6 +223,64 @@ def _run_manual_score(job_id: int, target: date) -> None:
         _MANUAL_SCORE_LOCK.release()
 
 
+def _targeted_score_job_payload(job: JobRun) -> dict[str, Any]:
+    checkpoint = job.checkpoint_state if isinstance(job.checkpoint_state, dict) else {}
+    return {
+        "job_id": job.id,
+        "stock_id": checkpoint.get("stock_id"),
+        "status": job.status,
+        "run_mode": checkpoint.get("run_mode", "targeted_fetch_and_score"),
+        "target_date": job.requested_end_date,
+        "phase": checkpoint.get("phase"),
+        "progress": checkpoint.get("progress", {"completed": 0, "total": 5}),
+        "started_at": job.started_at,
+        "finished_at": job.finished_at,
+        "datasets": checkpoint.get("datasets", {}),
+        "pre_readiness": checkpoint.get("pre_readiness"),
+        "readiness": checkpoint.get("readiness"),
+        "score": checkpoint.get("score"),
+        "fetch_errors": checkpoint.get("fetch_errors", []),
+        "quota": checkpoint.get("quota"),
+        "error_code": job.error_code,
+    }
+
+
+def _mark_targeted_score_failed(job_id: int, exc: Exception) -> None:
+    db = SessionLocal()
+    try:
+        job = db.get(JobRun, job_id)
+        if job is None or job.status != "RUNNING":
+            return
+        job.status = "FAILED"
+        job.finished_at = datetime.now(timezone.utc)
+        job.error_code = getattr(exc, "code", "TARGETED_SCORE_FAILED")
+        job.error = str(exc)[:500]
+        checkpoint = job.checkpoint_state if isinstance(job.checkpoint_state, dict) else {}
+        job.checkpoint_state = {**checkpoint, "phase": "failed"}
+        db.commit()
+    finally:
+        db.close()
+
+
+def _run_targeted_fetch_and_score(job_id: int, stock_id: str, target: date) -> None:
+    if not _TARGETED_SCORE_LOCK.acquire(blocking=False):
+        _mark_targeted_score_failed(job_id, RuntimeError("another targeted stock job is already running"))
+        return
+    db = SessionLocal()
+    try:
+        job = db.get(JobRun, job_id)
+        if job is None or job.status != "RUNNING":
+            return
+        from .finmind import FinMindClient
+        fetch_and_score_stock(db, FinMindClient(settings), stock_id, target, job=job)
+    except Exception as exc:
+        db.rollback()
+        _mark_targeted_score_failed(job_id, exc)
+    finally:
+        db.close()
+        _TARGETED_SCORE_LOCK.release()
+
+
 @app.post("/api/score/current", status_code=202)
 def start_current_score(background_tasks: BackgroundTasks, source_date: date | None = Query(None), db: Session = Depends(get_db)) -> dict[str, Any]:
     """Queue a score run using only source rows already stored locally."""
@@ -315,6 +374,54 @@ def rankings(kind: str = Query("top"), limit: int = Query(50, ge=1, le=200), db:
     return {"source_date": latest, "kind": kind, "score_version": SCORE_VERSION, "provider_state": provider_state, "items": [{"stock_id": row[0].stock_id, "stock_name": row[0].stock_name, "market": row[0].market, "score": row[1], "status": row[2], "components": row[3]} for row in rows]}
 
 
+@app.post("/api/stocks/{stock_id}/fetch-and-score", status_code=202)
+def start_targeted_fetch_and_score(stock_id: str, background_tasks: BackgroundTasks, source_date: date | None = Query(None), db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Queue a single-stock missing-data fetch followed by immediate scoring."""
+    stock = db.get(Stock, stock_id)
+    if stock is None or not stock.is_common_stock:
+        raise HTTPException(status_code=404, detail="stock not found")
+    running = db.scalar(
+        select(JobRun)
+        .where(JobRun.dataset == TARGETED_STOCK_SYNC_DATASET, JobRun.status == "RUNNING")
+        .order_by(JobRun.id.desc())
+        .limit(1)
+    )
+    if running is not None:
+        running_stock_id = (running.checkpoint_state or {}).get("stock_id") if isinstance(running.checkpoint_state, dict) else None
+        raise HTTPException(status_code=409, detail={"code": "TARGETED_SCORE_JOB_ALREADY_RUNNING", "job_id": running.id, "stock_id": running_stock_id})
+    target = _current_data_date(db, source_date)
+    job = JobRun(
+        dataset=TARGETED_STOCK_SYNC_DATASET,
+        requested_date=target,
+        requested_start_date=target,
+        requested_end_date=target,
+        status="RUNNING",
+        started_at=datetime.now(timezone.utc),
+        stocks_attempted=1,
+        checkpoint_state={"run_mode": "targeted_fetch_and_score", "stock_id": stock_id, "target_date": target.isoformat(), "phase": "queued", "progress": {"completed": 0, "total": 5}, "datasets": {}, "fetch_errors": []},
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    background_tasks.add_task(_run_targeted_fetch_and_score, job.id, stock_id, target)
+    return _targeted_score_job_payload(job)
+
+
+@app.get("/api/stocks/{stock_id}/fetch-and-score")
+def targeted_fetch_and_score_status(stock_id: str, job_id: int | None = Query(None, ge=1), db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Return the latest or requested targeted single-stock job."""
+    stock = db.get(Stock, stock_id)
+    if stock is None or not stock.is_common_stock:
+        raise HTTPException(status_code=404, detail="stock not found")
+    if job_id is not None:
+        job = db.get(JobRun, job_id)
+    else:
+        job = db.scalar(select(JobRun).where(JobRun.dataset == TARGETED_STOCK_SYNC_DATASET).order_by(JobRun.id.desc()).limit(1))
+    if job is None or job.dataset != TARGETED_STOCK_SYNC_DATASET or (job.checkpoint_state or {}).get("stock_id") != stock_id:
+        raise HTTPException(status_code=404, detail="targeted stock job not found")
+    return _targeted_score_job_payload(job)
+
+
 @app.get("/api/stocks/{stock_id}")
 def stock_detail(stock_id: str, limit: int = Query(365, ge=1, le=1000), db: Session = Depends(get_db)) -> dict[str, Any]:
     stock = db.get(Stock, stock_id)
@@ -323,6 +430,19 @@ def stock_detail(stock_id: str, limit: int = Query(365, ge=1, le=1000), db: Sess
     sync = db.scalars(select(DataSyncStatus).order_by(DataSyncStatus.dataset)).all()
     provider_state = _provider_state(sync)
     latest = _current_score_date(db, provider_state, sync)
+    # A targeted run may have produced a fresh, stock-specific score while
+    # the universe-wide snapshot is still blocked by other stocks.  Detail
+    # pages should show that score immediately without changing global gate
+    # semantics or pretending the whole universe is complete.
+    if latest is None:
+        targeted_job = db.scalar(
+            select(JobRun)
+            .where(JobRun.dataset == TARGETED_STOCK_SYNC_DATASET, JobRun.status == "SUCCESS")
+            .order_by(JobRun.finished_at.desc(), JobRun.id.desc())
+            .limit(1)
+        )
+        if targeted_job is not None and isinstance(targeted_job.checkpoint_state, dict) and targeted_job.checkpoint_state.get("stock_id") == stock_id:
+            latest = targeted_job.requested_end_date
     partial_data = _partial_stock_snapshots(db, [stock_id]).get(stock_id, {})
     stock_payload = {"stock_id": stock.stock_id, "stock_name": stock.stock_name, "market": stock.market, "industry": stock.industry, **{key: partial_data.get(key) for key in ("data_status", "data_latest_source_date", "last_updated_at", "data_sources", "features", "coverage")}}
     return {"stock": stock_payload, "score": _score_dict(db, stock_id, latest), "provider_state": provider_state, "sources": _source_status(db, stock_id), "institutional": _rows(db, InstitutionalDaily, stock_id, min(limit, 365), "TaiwanStockInstitutionalInvestorsBuySellWide"), "foreign_holding": _rows(db, ForeignShareholdingDaily, stock_id, min(limit, 365), "TaiwanStockShareholding"), "holding_distribution": _rows(db, HoldingDistribution, stock_id, min(limit, 200), "TaiwanStockHoldingSharesPer"), "holding_series": _holding_chart_series(db, stock_id, min(limit, 200)), "brokers": _broker_summary(db, stock_id), "prices": _rows(db, PriceDaily, stock_id, min(limit, 365), "TaiwanStockPrice"), "score_history": _score_history(db, stock_id, min(limit, 365)), "calendar_version": CALENDAR_VERSION}

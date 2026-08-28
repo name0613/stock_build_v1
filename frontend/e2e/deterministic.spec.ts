@@ -86,6 +86,7 @@ function detail(stock: FixtureStock) {
 }
 
 async function installApiFixtures(page: Page) {
+  let targetedPolls = 0;
   await page.route("**/api/**", async (route) => {
     const url = new URL(route.request().url());
     if (url.pathname === "/api/summary") {
@@ -137,6 +138,15 @@ async function installApiFixtures(page: Page) {
     }
     if (url.pathname === "/api/readiness") {
       return route.fulfill({ json: { stock_id: "1000", ready: false, missing_reasons: ["missing_broker", "missing_price"], source_date: "2026-08-20", coverage: { readiness_reason_codes: ["missing_broker", "missing_price"], RequiredFeatureValidation: { BrokerPersistenceScore: { valid: false, expected_window: 20, cadence: "trading_session", reason: "missing broker session" }, PriceReturn20D: { valid: false, expected_window: 21, cadence: "trading_session", reason: "missing price session" } }, missing_sessions: { broker: ["2026-08-19"], price: ["2026-08-18"] }, holding_missing_weeks: [] } } });
+    }
+    const targetedMatch = url.pathname.match(/^\/api\/stocks\/(\d+)\/fetch-and-score$/);
+    if (targetedMatch) {
+      if (route.request().method() === "POST") {
+        targetedPolls = 0;
+        return route.fulfill({ status: 202, json: { job_id: 77, stock_id: targetedMatch[1], status: "RUNNING", run_mode: "targeted_fetch_and_score", target_date: "2026-08-20", phase: "queued", progress: { completed: 0, total: 5 }, datasets: {} } });
+      }
+      targetedPolls += 1;
+      return route.fulfill({ json: { job_id: 77, stock_id: targetedMatch[1], status: targetedPolls < 1 ? "RUNNING" : "SUCCESS", run_mode: "targeted_fetch_and_score", target_date: "2026-08-20", phase: "completed", progress: { completed: 5, total: 5 }, score: { score: 87.5, status: "STRONG_ACCUMULATION" }, readiness: { stock_id: targetedMatch[1], ready: true, missing_reasons: [] }, datasets: {}, fetch_errors: [] } });
     }
     const match = url.pathname.match(/^\/api\/stocks\/(\d+)$/);
     if (match) {
@@ -253,4 +263,13 @@ test("detail exposes provenance formula broker caveat 5-percent unavailable and 
   await expect(page.getByTestId("chart-axis-y").filter({ hasText: "外資持股比例（%）" })).toBeVisible();
   const holdingChart = page.getByRole("region", { name: ">400／>1000 lots 持股比例" });
   await expect(holdingChart.locator("polyline")).toHaveCount(4);
+});
+
+test("single-stock remediation fetches missing sources and reports the immediate score", async ({ page }) => {
+  await page.goto("/");
+  await page.getByTestId("stock-row").first().click();
+  await expect(page.getByTestId("targeted-fetch-score-button")).toBeVisible();
+  await page.getByTestId("targeted-fetch-score-button").click();
+  await expect(page.getByTestId("targeted-score-status")).toContainText("SUCCESS", { timeout: 5000 });
+  await expect(page.getByTestId("targeted-score-status")).toContainText("Score 87.5");
 });
