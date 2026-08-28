@@ -607,7 +607,15 @@ def _model_rows(db: Session, model: type[Any], stock_id: str, as_of: date, cutof
     revisions = db.scalars(revision_query.order_by(SourceRevision.fetched_at, SourceRevision.id)).all()
     revision_by_key: dict[str, SourceRevision] = {}
     for revision in revisions:
-        revision_by_key[revision.natural_key] = revision
+        # Older deployments persisted the same natural key with a different
+        # JSON field order.  Rebuild the canonical key from the normalized
+        # payload before merging revisions with the typed model rows; without
+        # this, one observation could consume two slots in a 20/21-day window.
+        try:
+            canonical_key = _natural_key(dataset, revision.payload)
+        except (AttributeError, TypeError, ValueError):
+            canonical_key = revision.natural_key
+        revision_by_key[canonical_key] = revision
 
     model_query = select(model).where(model.stock_id == stock_id, model.source_date <= as_of, model.fetched_at <= cutoff)
     if source_bound:
@@ -623,9 +631,9 @@ def _model_rows(db: Session, model: type[Any], stock_id: str, as_of: date, cutof
     for row in model_rows:
         payload = {key: getattr(row, key) for key in row.__table__.columns.keys()}
         merged[_natural_key(dataset, payload)] = (payload, _payload_content_hash(payload), row.source_date, row.id)
-    for revision in revision_by_key.values():
+    for canonical_key, revision in revision_by_key.items():
         payload = dict(revision.payload)
-        merged[revision.natural_key] = (payload, _payload_content_hash(payload), revision.source_date, revision.id)
+        merged[canonical_key] = (payload, _payload_content_hash(payload), revision.source_date, revision.id)
 
     selection_limit = 100_000 if session_dates else limit
     selected = sorted(merged.values(), key=lambda item: (item[2] or date.min, item[3]))[-selection_limit:]

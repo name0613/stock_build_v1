@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import date, datetime, timezone
 
 from sqlalchemy import create_engine, select
@@ -9,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.calendar import expected_trading_sessions
 from app.finmind import FinMindError
 from app.ingestion import catch_up, evaluate_stock_readiness, evaluate_universe_readiness, calculate_stock_features_and_score, fetch_and_score_stock, score_existing_data
-from app.models import AccumulationScore, Base, BrokerDaily, DataSyncStatus, ForeignShareholdingDaily, HoldingDistribution, InstitutionalDaily, PriceDaily, Stock
+from app.models import AccumulationScore, Base, BrokerDaily, DataSyncStatus, ForeignShareholdingDaily, HoldingDistribution, InstitutionalDaily, PriceDaily, SourceRevision, Stock
 from app.scoring import BROKER_ROW_CONTRACT_VERSION, HOLDING_CANONICAL_LEVELS
 
 
@@ -143,6 +144,48 @@ def test_targeted_fetch_reuses_complete_sources_and_scores_after_missing_broker_
     assert [call[0] for call in client.calls] == ["TaiwanStockTradingDailyReport"]
     persisted = db.scalar(select(AccumulationScore).where(AccumulationScore.stock_id == "9001", AccumulationScore.source_date == END))
     assert persisted is not None and persisted.score is not None
+
+
+def test_readiness_normalizes_legacy_source_revision_key_order() -> None:
+    db = _db()
+    _seed_universe(db)
+    _seed_complete_sources(db, "9001")
+
+    # Pre-revision deployments wrote the same natural key with reversed JSON
+    # field order.  They must merge into the typed row, not consume a second
+    # slot in the 21-observation price window.
+    recent_prices = db.scalars(
+        select(PriceDaily)
+        .where(PriceDaily.stock_id == "9001")
+        .order_by(PriceDaily.source_date.desc())
+        .limit(5)
+    ).all()
+    for index, row in enumerate(recent_prices):
+        payload = {
+            "stock_id": row.stock_id,
+            "source_date": row.source_date.isoformat(),
+            "close": row.close,
+            "volume": row.volume,
+            "change": row.change,
+            "source_dataset": row.source_dataset,
+            "fetched_at": row.fetched_at.isoformat(),
+        }
+        db.add(
+            SourceRevision(
+                dataset="TaiwanStockPrice",
+                stock_id="9001",
+                source_date=row.source_date,
+                natural_key=json.dumps({"stock_id": "9001", "source_date": row.source_date.isoformat()}, separators=(",", ":")),
+                payload=payload,
+                content_hash=f"{index + 1:064x}",
+                fetched_at=FETCHED_AT,
+            )
+        )
+    db.commit()
+
+    readiness = evaluate_stock_readiness(db, "9001", END, FETCHED_AT)
+    assert readiness["ready"] is True
+    assert readiness["coverage"]["missing_sessions"]["price"] == []
 
 
 def test_global_quota_failure_does_not_veto_existing_ready_stocks() -> None:
