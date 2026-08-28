@@ -164,7 +164,7 @@ test.beforeEach(async ({ page }) => {
 test("summary count invariant and deterministic ranking contract are exact", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByTestId("holding-status-load")).toContainText("55 / 55 檔已載入");
-  await expect(page.getByText("55 檔 · 20D persistence weighted")).toBeVisible();
+  await expect(page.getByText("55 檔 · 20D 持續性加權")).toBeVisible();
   await expect(page.getByText("21", { exact: true })).toBeVisible();
   const contract = await page.evaluate(async () => {
     const [summary, rankings, spec] = await Promise.all([
@@ -198,9 +198,10 @@ test("holding status is requested once per page load and again after refresh", a
 
 test("market status and minimum-score filters compose through the UI", async ({ page }) => {
   await page.goto("/");
+  await expect(page.getByLabel("狀態").locator("option")).toHaveText(["全部狀態", "強勢累積", "累積", "觀察", "尚無強勢證據", "資料不足", "來源覆蓋不足（評分暫停）"]);
   await page.getByLabel("市場").selectOption("上市");
   await page.getByLabel("狀態").selectOption("STRONG_ACCUMULATION");
-  await page.getByLabel("Score ≥").fill("90");
+  await page.getByLabel("評分 ≥").fill("90");
   const expectedIds = stocks.filter((stock) => stock.market === "上市" && stock.status === "STRONG_ACCUMULATION" && stock.score != null && stock.score >= 90).map((stock) => stock.stock_id);
   await expect.poll(async () => page.getByTestId("stock-row").count()).toBe(expectedIds.length);
   expect(await page.getByTestId("stock-row").evaluateAll((rows) => rows.map((row) => row.getAttribute("data-stock-id")))).toEqual(expectedIds);
@@ -233,8 +234,8 @@ test("score pagination keeps numeric values ahead of null and sorting resets pag
 test("manual local scoring button reports the completed job", async ({ page }) => {
   await page.goto("/");
   await page.getByTestId("score-current-button").click();
-  await expect(page.getByTestId("score-current-status")).toContainText("SUCCESS");
-  await expect(page.getByTestId("score-current-status")).toContainText("52 筆 numeric");
+  await expect(page.getByTestId("score-current-status")).toContainText("完成");
+  await expect(page.getByTestId("score-current-status")).toContainText("52 筆數值評分");
 });
 
 test("detail exposes provenance formula broker caveat 5-percent unavailable and null gaps", async ({ page }) => {
@@ -243,10 +244,10 @@ test("detail exposes provenance formula broker caveat 5-percent unavailable and 
   await expect(page.getByTestId("stock-diagnosis")).toContainText("分點：20 個交易日資料不足");
   await expect(page.getByTestId("stock-diagnosis")).toContainText("股價：21 個交易日資料不足");
   await expect(page.getByTestId("stock-diagnosis")).toContainText("missing broker session");
-  await expect(page.getByText("Final = institutional 35% + ownership 35% + broker 30% + low-profile modifier。", { exact: false })).toBeVisible();
-  await expect(page.getByText(`Formula hash ${formulaHash}`)).toBeVisible();
+  await expect(page.getByText("最終評分 = 法人 35% ＋持股結構 35% ＋分點 30% ＋低調修正。", { exact: false })).toBeVisible();
+  await expect(page.getByText(`公式雜湊 ${formulaHash}`)).toBeVisible();
   await expect(page.getByText("v6 只計入逐列驗證的正買超事件，未出現分點保持 unknown，絕不補零。", { exact: false })).toBeVisible();
-  await expect(page.getByText("分點資料 unavailable")).toBeVisible();
+  await expect(page.getByText("尚無分點資料")).toBeVisible();
   await expect(page.getByRole("columnheader", { name: "買進（股）" })).toBeVisible();
   await expect(page.getByRole("columnheader", { name: "賣出（股）" })).toBeVisible();
   await expect(page.getByRole("columnheader", { name: "淨買（股）" })).toBeVisible();
@@ -254,7 +255,7 @@ test("detail exposes provenance formula broker caveat 5-percent unavailable and 
   await expect(page.getByRole("columnheader", { name: "負值天數（交易日）" })).toBeVisible();
   await expect(page.getByText("買進、賣出、淨買皆為股數（股），不是張數；1 張 = 1,000 股。正值天數與負值天數以交易日計算。", { exact: true })).toBeVisible();
   await expect(page.getByTestId("source-major_shareholder_5pct")).toContainText("持股超過 5% 股東");
-  await expect(page.getByTestId("source-major_shareholder_5pct")).toContainText("UNAVAILABLE_NOT_CONFIGURED");
+  await expect(page.getByTestId("source-major_shareholder_5pct")).toContainText("尚未設定");
   await expect(page.getByTestId("chart-axis-x")).toHaveCount(4);
   await expect(page.getByTestId("chart-axis-y")).toHaveCount(4);
   await expect(page.getByTestId("chart-x-tick")).toHaveCount(20);
@@ -270,6 +271,6 @@ test("single-stock remediation fetches missing sources and reports the immediate
   await page.getByTestId("stock-row").first().click();
   await expect(page.getByTestId("targeted-fetch-score-button")).toBeVisible();
   await page.getByTestId("targeted-fetch-score-button").click();
-  await expect(page.getByTestId("targeted-score-status")).toContainText("SUCCESS", { timeout: 5000 });
+  await expect(page.getByTestId("targeted-score-status")).toContainText("完成", { timeout: 5000 });
   await expect(page.getByTestId("targeted-score-status")).toContainText("Score 87.5");
 });

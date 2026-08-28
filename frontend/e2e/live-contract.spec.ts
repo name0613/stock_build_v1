@@ -112,13 +112,13 @@ test("live detail renders exact provenance formula unavailable policy broker cav
   const row = page.getByTestId("stock-row").filter({ hasText: stockId }).first();
   await expect(row).toBeVisible();
   await row.click();
-  await expect(page.getByText("Final = institutional 35% + ownership 35% + broker 30% + low-profile modifier。", { exact: false })).toBeVisible();
+  await expect(page.getByText("最終評分 = 法人 35% ＋持股結構 35% ＋分點 30% ＋低調修正。", { exact: false })).toBeVisible();
   await expect(page.getByText("分點是券商營業據點的彙總，不等同於一位自然人或「主力」", { exact: false })).toBeVisible();
-  await expect(page.getByText(`Formula hash ${detail.score.formula_hash}`)).toBeVisible();
+  await expect(page.getByText(`公式雜湊 ${detail.score.formula_hash}`)).toBeVisible();
   await expect(page.getByText("v6 只計入逐列驗證的正買超事件，未出現分點保持 unknown，絕不補零。", { exact: false })).toBeVisible();
   testInfo.annotations.push({ type: "broker_disclaimer", description: "true" });
-  await expect(page.getByTestId("source-major_shareholder_5pct")).toContainText("UNAVAILABLE_NOT_CONFIGURED");
-  await expect(page.getByText(/分點資料 unavailable|持續承接證據/).first()).toBeVisible();
+  await expect(page.getByTestId("source-major_shareholder_5pct")).toContainText("尚未設定");
+  await expect(page.getByText(/尚無分點資料|持續承接證據/).first()).toBeVisible();
 
   const expectedSegments = ["400", "1000"].reduce((total, key) => {
     const values = (detail.holding_series[key] || []).map((point: { value: number | null }) => point.value);
