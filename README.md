@@ -63,6 +63,8 @@ Worker 啟動時在來源發布窗口已開啟後才做完整 catch-up：動態 
 
 - `/health`：API／DB health。
 - `/api/data-status`：每個 dataset 的 status、source date、last successful sync、job runs 與安全錯誤碼。
+- `POST /api/score/current`：只用目前 PostgreSQL 已寫入的來源資料建立背景評分作業，不呼叫 FinMind；以 `GET /api/score/current?job_id=<id>` 查詢進度與結果。
+- `/api/readiness?stock_id=<代碼>`：單股 side-effect-free 診斷，列出缺少的評分欄位、來源日期與穩定缺失原因。
 - `/api/docs`：API schema。
 - `ACCESS_DENIED` 代表 plan permission，不代表沒有資料；`SCHEMA_MISMATCH` 代表欄位漂移，不會 silent ingest。
 - Raw Parquet 在 `/data/raw/<dataset>/date=YYYY-MM-DD/`，metadata sidecar 保存 source、parameters（不含 token）、source date、fetched_at、SHA256。

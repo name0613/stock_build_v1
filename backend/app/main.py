@@ -3,20 +3,21 @@ from __future__ import annotations
 import logging
 import json
 import re
+from threading import Lock
 from pathlib import Path
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import and_, asc, case, desc, func, nulls_last, select
 from sqlalchemy.orm import Session
 
 from .config import get_settings
-from .db import get_db, init_db
+from .db import SessionLocal, get_db, init_db
 from .finmind import GLOBAL_PROVIDER_FAILURE_CODES
 from .features import build_features, holding_distribution_features
-from .ingestion import authoritative_expected_latest_source_date, authoritative_source_state_hash, evaluate_stock_readiness, evaluate_universe_readiness, score_snapshot_state, seed_score_version
+from .ingestion import authoritative_expected_latest_source_date, authoritative_source_state_hash, evaluate_stock_readiness, evaluate_universe_readiness, score_existing_data, score_snapshot_state, seed_score_version
 from .models import AccumulationFeature, AccumulationScore, BrokerDaily, DataSyncStatus, ForeignShareholdingDaily, HoldingDistribution, InstitutionalDaily, JobRun, PriceDaily, Stock
 from .schemas import PaginatedStocks, StockListItem
 from .calendar import CALENDAR_HASH, CALENDAR_VERSION
@@ -30,7 +31,7 @@ BUILD_METADATA_PATH = Path("/app/build-metadata.json")
 HEX_40 = re.compile(r"^[a-f0-9]{40}$")
 HEX_64 = re.compile(r"^[a-f0-9]{64}$")
 app = FastAPI(title=settings.app_name, version="0.1.0", docs_url="/api/docs", redoc_url=None)
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["GET"], allow_headers=["*"])
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["GET", "POST"], allow_headers=["*"])
 
 CURRENT_SCORE_DATASETS = (
     "TaiwanStockInfo",
@@ -49,6 +50,7 @@ PARTIAL_SOURCE_SPECS = {
     "broker": (BrokerDaily, "TaiwanStockTradingDailyReport"),
     "price": (PriceDaily, "TaiwanStockPrice"),
 }
+_MANUAL_SCORE_LOCK = Lock()
 
 
 @app.on_event("startup")
@@ -140,7 +142,7 @@ def summary(db: Session = Depends(get_db)) -> dict[str, Any]:
 @app.get("/api/readiness")
 def readiness(source_date: date | None = Query(None), stock_id: str | None = Query(None, max_length=16), db: Session = Depends(get_db)) -> dict[str, Any]:
     """Deterministic per-stock readiness audit; never writes score rows."""
-    target = source_date or _latest_score_date(db) or date.today()
+    target = _current_data_date(db, source_date)
     if stock_id:
         stock = db.get(Stock, stock_id)
         if stock is None or not stock.is_common_stock:
@@ -148,6 +150,118 @@ def readiness(source_date: date | None = Query(None), stock_id: str | None = Que
         return evaluate_stock_readiness(db, stock_id, target)
     stock_ids = list(db.scalars(select(Stock.stock_id).where(Stock.is_common_stock.is_(True)).order_by(Stock.stock_id)).all())
     return evaluate_universe_readiness(db, stock_ids, target)
+
+
+def _current_data_date(db: Session, requested: date | None = None) -> date:
+    """Choose the current scoring target without asking FinMind for more data."""
+    if requested is not None:
+        return requested
+    expected_dates = [
+        expected
+        for dataset in CURRENT_SCORE_DATASETS
+        if (expected := authoritative_expected_latest_source_date(dataset)) is not None
+    ]
+    if expected_dates:
+        return max(expected_dates)
+    persisted_dates = [
+        row.latest_source_date
+        for row in db.scalars(select(DataSyncStatus).where(DataSyncStatus.dataset.in_(CURRENT_SCORE_DATASETS))).all()
+        if row.latest_source_date is not None
+    ]
+    return max(persisted_dates, default=date.today())
+
+
+def _score_job_payload(job: JobRun) -> dict[str, Any]:
+    checkpoint = job.checkpoint_state if isinstance(job.checkpoint_state, dict) else {}
+    metrics = checkpoint.get("score_metrics") if isinstance(checkpoint.get("score_metrics"), dict) else {}
+    return {
+        "job_id": job.id,
+        "status": job.status,
+        "run_mode": checkpoint.get("run_mode", "existing_data"),
+        "target_date": job.requested_end_date,
+        "started_at": job.started_at,
+        "finished_at": job.finished_at,
+        "processed_stock_count": checkpoint.get("processed_stock_count", metrics.get("evaluated_stock_count", 0)),
+        "universe_stock_count": checkpoint.get("universe_stock_count", metrics.get("universe_stock_count", job.stocks_attempted)),
+        "scores": checkpoint.get("scores", {}),
+        "score_metrics": metrics,
+        "error_code": job.error_code,
+    }
+
+
+def _mark_manual_score_failed(job_id: int, exc: Exception) -> None:
+    db = SessionLocal()
+    try:
+        job = db.get(JobRun, job_id)
+        if job is None or job.status != "RUNNING":
+            return
+        job.status = "FAILED"
+        job.finished_at = datetime.now(timezone.utc)
+        job.error_code = getattr(exc, "code", "MANUAL_SCORE_FAILED")
+        job.error = str(exc)[:500]
+        db.commit()
+    finally:
+        db.close()
+
+
+def _run_manual_score(job_id: int, target: date) -> None:
+    if not _MANUAL_SCORE_LOCK.acquire(blocking=False):
+        _mark_manual_score_failed(job_id, RuntimeError("another score job is already running"))
+        return
+    db = SessionLocal()
+    try:
+        job = db.get(JobRun, job_id)
+        if job is None or job.status != "RUNNING":
+            return
+        score_existing_data(db, target, job=job)
+    except Exception as exc:
+        db.rollback()
+        _mark_manual_score_failed(job_id, exc)
+    finally:
+        db.close()
+        _MANUAL_SCORE_LOCK.release()
+
+
+@app.post("/api/score/current", status_code=202)
+def start_current_score(background_tasks: BackgroundTasks, source_date: date | None = Query(None), db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Queue a score run using only source rows already stored locally."""
+    running = db.scalar(
+        select(JobRun)
+        .where(JobRun.dataset == "score", JobRun.status == "RUNNING")
+        .order_by(JobRun.id.desc())
+        .limit(1)
+    )
+    if running is not None:
+        raise HTTPException(status_code=409, detail={"code": "SCORE_JOB_ALREADY_RUNNING", "job_id": running.id})
+    target = _current_data_date(db, source_date)
+    stock_count = db.scalar(select(func.count()).select_from(Stock).where(Stock.is_common_stock.is_(True))) or 0
+    job = JobRun(
+        dataset="score",
+        requested_date=target,
+        requested_start_date=target,
+        requested_end_date=target,
+        status="RUNNING",
+        started_at=datetime.now(timezone.utc),
+        stocks_attempted=stock_count,
+        checkpoint_state={"run_mode": "existing_data", "target_date": target.isoformat(), "processed_stock_count": 0, "universe_stock_count": stock_count, "scores": {}, "score_metrics": {}},
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    background_tasks.add_task(_run_manual_score, job.id, target)
+    return _score_job_payload(job)
+
+
+@app.get("/api/score/current")
+def current_score_status(job_id: int | None = Query(None, ge=1), db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Return the latest or requested local-only score job status."""
+    if job_id is not None:
+        job = db.get(JobRun, job_id)
+    else:
+        job = db.scalar(select(JobRun).where(JobRun.dataset == "score").order_by(JobRun.id.desc()).limit(1))
+    if job is None or job.dataset != "score":
+        raise HTTPException(status_code=404, detail="score job not found")
+    return _score_job_payload(job)
 
 
 @app.get("/api/stocks", response_model=PaginatedStocks)

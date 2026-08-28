@@ -129,6 +129,15 @@ async function installApiFixtures(page: Page) {
     if (url.pathname === "/api/score-spec") {
       return route.fulfill({ json: { score_version: "s-only-v6", formula_hash: formulaHash, spec: { weights: { institutional_persistence: 0.35, ownership_accumulation: 0.35, broker_persistence: 0.30 } } } });
     }
+    if (url.pathname === "/api/score/current") {
+      if (route.request().method() === "POST") {
+        return route.fulfill({ status: 202, json: { job_id: 42, status: "SUCCESS", run_mode: "existing_data", target_date: "2026-08-20", processed_stock_count: 55, universe_stock_count: 55, scores: { STRONG_ACCUMULATION: 21, DATA_INSUFFICIENT: 3 }, score_metrics: { score_rows_processed: 52, ready_stock_count: 52, not_ready_stock_count: 3 } } });
+      }
+      return route.fulfill({ status: 404, json: { detail: "score job not found" } });
+    }
+    if (url.pathname === "/api/readiness") {
+      return route.fulfill({ json: { stock_id: "1000", ready: false, missing_reasons: ["missing_broker", "missing_price"], source_date: "2026-08-20", coverage: { readiness_reason_codes: ["missing_broker", "missing_price"], RequiredFeatureValidation: { BrokerPersistenceScore: { valid: false, expected_window: 20, cadence: "trading_session", reason: "missing broker session" }, PriceReturn20D: { valid: false, expected_window: 21, cadence: "trading_session", reason: "missing price session" } }, missing_sessions: { broker: ["2026-08-19"], price: ["2026-08-18"] }, holding_missing_weeks: [] } } });
+    }
     const match = url.pathname.match(/^\/api\/stocks\/(\d+)$/);
     if (match) {
       const stock = stocks.find((item) => item.stock_id === match[1]);
@@ -211,9 +220,19 @@ test("score pagination keeps numeric values ahead of null and sorting resets pag
   await expect(page.getByTestId("stock-row").first()).toHaveAttribute("data-stock-id", "1054");
 });
 
+test("manual local scoring button reports the completed job", async ({ page }) => {
+  await page.goto("/");
+  await page.getByTestId("score-current-button").click();
+  await expect(page.getByTestId("score-current-status")).toContainText("SUCCESS");
+  await expect(page.getByTestId("score-current-status")).toContainText("52 筆 numeric");
+});
+
 test("detail exposes provenance formula broker caveat 5-percent unavailable and null gaps", async ({ page }) => {
   await page.goto("/");
   await page.getByTestId("stock-row").first().click();
+  await expect(page.getByTestId("stock-diagnosis")).toContainText("分點：20 個交易日資料不足");
+  await expect(page.getByTestId("stock-diagnosis")).toContainText("股價：21 個交易日資料不足");
+  await expect(page.getByTestId("stock-diagnosis")).toContainText("missing broker session");
   await expect(page.getByText("Final = institutional 35% + ownership 35% + broker 30% + low-profile modifier。", { exact: false })).toBeVisible();
   await expect(page.getByText(`Formula hash ${formulaHash}`)).toBeVisible();
   await expect(page.getByText("v6 只計入逐列驗證的正買超事件，未出現分點保持 unknown，絕不補零。", { exact: false })).toBeVisible();

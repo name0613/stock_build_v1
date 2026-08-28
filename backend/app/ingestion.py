@@ -778,6 +778,124 @@ def calculate_stock_features_and_score(db: Session, stock_id: str, as_of: date |
     return _persist_stock_evaluation(db, evaluation)
 
 
+def score_existing_data(
+    db: Session,
+    as_of: date,
+    stock_ids: list[str] | None = None,
+    progress_callback: Callable[[int, int], None] | None = None,
+    job: JobRun | None = None,
+) -> dict[str, Any]:
+    """Score persisted inputs only; never call FinMind or refresh source data.
+
+    This powers the manual UI action.  Every eligible stock gets an explicit
+    score row: numeric when its point-in-time inputs satisfy the contract, or
+    ``DATA_INSUFFICIENT`` with readiness evidence when they do not.
+    """
+    ids = stock_ids or list(db.scalars(select(Stock.stock_id).where(Stock.is_common_stock.is_(True)).order_by(Stock.stock_id)).all())
+    score_job = job or _job_start(db, "score", as_of, as_of, stocks_attempted=len(ids))
+    score_cutoff = _now()
+    scores: dict[str, int] = {}
+    ready_stock_count = 0
+    not_ready_stock_count = 0
+    score_rows_failed = 0
+    reason_counts: dict[str, int] = {}
+
+    for index, stock_id in enumerate(ids, start=1):
+        try:
+            evaluation = _evaluate_stock_inputs(db, stock_id, as_of, score_cutoff)
+            if evaluation["ready"]:
+                ready_stock_count += 1
+            else:
+                not_ready_stock_count += 1
+                for reason in evaluation["missing_reasons"]:
+                    reason_counts[reason] = reason_counts.get(reason, 0) + 1
+            score = _persist_stock_evaluation(db, evaluation)
+            scores[score.status] = scores.get(score.status, 0) + 1
+        except Exception:
+            db.rollback()
+            not_ready_stock_count += 1
+            score_rows_failed += 1
+            reason_counts["score_evaluation_failed"] = reason_counts.get("score_evaluation_failed", 0) + 1
+            # Keep the accounting explicit even if one isolated stock fails.
+            try:
+                failure_coverage = {
+                    "InstitutionalDataAvailable": False,
+                    "ForeignHoldingDataAvailable": False,
+                    "HoldingDistributionAvailable": False,
+                    "BrokerDataAvailable": False,
+                    "PriceDataAvailable": False,
+                    "RequiredFeatureValidation": {},
+                    "missing_reasons": ["score evaluation failed before readiness could be proven"],
+                    "readiness_reason_codes": ["score_evaluation_failed"],
+                    "calendar_version": CALENDAR_VERSION,
+                }
+                failure_evaluation = {
+                    "stock_id": stock_id,
+                    "as_of": as_of,
+                    "knowledge_cutoff": score_cutoff,
+                    "features": {},
+                    "coverage": failure_coverage,
+                    "score_result": calculate_score({}, failure_coverage),
+                    "input_hashes": [],
+                    "snapshot_hash": hashlib.sha256(b"[]").hexdigest(),
+                    "latest_source_date": None,
+                    "ready": False,
+                    "missing_reasons": ["score_evaluation_failed"],
+                }
+                _persist_stock_evaluation(db, failure_evaluation)
+                scores["DATA_INSUFFICIENT"] = scores.get("DATA_INSUFFICIENT", 0) + 1
+            except Exception:
+                db.rollback()
+                scores["FAILED"] = scores.get("FAILED", 0) + 1
+
+        if progress_callback:
+            progress_callback(index, len(ids))
+        if index == len(ids) or index % 25 == 0:
+            score_job.checkpoint_state = {
+                "run_mode": "existing_data",
+                "target_date": as_of.isoformat(),
+                "processed_stock_count": index,
+                "universe_stock_count": len(ids),
+                "scores": scores,
+                "score_metrics": {
+                    "universe_stock_count": len(ids),
+                    "evaluated_stock_count": index,
+                    "ready_stock_count": ready_stock_count,
+                    "not_ready_stock_count": not_ready_stock_count,
+                    "score_rows_processed": sum(count for status, count in scores.items() if status not in {"DATA_INSUFFICIENT", "FAILED"}),
+                    "score_rows_data_insufficient": scores.get("DATA_INSUFFICIENT", 0),
+                    "score_rows_failed": score_rows_failed,
+                    "missing_reason_counts": reason_counts,
+                    "accounting_invariant": ready_stock_count + not_ready_stock_count == index,
+                },
+            }
+            db.commit()
+
+    score_rows_data_insufficient = scores.get("DATA_INSUFFICIENT", 0)
+    score_rows_processed = sum(count for status, count in scores.items() if status not in {"DATA_INSUFFICIENT", "FAILED"})
+    metrics = {
+        "universe_stock_count": len(ids),
+        "evaluated_stock_count": len(ids),
+        "ready_stock_count": ready_stock_count,
+        "not_ready_stock_count": not_ready_stock_count,
+        "score_rows_processed": score_rows_processed,
+        "score_rows_data_insufficient": score_rows_data_insufficient,
+        "score_rows_failed": score_rows_failed,
+        "missing_reason_counts": reason_counts,
+        "accounting_invariant": ready_stock_count + not_ready_stock_count == len(ids),
+    }
+    status = "SCORE_BLOCKED_BY_SOURCE_COVERAGE" if ready_stock_count == 0 and score_rows_failed == 0 else ("SUCCESS" if score_rows_failed == 0 else "PARTIAL")
+    checkpoint = {
+        "run_mode": "existing_data",
+        "target_date": as_of.isoformat(),
+        "scores": scores,
+        "score_metrics": metrics,
+        **score_readiness_checkpoint(db, as_of, len(ids)),
+    }
+    _job_finish(db, score_job, status, stocks_completed=len(ids) - score_rows_failed, stocks_failed=score_rows_failed, checkpoint_state=checkpoint)
+    return {"job_id": score_job.id, "status": status, "target_date": as_of.isoformat(), "scores": scores, "score_metrics": metrics}
+
+
 def seed_score_version(db: Session) -> None:
     current = db.get(ScoreVersion, SCORE_VERSION)
     if current is None:

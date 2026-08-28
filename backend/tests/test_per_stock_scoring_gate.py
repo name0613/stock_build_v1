@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.calendar import expected_trading_sessions
 from app.finmind import FinMindError
-from app.ingestion import catch_up, evaluate_stock_readiness, evaluate_universe_readiness, calculate_stock_features_and_score
+from app.ingestion import catch_up, evaluate_stock_readiness, evaluate_universe_readiness, calculate_stock_features_and_score, score_existing_data
 from app.models import AccumulationScore, Base, BrokerDaily, DataSyncStatus, ForeignShareholdingDaily, HoldingDistribution, InstitutionalDaily, PriceDaily, Stock
 from app.scoring import BROKER_ROW_CONTRACT_VERSION, HOLDING_CANONICAL_LEVELS
 
@@ -66,6 +66,26 @@ def test_mixed_readiness_scores_ready_stocks_and_fails_closed_others() -> None:
     scores = [calculate_stock_features_and_score(db, stock_id, END, FETCHED_AT) for stock_id in ("9001", "9002", "9003", "9004")]
     assert [score.stock_id for score in scores if score.score is not None] == ["9001", "9004"]
     assert all(score.status == "DATA_INSUFFICIENT" and score.score is None for score in scores if score.stock_id in {"9002", "9003"})
+
+
+def test_manual_existing_data_score_persists_mixed_results_without_provider_calls() -> None:
+    db = _db()
+    _seed_universe(db)
+    _seed_complete_sources(db, "9001")
+
+    result = score_existing_data(db, END, ["9001", "9002", "9003", "9004"])
+
+    assert result["status"] == "SUCCESS"
+    assert result["score_metrics"]["universe_stock_count"] == 4
+    assert result["score_metrics"]["ready_stock_count"] == 1
+    assert result["score_metrics"]["not_ready_stock_count"] == 3
+    assert result["score_metrics"]["score_rows_processed"] == 1
+    assert result["score_metrics"]["score_rows_data_insufficient"] == 3
+    assert result["score_metrics"]["accounting_invariant"] is True
+    rows = db.scalars(select(AccumulationScore).where(AccumulationScore.source_date == END)).all()
+    assert len(rows) == 4
+    assert next(row for row in rows if row.stock_id == "9001").score is not None
+    assert all(row.score is None and row.status == "DATA_INSUFFICIENT" for row in rows if row.stock_id != "9001")
 
 
 def test_global_quota_failure_does_not_veto_existing_ready_stocks() -> None:
