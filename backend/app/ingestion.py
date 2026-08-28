@@ -852,7 +852,7 @@ async def fetch_and_score_stock(
                 "status": "PASS",
                 "remaining": raw_quota.get("provider_reported_remaining"),
                 "limit_per_hour": raw_quota.get("provider_reported_limit_per_hour"),
-                "plan": raw_quota.get("provider_plan"),
+                "plan": raw_quota.get("plan"),
             }
         except FinMindError as exc:
             quota = {"status": "FAILED", "error_code": exc.code}
