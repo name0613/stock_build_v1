@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import json
 import re
@@ -272,7 +273,7 @@ def _run_targeted_fetch_and_score(job_id: int, stock_id: str, target: date) -> N
         if job is None or job.status != "RUNNING":
             return
         from .finmind import FinMindClient
-        fetch_and_score_stock(db, FinMindClient(settings), stock_id, target, job=job)
+        asyncio.run(fetch_and_score_stock(db, FinMindClient(settings), stock_id, target, job=job))
     except Exception as exc:
         db.rollback()
         _mark_targeted_score_failed(job_id, exc)

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from datetime import date
+from threading import Lock
 
 from fastapi.testclient import TestClient
 
@@ -118,6 +120,47 @@ def test_worker_health_contract_is_sanitized() -> None:
     assert response.status_code == 200
     assert "token" not in response.text.lower()
     assert "password" not in response.text.lower()
+
+
+def test_targeted_background_runner_awaits_async_fetch(monkeypatch) -> None:
+    import app.finmind
+    import app.main
+
+    class Job:
+        status = "RUNNING"
+
+    class FakeDb:
+        def __init__(self) -> None:
+            self.job = Job()
+            self.closed = False
+
+        def get(self, _model, _job_id):
+            return self.job
+
+        def rollback(self):
+            raise AssertionError("targeted runner should not need rollback")
+
+        def close(self):
+            self.closed = True
+
+    fake_db = FakeDb()
+    called: list[tuple[str, date]] = []
+
+    async def fake_fetch(db, client, stock_id, target, *, job):
+        assert db is fake_db
+        assert client == "client"
+        assert job is fake_db.job
+        called.append((stock_id, target))
+
+    monkeypatch.setattr(app.main, "_TARGETED_SCORE_LOCK", Lock())
+    monkeypatch.setattr(app.main, "SessionLocal", lambda: fake_db)
+    monkeypatch.setattr(app.finmind, "FinMindClient", lambda _settings: "client")
+    monkeypatch.setattr(app.main, "fetch_and_score_stock", fake_fetch)
+
+    app.main._run_targeted_fetch_and_score(123, "2408", date(2026, 8, 27))
+
+    assert called == [("2408", date(2026, 8, 27))]
+    assert fake_db.closed is True
 
 
 def test_build_metadata_reports_valid_missing_malformed_and_mismatched_states(tmp_path) -> None:
