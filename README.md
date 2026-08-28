@@ -37,7 +37,7 @@ docker compose up -d
 docker compose ps
 ```
 
-預設 Web port 是 `18080`；若 NAS 該 port 已占用，以 `WEB_PORT` 指定已驗證未使用的 LAN port。PostgreSQL 僅在 internal network，LAN 只看到 nginx。
+預設 Web port 是 `18080`；若 NAS 該 port 已占用，以 `WEB_PORT` 指定已驗證未使用的 LAN port。PostgreSQL 僅在 internal network；API 為了執行單股 FinMind 補抓而同時使用 internal 與 public egress bridge，但不發布 API port，LAN 只看到 nginx。
 
 ## NAS deployment
 

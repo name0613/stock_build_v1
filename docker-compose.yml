@@ -46,7 +46,11 @@ services:
       postgres: {condition: service_healthy}
     volumes:
       - raw_data:/data/raw
-    networks: [internal]
+    # The API owns the targeted single-stock remediation background task.
+    # Keep it on the internal service network while granting the same
+    # outbound FinMind egress path already used by the worker.  No API port
+    # is published; LAN traffic still enters through nginx only.
+    networks: [internal, public]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"]
       interval: 15s
