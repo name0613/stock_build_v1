@@ -328,12 +328,12 @@ def stocks(
 ) -> PaginatedStocks:
     latest_scores = _latest_numeric_scores_subquery()
     price_value, price_change = _price_subqueries()
-    feature_values, feature_date = _feature_subqueries()
+    feature_values, feature_date, feature_coverage = _feature_subqueries()
     score_value = latest_scores.c.score
     score_status = latest_scores.c.status
     score_version = latest_scores.c.score_version
     score_coverage = latest_scores.c.coverage
-    base = select(Stock, score_value, score_status, score_version, score_coverage, price_value, price_change, feature_values, feature_date).outerjoin(
+    base = select(Stock, score_value, score_status, score_version, score_coverage, price_value, price_change, feature_values, feature_date, feature_coverage).outerjoin(
         latest_scores,
         and_(latest_scores.c.score_stock_id == Stock.stock_id, latest_scores.c.score_rank == 1),
     ).where(Stock.is_common_stock.is_(True))
@@ -355,7 +355,11 @@ def stocks(
     base = base.order_by(nulls_last(direction) if sort == "score" else direction, asc(Stock.stock_id))
     total = db.scalar(select(func.count()).select_from(base.subquery())) or 0
     rows = db.execute(base.offset((page - 1) * page_size).limit(page_size)).all()
-    partial_data = _partial_stock_snapshots(db, [row[0].stock_id for row in rows])
+    persisted_features = {
+        row[0].stock_id: {"features": _json_dict(row[7]), "coverage": _json_dict(row[9])}
+        for row in rows
+    }
+    partial_data = _partial_stock_snapshots(db, [row[0].stock_id for row in rows], persisted_features)
     items = [_stock_item_from_row(row, partial_data.get(row[0].stock_id)) for row in rows]
     return PaginatedStocks(items=items, total=total, page=page, page_size=page_size)
 
@@ -710,17 +714,25 @@ def _price_subqueries():
 def _feature_subqueries(latest: date | None = None):
     feature_query = select(AccumulationFeature.values).where(AccumulationFeature.stock_id == Stock.stock_id)
     date_query = select(AccumulationFeature.latest_source_date).where(AccumulationFeature.stock_id == Stock.stock_id)
+    coverage_query = select(AccumulationFeature.coverage).where(AccumulationFeature.stock_id == Stock.stock_id)
     if latest is not None:
         feature_query = feature_query.where(AccumulationFeature.source_date == latest)
         date_query = date_query.where(AccumulationFeature.source_date == latest)
+        coverage_query = coverage_query.where(AccumulationFeature.source_date == latest)
     order = (AccumulationFeature.source_date.desc(), AccumulationFeature.calculated_at.desc(), AccumulationFeature.id.desc())
-    return (feature_query.order_by(*order).limit(1).correlate(Stock).scalar_subquery(), date_query.order_by(*order).limit(1).correlate(Stock).scalar_subquery())
+    return (
+        feature_query.order_by(*order).limit(1).correlate(Stock).scalar_subquery(),
+        date_query.order_by(*order).limit(1).correlate(Stock).scalar_subquery(),
+        coverage_query.order_by(*order).limit(1).correlate(Stock).scalar_subquery(),
+    )
 
 
 def _stock_item_from_row(row: Any, partial_data: dict[str, Any] | None = None) -> StockListItem:
-    stock, score, status, score_version, coverage, price, price_change, features, latest_data = row
+    stock, score, status, score_version, coverage, price, price_change, features, latest_data, feature_coverage = row
     raw_features = _json_dict(features)
     raw_coverage = _json_dict(coverage)
+    if not raw_coverage:
+        raw_coverage = _json_dict(feature_coverage)
     partial_data = partial_data or {}
     if not raw_features:
         raw_features = partial_data.get("features", {})
@@ -745,7 +757,7 @@ def _json_dict(value: Any) -> dict[str, Any]:
     return {}
 
 
-def _partial_stock_snapshots(db: Session, stock_ids: list[str]) -> dict[str, dict[str, Any]]:
+def _partial_stock_snapshots(db: Session, stock_ids: list[str], persisted_features: dict[str, dict[str, Any]] | None = None) -> dict[str, dict[str, Any]]:
     """Build display-only features from whatever rows are already persisted.
 
     This deliberately does not create Score rows.  A stock can therefore show
@@ -755,6 +767,13 @@ def _partial_stock_snapshots(db: Session, stock_ids: list[str]) -> dict[str, dic
     unique_ids = list(dict.fromkeys(stock_ids))
     if not unique_ids:
         return {}
+    persisted_features = persisted_features or {}
+    raw_required_ids = [
+        stock_id
+        for stock_id in unique_ids
+        if not _json_dict(persisted_features.get(stock_id, {}).get("features"))
+        or not _json_dict(persisted_features.get(stock_id, {}).get("coverage"))
+    ]
     rows_by_source: dict[str, dict[str, list[dict[str, Any]]]] = {
         name: {stock_id: [] for stock_id in unique_ids} for name in PARTIAL_SOURCE_SPECS
     }
@@ -775,9 +794,9 @@ def _partial_stock_snapshots(db: Session, stock_ids: list[str]) -> dict[str, dic
         cutoff = date.today() - timedelta(days=lookback_days)
         rows = db.scalars(
             select(model)
-            .where(model.stock_id.in_(unique_ids), model.source_dataset == dataset, model.source_date >= cutoff)
+            .where(model.stock_id.in_(raw_required_ids), model.source_dataset == dataset, model.source_date >= cutoff)
             .order_by(model.stock_id, model.source_date.asc(), model.id.asc())
-        ).all()
+        ).all() if raw_required_ids else []
         for row in rows:
             payload = {key: getattr(row, key) for key in row.__table__.columns.keys() if key != "id"}
             rows_by_source[name].setdefault(row.stock_id, []).append(payload)
@@ -792,7 +811,8 @@ def _partial_stock_snapshots(db: Session, stock_ids: list[str]) -> dict[str, dic
     }
     for stock_id in unique_ids:
         source_rows = {name: rows_by_source[name].get(stock_id, []) for name in PARTIAL_SOURCE_SPECS}
-        features = build_features(
+        persisted = persisted_features.get(stock_id, {})
+        features = _json_dict(persisted.get("features")) or build_features(
             source_rows["institutional"],
             source_rows["foreign_holding"],
             source_rows["holding_distribution"],
