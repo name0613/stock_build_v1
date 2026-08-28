@@ -9,7 +9,7 @@ from app.db import SessionLocal
 from app.calendar import CALENDAR_HASH
 from app.ingestion import authoritative_source_state_hash, score_snapshot_state
 from app.main import CURRENT_SCORE_DATASETS, app
-from app.models import DataSyncStatus, JobRun, Stock
+from app.models import AccumulationScore, DataSyncStatus, JobRun, Stock
 from app.scoring import FORMULA_HASH, SCORE_VERSION
 from sqlalchemy import func, select
 
@@ -154,3 +154,30 @@ def test_current_score_formula_or_source_binding_mismatch_does_not_hide_existing
     _seed_authoritative_sync()
     _seed_score_job(checkpoint_overrides={"formula_hash": "f" * 64})
     _assert_existing_scores_are_served(provider_blocked=False)
+
+
+def test_detail_prefers_latest_numeric_score_over_newer_fail_closed_snapshot() -> None:
+    _seed_authoritative_sync()
+    with SessionLocal() as db:
+        existing = db.scalar(select(AccumulationScore).where(AccumulationScore.stock_id == "2330", AccumulationScore.score.is_not(None)).limit(1))
+        assert existing is not None
+        db.add(AccumulationScore(
+            stock_id="2330",
+            source_date=date(2026, 8, 21),
+            score=None,
+            status="DATA_INSUFFICIENT",
+            score_version=SCORE_VERSION,
+            components={},
+            explanation=[{"label": "資料不足", "value": 0, "detail": "newer snapshot"}],
+            coverage={},
+            calculated_at=CURRENT_TIME,
+            knowledge_cutoff=CURRENT_TIME,
+            input_snapshot_hash="f" * 64,
+            input_source_hashes=[],
+            formula_hash=FORMULA_HASH,
+        ))
+        db.commit()
+    with TestClient(app) as client:
+        detail = client.get("/api/stocks/2330?limit=20").json()
+    assert detail["score"]["score"] == 88.0
+    assert detail["score"]["source_date"] == CURRENT_DATE.isoformat()

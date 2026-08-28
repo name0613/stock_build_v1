@@ -867,7 +867,10 @@ def _score_dict(db: Session, stock_id: str, latest: date | None) -> dict[str, An
     )
     if latest is not None:
         query = query.where(AccumulationScore.source_date == latest)
-    score = db.scalar(query.order_by(AccumulationScore.source_date.desc(), AccumulationScore.calculated_at.desc(), AccumulationScore.id.desc()).limit(1))
+    order = (AccumulationScore.source_date.desc(), AccumulationScore.calculated_at.desc(), AccumulationScore.id.desc())
+    score = db.scalar(query.where(AccumulationScore.score.is_not(None)).order_by(*order).limit(1))
+    if score is None:
+        score = db.scalar(query.order_by(*order).limit(1))
     if not score:
         return {"score": None, "status": "DATA_INSUFFICIENT", "score_version": SCORE_VERSION, "formula_hash": FORMULA_HASH, "coverage": {}, "explanation": [{"label": "資料不足", "value": 0, "detail": "required source coverage is incomplete; no zero substitution"}], "input_source_hashes": []}
     return {"score": score.score, "status": score.status, "score_version": score.score_version, "formula_hash": score.formula_hash or FORMULA_HASH, "components": score.components, "explanation": score.explanation, "coverage": score.coverage, "source_date": score.source_date, "calculated_at": score.calculated_at, "knowledge_cutoff": score.knowledge_cutoff, "input_snapshot_hash": score.input_snapshot_hash, "input_source_hashes": score.input_source_hashes}
