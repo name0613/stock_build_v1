@@ -326,10 +326,17 @@ def stocks(
     page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=200), search: str | None = Query(None, max_length=64), market: str | None = Query(None), industry: str | None = Query(None), status: str | None = Query(None), min_score: float | None = Query(None, ge=0, le=100), sort: str = Query("score"), order: str = Query("desc"),
     db: Session = Depends(get_db),
 ) -> PaginatedStocks:
-    score_value, score_status, score_version, score_coverage = _score_subqueries()
+    latest_scores = _latest_numeric_scores_subquery()
     price_value, price_change = _price_subqueries()
     feature_values, feature_date = _feature_subqueries()
-    base = select(Stock, score_value, score_status, score_version, score_coverage, price_value, price_change, feature_values, feature_date).where(Stock.is_common_stock.is_(True))
+    score_value = latest_scores.c.score
+    score_status = latest_scores.c.status
+    score_version = latest_scores.c.score_version
+    score_coverage = latest_scores.c.coverage
+    base = select(Stock, score_value, score_status, score_version, score_coverage, price_value, price_change, feature_values, feature_date).outerjoin(
+        latest_scores,
+        and_(latest_scores.c.score_stock_id == Stock.stock_id, latest_scores.c.score_rank == 1),
+    ).where(Stock.is_common_stock.is_(True))
     if search:
         needle = f"%{search.strip()}%"
         base = base.where((Stock.stock_id.ilike(needle)) | (Stock.stock_name.ilike(needle)))
@@ -360,8 +367,12 @@ def rankings(kind: str = Query("top"), limit: int = Query(50, ge=1, le=200), db:
     latest = _latest_score_date(db)
     if latest is None:
         return {"source_date": None, "score_version": SCORE_VERSION, "provider_state": provider_state, "items": []}
-    score_value, score_status, _, score_components = _score_subqueries(components=True)
-    query = select(Stock, score_value, score_status, score_components).where(Stock.is_common_stock.is_(True), score_value.is_not(None)).order_by(desc(score_value), asc(Stock.stock_id)).limit(limit)
+    latest_scores = _latest_numeric_scores_subquery()
+    score_value = latest_scores.c.score
+    query = select(Stock, score_value, latest_scores.c.status, latest_scores.c.components).join(
+        latest_scores,
+        and_(latest_scores.c.score_stock_id == Stock.stock_id, latest_scores.c.score_rank == 1),
+    ).where(Stock.is_common_stock.is_(True)).order_by(desc(score_value), asc(Stock.stock_id)).limit(limit)
     rows = db.execute(query).all()
     return {"source_date": latest, "kind": kind, "score_version": SCORE_VERSION, "provider_state": provider_state, "items": [{"stock_id": row[0].stock_id, "stock_name": row[0].stock_name, "market": row[0].market, "score": row[1], "status": row[2], "components": row[3]} for row in rows]}
 
@@ -662,6 +673,32 @@ def _score_subqueries(latest: date | None = None, components: bool = False):
             score_query = score_query.where(AccumulationScore.source_date == latest)
         return score_query.order_by(AccumulationScore.source_date.desc(), AccumulationScore.calculated_at.desc(), AccumulationScore.id.desc()).limit(1).correlate(Stock).scalar_subquery()
     return field("score"), field("status"), field("score_version"), field("components" if components else "coverage")
+
+
+def _latest_numeric_scores_subquery():
+    """Return one latest numeric score per stock for list/ranking queries.
+
+    A windowed relation avoids running four correlated score lookups once per
+    stock row, which keeps the dashboard responsive for the full universe.
+    """
+    ordering = (
+        AccumulationScore.source_date.desc(),
+        AccumulationScore.calculated_at.desc(),
+        AccumulationScore.id.desc(),
+    )
+    return select(
+        AccumulationScore.stock_id.label("score_stock_id"),
+        AccumulationScore.score.label("score"),
+        AccumulationScore.status.label("status"),
+        AccumulationScore.score_version.label("score_version"),
+        AccumulationScore.coverage.label("coverage"),
+        AccumulationScore.components.label("components"),
+        func.row_number().over(partition_by=AccumulationScore.stock_id, order_by=ordering).label("score_rank"),
+    ).where(
+        AccumulationScore.score_version == SCORE_VERSION,
+        AccumulationScore.knowledge_cutoff.is_not(None),
+        AccumulationScore.score.is_not(None),
+    ).subquery("latest_numeric_scores")
 
 
 def _price_subqueries():
