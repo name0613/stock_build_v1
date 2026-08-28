@@ -11,6 +11,7 @@ class StockListItem(BaseModel):
     stock_name: str
     market: str
     industry: str | None = None
+    is_favorite: bool = False
     price: float | None = None
     price_change: float | None = None
     score: float | None = None

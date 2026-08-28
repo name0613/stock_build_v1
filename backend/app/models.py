@@ -19,6 +19,7 @@ class Stock(Base):
     industry: Mapped[str | None] = mapped_column(String(128), nullable=True)
     security_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
     is_common_stock: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    is_favorite: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
     source_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

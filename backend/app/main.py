@@ -9,7 +9,7 @@ from pathlib import Path
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query
+from fastapi import BackgroundTasks, Body, Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import and_, asc, case, desc, func, nulls_last, select
 from sqlalchemy.orm import Session
@@ -332,7 +332,7 @@ def current_score_status(job_id: int | None = Query(None, ge=1), db: Session = D
 
 @app.get("/api/stocks", response_model=PaginatedStocks)
 def stocks(
-    page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=200), search: str | None = Query(None, max_length=64), market: str | None = Query(None), industry: str | None = Query(None), status: str | None = Query(None), min_score: float | None = Query(None, ge=0, le=100), sort: str = Query("score"), order: str = Query("desc"),
+    page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=200), search: str | None = Query(None, max_length=64), market: str | None = Query(None), industry: str | None = Query(None), status: str | None = Query(None), favorite_only: bool = Query(False), min_score: float | None = Query(None, ge=0, le=100), sort: str = Query("score"), order: str = Query("desc"),
     db: Session = Depends(get_db),
 ) -> PaginatedStocks:
     latest_scores = _latest_numeric_scores_subquery()
@@ -346,6 +346,8 @@ def stocks(
         latest_scores,
         and_(latest_scores.c.score_stock_id == Stock.stock_id, latest_scores.c.score_rank == 1),
     ).where(Stock.is_common_stock.is_(True))
+    if favorite_only:
+        base = base.where(Stock.is_favorite.is_(True))
     if search:
         needle = f"%{search.strip()}%"
         base = base.where((Stock.stock_id.ilike(needle)) | (Stock.stock_name.ilike(needle)))
@@ -371,6 +373,17 @@ def stocks(
     partial_data = _partial_stock_snapshots(db, [row[0].stock_id for row in rows], persisted_features)
     items = [_stock_item_from_row(row, partial_data.get(row[0].stock_id)) for row in rows]
     return PaginatedStocks(items=items, total=total, page=page, page_size=page_size)
+
+
+@app.post("/api/stocks/{stock_id}/favorite")
+def set_stock_favorite(stock_id: str, favorite: bool | None = Body(None, embed=True), db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Set or toggle the single-user favorite marker for a common stock."""
+    stock = db.get(Stock, stock_id)
+    if stock is None or not stock.is_common_stock:
+        raise HTTPException(status_code=404, detail="stock not found")
+    stock.is_favorite = not stock.is_favorite if favorite is None else favorite
+    db.commit()
+    return {"stock_id": stock.stock_id, "is_favorite": stock.is_favorite}
 
 
 @app.get("/api/rankings")
@@ -446,7 +459,7 @@ def stock_detail(stock_id: str, limit: int = Query(365, ge=1, le=1000), db: Sess
     sync = db.scalars(select(DataSyncStatus).order_by(DataSyncStatus.dataset)).all()
     provider_state = _provider_state(sync)
     partial_data = _partial_stock_snapshots(db, [stock_id]).get(stock_id, {})
-    stock_payload = {"stock_id": stock.stock_id, "stock_name": stock.stock_name, "market": stock.market, "industry": stock.industry, **{key: partial_data.get(key) for key in ("data_status", "data_latest_source_date", "last_updated_at", "data_sources", "features", "coverage")}}
+    stock_payload = {"stock_id": stock.stock_id, "stock_name": stock.stock_name, "market": stock.market, "industry": stock.industry, "is_favorite": stock.is_favorite, **{key: partial_data.get(key) for key in ("data_status", "data_latest_source_date", "last_updated_at", "data_sources", "features", "coverage")}}
     return {"stock": stock_payload, "score": _score_dict(db, stock_id, None), "provider_state": provider_state, "sources": _source_status(db, stock_id), "institutional": _rows(db, InstitutionalDaily, stock_id, min(limit, 365), "TaiwanStockInstitutionalInvestorsBuySellWide"), "foreign_holding": _rows(db, ForeignShareholdingDaily, stock_id, min(limit, 365), "TaiwanStockShareholding"), "holding_distribution": _rows(db, HoldingDistribution, stock_id, min(limit, 200), "TaiwanStockHoldingSharesPer"), "holding_series": _holding_chart_series(db, stock_id, min(limit, 200)), "brokers": _broker_summary(db, stock_id), "prices": _rows(db, PriceDaily, stock_id, min(limit, 365), "TaiwanStockPrice"), "score_history": _score_history(db, stock_id, min(limit, 365)), "calendar_version": CALENDAR_VERSION}
 
 
@@ -751,7 +764,7 @@ def _stock_item_from_row(row: Any, partial_data: dict[str, Any] | None = None) -
     latest_source_date = latest_source_date.isoformat() if isinstance(latest_source_date, (date, datetime)) else latest_source_date
     partial_latest_source_date = partial_data.get("data_latest_source_date")
     partial_latest_source_date = partial_latest_source_date.isoformat() if isinstance(partial_latest_source_date, (date, datetime)) else partial_latest_source_date
-    return StockListItem(stock_id=stock.stock_id, stock_name=stock.stock_name, market=stock.market, industry=stock.industry, price=price, price_change=price_change, score=score, status=status or "DATA_INSUFFICIENT", score_version=score_version, features=raw_features, coverage=raw_coverage, latest_data=latest_source_date, data_status=partial_data.get("data_status", "NO_DATA"), data_latest_source_date=partial_latest_source_date, last_updated_at=partial_data.get("last_updated_at"), data_sources=partial_data.get("data_sources", {}))
+    return StockListItem(stock_id=stock.stock_id, stock_name=stock.stock_name, market=stock.market, industry=stock.industry, is_favorite=stock.is_favorite, price=price, price_change=price_change, score=score, status=status or "DATA_INSUFFICIENT", score_version=score_version, features=raw_features, coverage=raw_coverage, latest_data=latest_source_date, data_status=partial_data.get("data_status", "NO_DATA"), data_latest_source_date=partial_latest_source_date, last_updated_at=partial_data.get("last_updated_at"), data_sources=partial_data.get("data_sources", {}))
 
 
 def _json_dict(value: Any) -> dict[str, Any]:

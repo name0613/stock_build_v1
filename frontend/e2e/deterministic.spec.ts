@@ -14,6 +14,7 @@ type FixtureStock = {
   stock_name: string;
   market: string;
   industry: string;
+  is_favorite: boolean;
   price: number;
   price_change: number;
   score: number | null;
@@ -32,6 +33,7 @@ const stocks: FixtureStock[] = Array.from({ length: 55 }, (_, index) => {
     stock_name: `Fixture ${index}`,
     market: index % 2 === 0 ? "上市" : "上櫃",
     industry: "測試產業",
+    is_favorite: false,
     price: 100 + index,
     price_change: index / 10,
     score,
@@ -87,6 +89,7 @@ function detail(stock: FixtureStock) {
 
 async function installApiFixtures(page: Page) {
   let targetedPolls = 0;
+  const favorites = new Set<string>();
   await page.route("**/api/**", async (route) => {
     const url = new URL(route.request().url());
     if (url.pathname === "/api/summary") {
@@ -94,6 +97,14 @@ async function installApiFixtures(page: Page) {
     }
     if (url.pathname === "/api/holdings/status") {
       return route.fulfill({ json: { dataset: "TaiwanStockHoldingSharesPer", market_session_required: false, total: stocks.length, available_count: stocks.length, items: stocks.map((stock) => ({ stock_id: stock.stock_id, stock_name: stock.stock_name, market: stock.market, status: "AVAILABLE", latest_source_date: "2026-08-20" })) } });
+    }
+    const favoriteMatch = url.pathname.match(/^\/api\/stocks\/(\d+)\/favorite$/);
+    if (favoriteMatch) {
+      const stockId = favoriteMatch[1];
+      const body = route.request().method() === "POST" ? JSON.parse(route.request().postData() || "{}") as { favorite?: boolean } : {};
+      if (body.favorite === true) favorites.add(stockId);
+      if (body.favorite === false) favorites.delete(stockId);
+      return route.fulfill({ json: { stock_id: stockId, is_favorite: favorites.has(stockId) } });
     }
     if (url.pathname === "/api/stocks") {
       // Force the initial unfiltered request to finish after a rapid filter request.
@@ -106,6 +117,7 @@ async function installApiFixtures(page: Page) {
       if (search) filtered = filtered.filter((stock) => stock.stock_id.includes(search) || stock.stock_name.toLowerCase().includes(search));
       const market = url.searchParams.get("market");
       if (market) filtered = filtered.filter((stock) => stock.market === market);
+      if (url.searchParams.get("favorite_only") === "true") filtered = filtered.filter((stock) => favorites.has(stock.stock_id));
       const status = url.searchParams.get("status");
       if (status) filtered = filtered.filter((stock) => stock.status === status);
       const minScore = url.searchParams.get("min_score");
@@ -121,7 +133,8 @@ async function installApiFixtures(page: Page) {
       });
       const pageNumber = Number(url.searchParams.get("page") || 1);
       const pageSize = Number(url.searchParams.get("page_size") || 50);
-      return route.fulfill({ json: { items: filtered.slice((pageNumber - 1) * pageSize, pageNumber * pageSize), total: filtered.length, page: pageNumber, page_size: pageSize } });
+      const pageItems = filtered.slice((pageNumber - 1) * pageSize, pageNumber * pageSize).map((stock) => ({ ...stock, is_favorite: favorites.has(stock.stock_id) }));
+      return route.fulfill({ json: { items: pageItems, total: filtered.length, page: pageNumber, page_size: pageSize } });
     }
     if (url.pathname === "/api/rankings") {
       const limit = Number(url.searchParams.get("limit") || 50);
@@ -151,7 +164,7 @@ async function installApiFixtures(page: Page) {
     const match = url.pathname.match(/^\/api\/stocks\/(\d+)$/);
     if (match) {
       const stock = stocks.find((item) => item.stock_id === match[1]);
-      return stock ? route.fulfill({ json: detail(stock) }) : route.fulfill({ status: 404, json: { detail: "stock not found" } });
+      return stock ? route.fulfill({ json: detail({ ...stock, is_favorite: favorites.has(stock.stock_id) }) }) : route.fulfill({ status: 404, json: { detail: "stock not found" } });
     }
     return route.fulfill({ status: 404, json: { detail: "fixture route missing" } });
   });
@@ -198,7 +211,7 @@ test("holding status is requested once per page load and again after refresh", a
 
 test("market status and minimum-score filters compose through the UI", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByLabel("狀態").locator("option")).toHaveText(["全部狀態", "強勢累積", "累積", "觀察", "尚無強勢證據", "資料不足", "來源覆蓋不足（評分暫停）"]);
+  await expect(page.getByLabel("狀態").locator("option")).toHaveText(["全部狀態", "我的最愛", "強勢累積", "累積", "觀察", "尚無強勢證據", "資料不足", "來源覆蓋不足（評分暫停）"]);
   await page.getByLabel("市場").selectOption("上市");
   await page.getByLabel("狀態").selectOption("STRONG_ACCUMULATION");
   await page.getByLabel("評分 ≥").fill("90");
@@ -273,4 +286,19 @@ test("single-stock remediation fetches missing sources and reports the immediate
   await page.getByTestId("targeted-fetch-score-button").click();
   await expect(page.getByTestId("targeted-score-status")).toContainText("完成", { timeout: 5000 });
   await expect(page.getByTestId("targeted-score-status")).toContainText("Score 87.5");
+});
+
+test("favorite star toggles and the status filter shows only favorites", async ({ page }) => {
+  await page.goto("/");
+  const firstRow = page.getByTestId("stock-row").first();
+  const stockId = await firstRow.getAttribute("data-stock-id");
+  const favorite = firstRow.getByRole("button", { name: "加入我的最愛" });
+  await favorite.click();
+  await expect(firstRow.getByRole("button", { name: "移除我的最愛" })).toHaveAttribute("aria-pressed", "true");
+  await page.getByLabel("狀態").selectOption("FAVORITES");
+  await expect(page.getByTestId("filtered-total")).toContainText("1 檔");
+  await expect(page.getByTestId("stock-row")).toHaveCount(1);
+  await expect(page.getByTestId("stock-row").first()).toHaveAttribute("data-stock-id", stockId!);
+  await page.getByRole("button", { name: "移除我的最愛" }).click();
+  await expect(page.getByText("尚無可呈現資料。請先完成 FinMind 同步；系統不會以 0 偽造缺失資料。")).toBeVisible();
 });

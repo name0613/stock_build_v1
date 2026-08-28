@@ -61,6 +61,25 @@ def test_stocks_filters_sort_nulls_and_pagination_return_real_ids() -> None:
     assert all(item["market"] == "上市" and ("2330" in item["stock_id"] or "2330" in item["stock_name"]) for item in searched["items"])
 
 
+def test_favorite_marker_persists_in_list_detail_and_favorite_filter() -> None:
+    with TestClient(app) as client:
+        initial = client.get("/api/stocks", params={"search": "2330", "page": 1, "page_size": 1}).json()
+        assert initial["items"][0]["is_favorite"] is False
+        marked = client.post("/api/stocks/2330/favorite", json={"favorite": True})
+        favorite_list = client.get("/api/stocks", params={"favorite_only": True, "search": "2330", "page": 1, "page_size": 10})
+        detail = client.get("/api/stocks/2330", params={"limit": 1})
+        unmarked = client.post("/api/stocks/2330/favorite", json={"favorite": False})
+    assert marked.status_code == 200
+    assert marked.json() == {"stock_id": "2330", "is_favorite": True}
+    assert favorite_list.status_code == 200
+    assert favorite_list.json()["total"] == 1
+    assert favorite_list.json()["items"][0]["is_favorite"] is True
+    assert detail.status_code == 200
+    assert detail.json()["stock"]["is_favorite"] is True
+    assert unmarked.status_code == 200
+    assert unmarked.json() == {"stock_id": "2330", "is_favorite": False}
+
+
 def test_api_contract_exposes_score_hash_filters_rankings_and_sync_counters() -> None:
     with TestClient(app) as client:
         spec = client.get("/api/score-spec")

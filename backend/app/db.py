@@ -55,6 +55,7 @@ def _apply_versioned_migrations() -> None:
 def _apply_sqlite_compatibility_migrations() -> None:
     """Keep the local test/development SQLite schema aligned with PostgreSQL."""
     additions = {
+        "stocks": {"is_favorite": "BOOLEAN DEFAULT FALSE"},
         "institutional_daily": {"dealer_aggregate_net": "FLOAT"},
         "accumulation_features": {"knowledge_cutoff": "DATETIME", "input_snapshot_hash": "VARCHAR(64)"},
         "accumulation_scores": {"knowledge_cutoff": "DATETIME", "input_snapshot_hash": "VARCHAR(64)", "input_source_hashes": "JSON", "formula_hash": "VARCHAR(64)"},
