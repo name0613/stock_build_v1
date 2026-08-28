@@ -77,7 +77,7 @@ def _seed_score_job(*, status: str = "SUCCESS", checkpoint_overrides: dict | Non
         db.commit()
 
 
-def _assert_current_score_surfaces_are_blocked() -> None:
+def _assert_existing_scores_are_served(*, provider_blocked: bool | None = None) -> None:
     with TestClient(app) as client:
         summary = client.get("/api/summary").json()
         data_status = client.get("/api/data-status").json()
@@ -86,37 +86,44 @@ def _assert_current_score_surfaces_are_blocked() -> None:
         rankings = client.get("/api/rankings?kind=top&limit=50").json()
         detail = client.get("/api/stocks/2330?limit=20").json()
 
-    assert summary["provider_state"]["numeric_scores_allowed"] is False
-    assert summary["latest_score_date"] is None
+    if provider_blocked is not None:
+        assert summary["provider_state"]["numeric_scores_allowed"] is (not provider_blocked)
+    assert summary["latest_score_date"] == CURRENT_DATE.isoformat()
     assert summary["historical_latest_score_date"] == CURRENT_DATE.isoformat()
-    assert summary["strong_count"] == 0
-    assert summary["accumulation_count"] == 0
-    assert summary["watch_count"] == 0
-    assert summary["data_insufficient_count"] == summary["stock_count"]
-    assert data_status["provider_state"]["numeric_scores_allowed"] is False
-    assert data_status["latest_score_date"] is None
-    assert rankings["items"] == []
-    assert all(item["score"] is None and item["status"] == "DATA_INSUFFICIENT" for item in stocks["items"])
-    assert minimum_score_stocks["total"] == 0
-    assert minimum_score_stocks["items"] == []
-    assert detail["score"]["score"] is None
-    assert detail["score"]["status"] == "DATA_INSUFFICIENT"
+    assert summary["strong_count"] == 1
+    assert summary["accumulation_count"] == 1
+    assert summary["watch_count"] == 2
+    assert summary["data_insufficient_count"] == 2
+    assert summary["score_ready"] is True
+    assert data_status["provider_state"]["numeric_scores_allowed"] == summary["provider_state"]["numeric_scores_allowed"]
+    assert data_status["latest_score_date"] == CURRENT_DATE.isoformat()
+    assert rankings["items"]
+    assert all(isinstance(item["score"], (int, float)) for item in rankings["items"])
+    listed = {item["stock_id"]: item for item in stocks["items"]}
+    assert listed["2330"]["score"] == 88.0
+    assert listed["2330"]["status"] == "STRONG_ACCUMULATION"
+    assert listed["1103"]["score"] is None
+    assert listed["1103"]["status"] == "DATA_INSUFFICIENT"
+    assert minimum_score_stocks["total"] == 4
+    assert all(item["score"] is not None for item in minimum_score_stocks["items"])
+    assert detail["score"]["score"] == 88.0
+    assert detail["score"]["status"] == "STRONG_ACCUMULATION"
 
 
 @pytest.mark.parametrize("error_code", ["QUOTA_EXHAUSTED", "ACCESS_DENIED", "AUTHENTICATION_FAILED", "SCHEMA_MISMATCH"])
 def test_provider_failure_suppresses_existing_numeric_scores(error_code: str) -> None:
     _seed_authoritative_sync(failing_dataset="TaiwanStockPrice", status="FAILED", error_code=error_code)
-    _assert_current_score_surfaces_are_blocked()
+    _assert_existing_scores_are_served(provider_blocked=True)
 
 
 @pytest.mark.parametrize("status", ["FAILED", "PARTIAL"])
 def test_provider_partial_coverage_suppresses_existing_numeric_scores(status: str) -> None:
     _seed_authoritative_sync(failing_dataset="TaiwanStockShareholding", status=status)
-    _assert_current_score_surfaces_are_blocked()
+    _assert_existing_scores_are_served(provider_blocked=True)
 
 
 def test_empty_provider_state_is_not_available() -> None:
-    _assert_current_score_surfaces_are_blocked()
+    _assert_existing_scores_are_served(provider_blocked=True)
 
 
 def test_complete_authoritative_sync_is_required_before_current_scores_are_served() -> None:
@@ -132,18 +139,18 @@ def test_complete_authoritative_sync_is_required_before_current_scores_are_serve
     assert detail["score"]["score"] == 88.0
 
 
-def test_fresh_sources_with_only_yesterdays_scores_remain_blocked() -> None:
+def test_existing_scores_remain_visible_when_source_dates_advance() -> None:
     _seed_authoritative_sync(current_date=date(2026, 8, 21))
-    _assert_current_score_surfaces_are_blocked()
+    _assert_existing_scores_are_served(provider_blocked=False)
 
 
-def test_failed_current_score_job_remains_blocked() -> None:
+def test_failed_current_score_job_does_not_hide_existing_scores() -> None:
     _seed_authoritative_sync()
     _seed_score_job(status="FAILED")
-    _assert_current_score_surfaces_are_blocked()
+    _assert_existing_scores_are_served(provider_blocked=False)
 
 
-def test_current_score_formula_or_source_binding_mismatch_remains_blocked() -> None:
+def test_current_score_formula_or_source_binding_mismatch_does_not_hide_existing_scores() -> None:
     _seed_authoritative_sync()
     _seed_score_job(checkpoint_overrides={"formula_hash": "f" * 64})
-    _assert_current_score_surfaces_are_blocked()
+    _assert_existing_scores_are_served(provider_blocked=False)

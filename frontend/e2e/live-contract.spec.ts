@@ -66,12 +66,7 @@ test("live list filters pagination ranking and numeric-null ordering obey the AP
   const minimumResponse = await page.request.get("/api/stocks?page=1&page_size=50&sort=score&order=desc&min_score=0");
   expect(minimumResponse.status()).toBe(200);
   const minimumPage = await minimumResponse.json();
-  if (summary.provider_state.numeric_scores_allowed === false) {
-    expect(minimumPage.total).toBe(0);
-    expect(minimumPage.items).toEqual([]);
-  } else {
-    expect(minimumPage.items.every((item: { score: number | null }) => typeof item.score === "number" && item.score >= 0)).toBe(true);
-  }
+  expect(minimumPage.items.every((item: { score: number | null }) => typeof item.score === "number" && item.score >= 0)).toBe(true);
 
   const secondResponse = await page.request.get("/api/stocks?page=2&page_size=50&sort=score&order=desc");
   expect(secondResponse.status()).toBe(200);

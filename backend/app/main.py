@@ -127,18 +127,15 @@ def worker_health() -> dict[str, Any]:
 def summary(db: Session = Depends(get_db)) -> dict[str, Any]:
     sync = db.scalars(select(DataSyncStatus).order_by(DataSyncStatus.dataset)).all()
     provider_state = _provider_state(sync)
-    current_latest = _current_score_date(db, provider_state, sync)
-    historical_latest = _latest_score_date(db)
+    latest_score_date = _latest_score_date(db)
+    historical_latest = _latest_score_snapshot_date(db)
     total = db.scalar(select(func.count()).select_from(Stock).where(Stock.is_common_stock.is_(True))) or 0
-    if current_latest is not None:
-        _, status_map = _canonical_statuses(db, current_latest)
-        counts = {status: sum(1 for value in status_map.values() if value == status) for status in ("STRONG_ACCUMULATION", "ACCUMULATION", "WATCH", "DATA_INSUFFICIENT", "NO_STRONG_EVIDENCE")}
-    else:
-        counts = {"STRONG_ACCUMULATION": 0, "ACCUMULATION": 0, "WATCH": 0, "DATA_INSUFFICIENT": total, "NO_STRONG_EVIDENCE": 0}
+    _, status_map = _canonical_statuses(db)
+    counts = {status: sum(1 for value in status_map.values() if value == status) for status in ("STRONG_ACCUMULATION", "ACCUMULATION", "WATCH", "DATA_INSUFFICIENT", "NO_STRONG_EVIDENCE")}
     last_updates = [s.last_fetch_at or s.last_successful_sync for s in sync if s.last_fetch_at or s.last_successful_sync]
     score_job = db.scalar(select(JobRun).where(JobRun.dataset == "score").order_by(JobRun.finished_at.desc(), JobRun.id.desc()).limit(1))
-    score_metrics = (score_job.checkpoint_state or {}).get("score_metrics", {}) if score_job else {}
-    return {"stock_count": total, "strong_count": counts["STRONG_ACCUMULATION"], "accumulation_count": counts["ACCUMULATION"], "watch_count": counts["WATCH"], "data_insufficient_count": counts["DATA_INSUFFICIENT"], "no_strong_evidence_count": counts["NO_STRONG_EVIDENCE"], "status_invariant": sum(counts.values()) == total, "latest_score_date": current_latest, "historical_latest_score_date": historical_latest, "score_ready": current_latest is not None, "historical_score_blocked": provider_state.get("score_blocked") is True, "score_version": SCORE_VERSION, "formula_hash": FORMULA_HASH, "last_data_update": max(last_updates, default=None), "provider_state": provider_state, "score_metrics": score_metrics, "sync_status": [_sync_dict(s) for s in sync]}
+    score_metrics = _display_score_metrics(total, counts, score_job)
+    return {"stock_count": total, "strong_count": counts["STRONG_ACCUMULATION"], "accumulation_count": counts["ACCUMULATION"], "watch_count": counts["WATCH"], "data_insufficient_count": counts["DATA_INSUFFICIENT"], "no_strong_evidence_count": counts["NO_STRONG_EVIDENCE"], "status_invariant": sum(counts.values()) == total, "latest_score_date": latest_score_date, "historical_latest_score_date": historical_latest, "score_ready": latest_score_date is not None, "historical_score_blocked": provider_state.get("score_blocked") is True, "score_version": SCORE_VERSION, "formula_hash": FORMULA_HASH, "last_data_update": max(last_updates, default=None), "provider_state": provider_state, "score_metrics": score_metrics, "sync_status": [_sync_dict(s) for s in sync]}
 
 
 @app.get("/api/readiness")
@@ -329,12 +326,9 @@ def stocks(
     page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=200), search: str | None = Query(None, max_length=64), market: str | None = Query(None), industry: str | None = Query(None), status: str | None = Query(None), min_score: float | None = Query(None, ge=0, le=100), sort: str = Query("score"), order: str = Query("desc"),
     db: Session = Depends(get_db),
 ) -> PaginatedStocks:
-    sync = db.scalars(select(DataSyncStatus).order_by(DataSyncStatus.dataset)).all()
-    provider_state = _provider_state(sync)
-    latest = _current_score_date(db, provider_state, sync)
-    score_value, score_status, score_version, score_coverage = _score_subqueries(latest)
+    score_value, score_status, score_version, score_coverage = _score_subqueries()
     price_value, price_change = _price_subqueries()
-    feature_values, feature_date = _feature_subqueries(latest)
+    feature_values, feature_date = _feature_subqueries()
     base = select(Stock, score_value, score_status, score_version, score_coverage, price_value, price_change, feature_values, feature_date).where(Stock.is_common_stock.is_(True))
     if search:
         needle = f"%{search.strip()}%"
@@ -346,13 +340,10 @@ def stocks(
     allowed_sort = {"stock_id": Stock.stock_id, "stock_name": Stock.stock_name, "market": Stock.market, "industry": Stock.industry}
     sort_column = score_value if sort == "score" else allowed_sort.get(sort, Stock.stock_id)
     effective_status = func.coalesce(score_status, "DATA_INSUFFICIENT")
-    if latest:
-        if status:
-            base = base.where(effective_status == status)
+    if status:
+        base = base.where(effective_status == status)
     if min_score is not None:
         base = base.where(score_value >= min_score)
-    if status and not latest:
-        base = base.where(effective_status == status)
     direction = desc(sort_column) if order.lower() == "desc" else asc(sort_column)
     base = base.order_by(nulls_last(direction) if sort == "score" else direction, asc(Stock.stock_id))
     total = db.scalar(select(func.count()).select_from(base.subquery())) or 0
@@ -366,10 +357,10 @@ def stocks(
 def rankings(kind: str = Query("top"), limit: int = Query(50, ge=1, le=200), db: Session = Depends(get_db)) -> dict[str, Any]:
     sync = db.scalars(select(DataSyncStatus).order_by(DataSyncStatus.dataset)).all()
     provider_state = _provider_state(sync)
-    latest = _current_score_date(db, provider_state, sync)
+    latest = _latest_score_date(db)
     if latest is None:
         return {"source_date": None, "score_version": SCORE_VERSION, "provider_state": provider_state, "items": []}
-    score_value, score_status, _, score_components = _score_subqueries(latest, components=True)
+    score_value, score_status, _, score_components = _score_subqueries(components=True)
     query = select(Stock, score_value, score_status, score_components).where(Stock.is_common_stock.is_(True), score_value.is_not(None)).order_by(desc(score_value), asc(Stock.stock_id)).limit(limit)
     rows = db.execute(query).all()
     return {"source_date": latest, "kind": kind, "score_version": SCORE_VERSION, "provider_state": provider_state, "items": [{"stock_id": row[0].stock_id, "stock_name": row[0].stock_name, "market": row[0].market, "score": row[1], "status": row[2], "components": row[3]} for row in rows]}
@@ -430,23 +421,9 @@ def stock_detail(stock_id: str, limit: int = Query(365, ge=1, le=1000), db: Sess
         raise HTTPException(status_code=404, detail="stock not found")
     sync = db.scalars(select(DataSyncStatus).order_by(DataSyncStatus.dataset)).all()
     provider_state = _provider_state(sync)
-    latest = _current_score_date(db, provider_state, sync)
-    # A targeted run may have produced a fresh, stock-specific score while
-    # the universe-wide snapshot is still blocked by other stocks.  Detail
-    # pages should show that score immediately without changing global gate
-    # semantics or pretending the whole universe is complete.
-    if latest is None:
-        targeted_job = db.scalar(
-            select(JobRun)
-            .where(JobRun.dataset == TARGETED_STOCK_SYNC_DATASET, JobRun.status == "SUCCESS")
-            .order_by(JobRun.finished_at.desc(), JobRun.id.desc())
-            .limit(1)
-        )
-        if targeted_job is not None and isinstance(targeted_job.checkpoint_state, dict) and targeted_job.checkpoint_state.get("stock_id") == stock_id:
-            latest = targeted_job.requested_end_date
     partial_data = _partial_stock_snapshots(db, [stock_id]).get(stock_id, {})
     stock_payload = {"stock_id": stock.stock_id, "stock_name": stock.stock_name, "market": stock.market, "industry": stock.industry, **{key: partial_data.get(key) for key in ("data_status", "data_latest_source_date", "last_updated_at", "data_sources", "features", "coverage")}}
-    return {"stock": stock_payload, "score": _score_dict(db, stock_id, latest), "provider_state": provider_state, "sources": _source_status(db, stock_id), "institutional": _rows(db, InstitutionalDaily, stock_id, min(limit, 365), "TaiwanStockInstitutionalInvestorsBuySellWide"), "foreign_holding": _rows(db, ForeignShareholdingDaily, stock_id, min(limit, 365), "TaiwanStockShareholding"), "holding_distribution": _rows(db, HoldingDistribution, stock_id, min(limit, 200), "TaiwanStockHoldingSharesPer"), "holding_series": _holding_chart_series(db, stock_id, min(limit, 200)), "brokers": _broker_summary(db, stock_id), "prices": _rows(db, PriceDaily, stock_id, min(limit, 365), "TaiwanStockPrice"), "score_history": _score_history(db, stock_id, min(limit, 365)), "calendar_version": CALENDAR_VERSION}
+    return {"stock": stock_payload, "score": _score_dict(db, stock_id, None), "provider_state": provider_state, "sources": _source_status(db, stock_id), "institutional": _rows(db, InstitutionalDaily, stock_id, min(limit, 365), "TaiwanStockInstitutionalInvestorsBuySellWide"), "foreign_holding": _rows(db, ForeignShareholdingDaily, stock_id, min(limit, 365), "TaiwanStockShareholding"), "holding_distribution": _rows(db, HoldingDistribution, stock_id, min(limit, 200), "TaiwanStockHoldingSharesPer"), "holding_series": _holding_chart_series(db, stock_id, min(limit, 200)), "brokers": _broker_summary(db, stock_id), "prices": _rows(db, PriceDaily, stock_id, min(limit, 365), "TaiwanStockPrice"), "score_history": _score_history(db, stock_id, min(limit, 365)), "calendar_version": CALENDAR_VERSION}
 
 
 @app.get("/api/holdings/status")
@@ -552,20 +529,53 @@ def data_status(db: Session = Depends(get_db)) -> dict[str, Any]:
     rows = db.scalars(select(DataSyncStatus).order_by(DataSyncStatus.dataset)).all()
     jobs = db.scalars(select(JobRun).order_by(JobRun.started_at.desc()).limit(50)).all()
     provider_state = _provider_state(rows)
-    latest_score_date = _current_score_date(db, provider_state, rows)
+    latest_score_date = _latest_score_date(db)
     return {"provider_state": provider_state, "score_ready": latest_score_date is not None, "latest_score_date": latest_score_date, "datasets": [_sync_dict(row) for row in rows], "jobs": [{"dataset": j.dataset, "status": j.status, "requested_date": j.requested_date, "requested_start_date": j.requested_start_date, "requested_end_date": j.requested_end_date, "started_at": j.started_at, "finished_at": j.finished_at, "records": j.records, "duration_ms": j.duration_ms, "retry_count": j.retry_count, "stocks_attempted": j.stocks_attempted, "stocks_completed": j.stocks_completed, "stocks_failed": j.stocks_failed, "checkpoint_state": j.checkpoint_state, "error_code": j.error_code, "error": j.error} for j in jobs]}
 
 
 def _latest_score_date(db: Session) -> date | None:
-    return db.scalar(select(func.max(AccumulationScore.source_date)).where(AccumulationScore.score_version == SCORE_VERSION, AccumulationScore.knowledge_cutoff.is_not(None)))
+    """Return the latest source date with at least one numeric score."""
+    return db.scalar(
+        select(func.max(AccumulationScore.source_date)).where(
+            AccumulationScore.score_version == SCORE_VERSION,
+            AccumulationScore.knowledge_cutoff.is_not(None),
+            AccumulationScore.score.is_not(None),
+        )
+    )
+
+
+def _latest_score_snapshot_date(db: Session) -> date | None:
+    """Return the latest evaluated score date, including fail-closed rows."""
+    return db.scalar(
+        select(func.max(AccumulationScore.source_date)).where(
+            AccumulationScore.score_version == SCORE_VERSION,
+            AccumulationScore.knowledge_cutoff.is_not(None),
+        )
+    )
+
+
+def _display_score_metrics(total: int, counts: dict[str, int], score_job: JobRun | None) -> dict[str, Any]:
+    """Expose metrics for the per-stock scores currently shown by the UI."""
+    numeric_count = total - counts["DATA_INSUFFICIENT"]
+    last_job_metrics = (score_job.checkpoint_state or {}).get("score_metrics", {}) if score_job else {}
+    return {
+        "universe_stock_count": total,
+        "evaluated_stock_count": total,
+        "ready_stock_count": numeric_count,
+        "not_ready_stock_count": counts["DATA_INSUFFICIENT"],
+        "score_rows_processed": numeric_count,
+        "score_rows_data_insufficient": counts["DATA_INSUFFICIENT"],
+        "score_rows_failed": int(last_job_metrics.get("score_rows_failed", 0) or 0),
+        "missing_reason_counts": last_job_metrics.get("missing_reason_counts", {}),
+        "accounting_invariant": numeric_count + counts["DATA_INSUFFICIENT"] == total,
+    }
 
 
 def _current_score_date(db: Session, provider_state: dict[str, Any], sync: list[DataSyncStatus] | None = None) -> date | None:
-    """Return a current-date score bound to a per-stock scoring run.
+    """Return the legacy global current-score date for diagnostics only.
 
-    Source-level completeness is intentionally advisory here.  A mixed score
-    run is a valid current snapshot when at least one stock passed the same
-    point-in-time readiness contract used by the worker.
+    Display endpoints use per-stock persisted scores and do not call this
+    global gate.  The helper remains for readiness/operational compatibility.
     """
     sync = sync if sync is not None else list(db.scalars(select(DataSyncStatus).order_by(DataSyncStatus.dataset)).all())
     readiness = _current_score_readiness(db, provider_state, sync)
@@ -627,10 +637,10 @@ def _current_score_readiness(db: Session, provider_state: dict[str, Any], sync: 
 
 def _canonical_statuses(db: Session, latest: date | None = None) -> tuple[int, dict[str, str]]:
     stock_ids = list(db.scalars(select(Stock.stock_id).where(Stock.is_common_stock.is_(True))).all())
-    latest = latest or _latest_score_date(db)
-    if latest is None:
-        return len(stock_ids), {stock_id: "DATA_INSUFFICIENT" for stock_id in stock_ids}
-    scores = db.scalars(select(AccumulationScore).where(AccumulationScore.source_date == latest, AccumulationScore.score_version == SCORE_VERSION, AccumulationScore.knowledge_cutoff.is_not(None)).order_by(AccumulationScore.calculated_at.desc())).all()
+    query = select(AccumulationScore).where(AccumulationScore.score_version == SCORE_VERSION, AccumulationScore.knowledge_cutoff.is_not(None), AccumulationScore.score.is_not(None))
+    if latest is not None:
+        query = query.where(AccumulationScore.source_date == latest)
+    scores = db.scalars(query.order_by(AccumulationScore.stock_id, AccumulationScore.source_date.desc(), AccumulationScore.calculated_at.desc(), AccumulationScore.id.desc())).all()
     statuses = {stock_id: "DATA_INSUFFICIENT" for stock_id in stock_ids}
     seen: set[str] = set()
     for score in scores:
@@ -640,11 +650,17 @@ def _canonical_statuses(db: Session, latest: date | None = None) -> tuple[int, d
     return len(stock_ids), statuses
 
 
-def _score_subqueries(latest: date | None, components: bool = False):
+def _score_subqueries(latest: date | None = None, components: bool = False):
     def field(name: str):
-        if latest is None:
-            return select(func.cast(None, getattr(AccumulationScore, name).type)).scalar_subquery()
-        return select(getattr(AccumulationScore, name)).where(AccumulationScore.stock_id == Stock.stock_id, AccumulationScore.source_date == latest, AccumulationScore.score_version == SCORE_VERSION, AccumulationScore.knowledge_cutoff.is_not(None)).order_by(AccumulationScore.calculated_at.desc()).limit(1).correlate(Stock).scalar_subquery()
+        score_query = select(getattr(AccumulationScore, name)).where(
+            AccumulationScore.stock_id == Stock.stock_id,
+            AccumulationScore.score_version == SCORE_VERSION,
+            AccumulationScore.knowledge_cutoff.is_not(None),
+            AccumulationScore.score.is_not(None),
+        )
+        if latest is not None:
+            score_query = score_query.where(AccumulationScore.source_date == latest)
+        return score_query.order_by(AccumulationScore.source_date.desc(), AccumulationScore.calculated_at.desc(), AccumulationScore.id.desc()).limit(1).correlate(Stock).scalar_subquery()
     return field("score"), field("status"), field("score_version"), field("components" if components else "coverage")
 
 
@@ -654,10 +670,14 @@ def _price_subqueries():
     return (select(PriceDaily.close).where(PriceDaily.stock_id == Stock.stock_id, PriceDaily.source_date == latest_date, PriceDaily.source_dataset == dataset).limit(1).correlate(Stock).scalar_subquery(), select(PriceDaily.change).where(PriceDaily.stock_id == Stock.stock_id, PriceDaily.source_date == latest_date, PriceDaily.source_dataset == dataset).limit(1).correlate(Stock).scalar_subquery())
 
 
-def _feature_subqueries(latest: date | None):
-    if latest is None:
-        return select(func.json_object()).scalar_subquery(), select(func.cast(None, AccumulationFeature.latest_source_date.type)).scalar_subquery()
-    return (select(AccumulationFeature.values).where(AccumulationFeature.stock_id == Stock.stock_id, AccumulationFeature.source_date == latest).order_by(AccumulationFeature.calculated_at.desc()).limit(1).correlate(Stock).scalar_subquery(), select(AccumulationFeature.latest_source_date).where(AccumulationFeature.stock_id == Stock.stock_id, AccumulationFeature.source_date == latest).order_by(AccumulationFeature.calculated_at.desc()).limit(1).correlate(Stock).scalar_subquery())
+def _feature_subqueries(latest: date | None = None):
+    feature_query = select(AccumulationFeature.values).where(AccumulationFeature.stock_id == Stock.stock_id)
+    date_query = select(AccumulationFeature.latest_source_date).where(AccumulationFeature.stock_id == Stock.stock_id)
+    if latest is not None:
+        feature_query = feature_query.where(AccumulationFeature.source_date == latest)
+        date_query = date_query.where(AccumulationFeature.source_date == latest)
+    order = (AccumulationFeature.source_date.desc(), AccumulationFeature.calculated_at.desc(), AccumulationFeature.id.desc())
+    return (feature_query.order_by(*order).limit(1).correlate(Stock).scalar_subquery(), date_query.order_by(*order).limit(1).correlate(Stock).scalar_subquery())
 
 
 def _stock_item_from_row(row: Any, partial_data: dict[str, Any] | None = None) -> StockListItem:
@@ -692,8 +712,8 @@ def _partial_stock_snapshots(db: Session, stock_ids: list[str]) -> dict[str, dic
     """Build display-only features from whatever rows are already persisted.
 
     This deliberately does not create Score rows.  A stock can therefore show
-    useful partial source data while the global Score surface remains
-    fail-closed until every required source is current and complete.
+    useful partial source data while its own Score remains fail-closed until
+    every required input for that stock is current and complete.
     """
     unique_ids = list(dict.fromkeys(stock_ids))
     if not unique_ids:
@@ -774,9 +794,14 @@ def _partial_stock_snapshots(db: Session, stock_ids: list[str]) -> dict[str, dic
 
 
 def _score_dict(db: Session, stock_id: str, latest: date | None) -> dict[str, Any]:
-    if latest is None:
-        return {"score": None, "status": "DATA_INSUFFICIENT", "score_version": SCORE_VERSION, "formula_hash": FORMULA_HASH, "coverage": {}, "explanation": [{"label": "資料不足", "value": 0, "detail": "尚未建立可追溯的 S-level score snapshot"}], "input_source_hashes": []}
-    score = db.scalar(select(AccumulationScore).where(AccumulationScore.stock_id == stock_id, AccumulationScore.source_date == latest, AccumulationScore.score_version == SCORE_VERSION, AccumulationScore.knowledge_cutoff.is_not(None)).order_by(AccumulationScore.calculated_at.desc()).limit(1))
+    query = select(AccumulationScore).where(
+        AccumulationScore.stock_id == stock_id,
+        AccumulationScore.score_version == SCORE_VERSION,
+        AccumulationScore.knowledge_cutoff.is_not(None),
+    )
+    if latest is not None:
+        query = query.where(AccumulationScore.source_date == latest)
+    score = db.scalar(query.order_by(AccumulationScore.source_date.desc(), AccumulationScore.calculated_at.desc(), AccumulationScore.id.desc()).limit(1))
     if not score:
         return {"score": None, "status": "DATA_INSUFFICIENT", "score_version": SCORE_VERSION, "formula_hash": FORMULA_HASH, "coverage": {}, "explanation": [{"label": "資料不足", "value": 0, "detail": "required source coverage is incomplete; no zero substitution"}], "input_source_hashes": []}
     return {"score": score.score, "status": score.status, "score_version": score.score_version, "formula_hash": score.formula_hash or FORMULA_HASH, "components": score.components, "explanation": score.explanation, "coverage": score.coverage, "source_date": score.source_date, "calculated_at": score.calculated_at, "knowledge_cutoff": score.knowledge_cutoff, "input_snapshot_hash": score.input_snapshot_hash, "input_source_hashes": score.input_source_hashes}

@@ -222,12 +222,11 @@ def test_global_quota_failure_does_not_veto_existing_ready_stocks() -> None:
     persisted = db.scalars(select(AccumulationScore).where(AccumulationScore.source_date == END)).all()
     assert sum(score.score is not None for score in persisted) == 2
     assert sum(score.status == "DATA_INSUFFICIENT" and score.score is None for score in persisted) == 2
-    from app.main import _current_score_date, _provider_state
+    from app.main import _latest_score_date, _provider_state
     sync = list(db.scalars(select(DataSyncStatus)).all())
     provider_state = _provider_state(sync)
-    assert _current_score_date(db, provider_state, sync) == END
-    assert provider_state["score_ready"] is True
-    assert provider_state["source_coverage_numeric_scores_allowed"] is False
+    assert _latest_score_date(db) == END
+    assert provider_state["numeric_scores_allowed"] is False
 
 
 def test_partial_global_source_is_advisory_for_ready_stock() -> None:
