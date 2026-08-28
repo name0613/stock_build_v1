@@ -64,7 +64,6 @@ function App() {
   async function loadStocks(signal: AbortSignal, requestId: number) {
     setLoading(true);
     try {
-      await holdingStatusRequest.current;
       if (signal.aborted) return;
       const params = new URLSearchParams({ page: String(page), page_size: "50", sort, order: "desc" });
       if (search) params.set("search", search); if (market) params.set("market", market); if (status) params.set("status", status); if (minScore) params.set("min_score", minScore);
