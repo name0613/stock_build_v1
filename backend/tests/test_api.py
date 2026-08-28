@@ -91,11 +91,13 @@ def test_readiness_endpoint_exposes_side_effect_free_stock_audit() -> None:
         response = client.get("/api/readiness", params={"source_date": "2026-08-27", "stock_id": "2330"})
     assert response.status_code == 200
     payload = response.json()
-    assert set(("stock_id", "ready", "missing_reasons", "coverage", "source_date", "knowledge_cutoff")) <= set(payload)
+    assert set(("stock_id", "ready", "missing_reasons", "coverage", "source_date", "knowledge_cutoff", "latest_ready_source_date", "fallback_available")) <= set(payload)
     assert payload["stock_id"] == "2330"
     assert isinstance(payload["ready"], bool)
     assert isinstance(payload["missing_reasons"], list)
     assert payload["source_date"] == "2026-08-27"
+    assert payload["latest_ready_source_date"] is None or isinstance(payload["latest_ready_source_date"], str)
+    assert payload["fallback_available"] is False
 
 
 def test_detail_contract_exposes_provenance_version_reasons_and_null_safe_charts() -> None:

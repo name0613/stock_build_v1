@@ -146,6 +146,33 @@ def test_targeted_fetch_reuses_complete_sources_and_scores_after_missing_broker_
     assert persisted is not None and persisted.score is not None
 
 
+def test_targeted_fetch_falls_back_to_latest_complete_source_date() -> None:
+    db = _db()
+    _seed_universe(db)
+    _seed_complete_sources(db, "9001")
+    target = date(2026, 8, 28)
+
+    class PublicationLagClient:
+        async def fetch_stocks_dataset(self, stock_ids, dataset, start_date, end_date, *, record_sink=None, progress_callback=None):
+            return {"physical_requests": 1, "rows": 0, "rows_received": 0, "fatal_code": None}
+
+        async def fetch_broker_stocks(self, stock_ids, start_date, end_date, *, record_sink=None, progress_callback=None):
+            return {"physical_requests": 1, "rows": 0, "rows_received": 0, "fatal_code": None}
+
+    result = asyncio.run(fetch_and_score_stock(db, PublicationLagClient(), "9001", target))
+
+    assert result["status"] == "SUCCESS"
+    assert result["target_date"] == target.isoformat()
+    assert result["evaluated_source_date"] == END.isoformat()
+    assert result["fallback_applied"] is True
+    assert result["readiness"]["ready"] is True
+    assert result["score"]["score"] is not None
+    assert result["score"]["source_date"] == END.isoformat()
+    persisted = db.scalar(select(AccumulationScore).where(AccumulationScore.stock_id == "9001", AccumulationScore.source_date == END))
+    assert persisted is not None and persisted.score is not None
+    assert db.scalar(select(AccumulationScore).where(AccumulationScore.stock_id == "9001", AccumulationScore.source_date == target)) is None
+
+
 def test_readiness_normalizes_legacy_source_revision_key_order() -> None:
     db = _db()
     _seed_universe(db)

@@ -787,6 +787,7 @@ def calculate_stock_features_and_score(db: Session, stock_id: str, as_of: date |
 
 
 TARGETED_STOCK_SYNC_DATASET = "targeted_stock_sync_score"
+TARGETED_SCORE_FALLBACK_SESSIONS = 20
 
 
 def _targeted_readiness_payload(evaluation: dict[str, Any]) -> dict[str, Any]:
@@ -799,6 +800,33 @@ def _targeted_readiness_payload(evaluation: dict[str, Any]) -> dict[str, Any]:
         "source_date": evaluation["as_of"].isoformat(),
         "knowledge_cutoff": evaluation["knowledge_cutoff"].isoformat(),
     }
+
+
+def latest_ready_stock_evaluation(
+    db: Session,
+    stock_id: str,
+    target: date,
+    knowledge_cutoff: datetime,
+    *,
+    initial_evaluation: dict[str, Any] | None = None,
+    max_fallback_sessions: int = TARGETED_SCORE_FALLBACK_SESSIONS,
+) -> tuple[dict[str, Any], bool]:
+    """Find the newest complete evaluation at or before ``target``.
+
+    Daily FinMind datasets can publish at different times.  A targeted run
+    first attempts the current target, then falls back to the newest prior
+    trading session whose complete point-in-time inputs are already persisted.
+    The returned boolean records whether that fallback was needed.
+    """
+    current = initial_evaluation or _evaluate_stock_inputs(db, stock_id, target, knowledge_cutoff)
+    if current["ready"]:
+        return current, False
+    sessions = expected_trading_sessions(target, max(1, max_fallback_sessions + 1))
+    for candidate in reversed(sessions[:-1]):
+        evaluation = _evaluate_stock_inputs(db, stock_id, candidate, knowledge_cutoff)
+        if evaluation["ready"]:
+            return evaluation, True
+    return current, False
 
 
 async def fetch_and_score_stock(
@@ -931,7 +959,15 @@ async def fetch_and_score_stock(
         checkpoint(f"fetched:{dataset}", datasets=datasets, fetch_errors=fetch_errors, quota=quota, progress={"completed": completed, "total": len(plan)})
 
     checkpoint("scoring", datasets=datasets, fetch_errors=fetch_errors, quota=quota, progress={"completed": len(plan), "total": len(plan)})
-    final_evaluation = _evaluate_stock_inputs(db, stock_id, target, _now())
+    evaluation_cutoff = _now()
+    target_evaluation = _evaluate_stock_inputs(db, stock_id, target, evaluation_cutoff)
+    final_evaluation, fallback_applied = latest_ready_stock_evaluation(
+        db,
+        stock_id,
+        target,
+        evaluation_cutoff,
+        initial_evaluation=target_evaluation,
+    )
     score = _persist_stock_evaluation(db, final_evaluation)
     readiness = _targeted_readiness_payload(final_evaluation)
     status = "SUCCESS" if final_evaluation["ready"] else "DATA_INSUFFICIENT"
@@ -939,8 +975,11 @@ async def fetch_and_score_stock(
         "job_id": score_job.id,
         "stock_id": stock_id,
         "target_date": target.isoformat(),
+        "evaluated_source_date": final_evaluation["as_of"].isoformat(),
+        "fallback_applied": fallback_applied,
+        "fallback_reason": "TARGET_DATE_SOURCE_INCOMPLETE" if fallback_applied else None,
         "status": status,
-        "score": {"score": score.score, "status": score.status, "score_version": score.score_version, "formula_hash": score.formula_hash, "coverage": score.coverage, "components": score.components, "explanation": score.explanation, "calculated_at": score.calculated_at},
+        "score": {"score": score.score, "status": score.status, "score_version": score.score_version, "formula_hash": score.formula_hash, "coverage": score.coverage, "components": score.components, "explanation": score.explanation, "source_date": score.source_date.isoformat() if score.source_date else None, "knowledge_cutoff": score.knowledge_cutoff.isoformat() if score.knowledge_cutoff else None, "calculated_at": score.calculated_at.isoformat() if score.calculated_at else None},
         "pre_readiness": pre_readiness,
         "readiness": readiness,
         "datasets": datasets,

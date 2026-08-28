@@ -18,7 +18,7 @@ from .config import get_settings
 from .db import SessionLocal, get_db, init_db
 from .finmind import GLOBAL_PROVIDER_FAILURE_CODES
 from .features import build_features, holding_distribution_features
-from .ingestion import TARGETED_STOCK_SYNC_DATASET, authoritative_expected_latest_source_date, authoritative_source_state_hash, evaluate_stock_readiness, evaluate_universe_readiness, fetch_and_score_stock, score_existing_data, score_snapshot_state, seed_score_version
+from .ingestion import TARGETED_STOCK_SYNC_DATASET, authoritative_expected_latest_source_date, authoritative_source_state_hash, evaluate_stock_readiness, evaluate_universe_readiness, fetch_and_score_stock, latest_ready_stock_evaluation, score_existing_data, score_snapshot_state, seed_score_version
 from .models import AccumulationFeature, AccumulationScore, BrokerDaily, DataSyncStatus, ForeignShareholdingDaily, HoldingDistribution, InstitutionalDaily, JobRun, PriceDaily, Stock
 from .schemas import PaginatedStocks, StockListItem
 from .calendar import CALENDAR_HASH, CALENDAR_VERSION
@@ -146,7 +146,13 @@ def readiness(source_date: date | None = Query(None), stock_id: str | None = Que
         stock = db.get(Stock, stock_id)
         if stock is None or not stock.is_common_stock:
             raise HTTPException(status_code=404, detail="stock not found")
-        return evaluate_stock_readiness(db, stock_id, target)
+        current = evaluate_stock_readiness(db, stock_id, target)
+        latest_ready, fallback = latest_ready_stock_evaluation(db, stock_id, target, datetime.now(timezone.utc))
+        return {
+            **current,
+            "latest_ready_source_date": latest_ready["as_of"].isoformat() if latest_ready["ready"] else None,
+            "fallback_available": fallback,
+        }
     stock_ids = list(db.scalars(select(Stock.stock_id).where(Stock.is_common_stock.is_(True)).order_by(Stock.stock_id)).all())
     return evaluate_universe_readiness(db, stock_ids, target)
 
@@ -229,6 +235,9 @@ def _targeted_score_job_payload(job: JobRun) -> dict[str, Any]:
         "status": job.status,
         "run_mode": checkpoint.get("run_mode", "targeted_fetch_and_score"),
         "target_date": job.requested_end_date,
+        "evaluated_source_date": checkpoint.get("evaluated_source_date"),
+        "fallback_applied": bool(checkpoint.get("fallback_applied", False)),
+        "fallback_reason": checkpoint.get("fallback_reason"),
         "phase": checkpoint.get("phase"),
         "progress": checkpoint.get("progress", {"completed": 0, "total": 5}),
         "started_at": job.started_at,
