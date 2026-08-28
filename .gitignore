@@ -20,4 +20,5 @@ screenshots/
 *.tsbuildinfo
 frontend/test-results/
 secrets/
+account.md
 .DS_Store
