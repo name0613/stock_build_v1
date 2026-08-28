@@ -845,7 +845,7 @@ async def fetch_and_score_stock(
     quota: dict[str, Any] = {"status": "NOT_CONFIGURED"}
     quota_probe = getattr(client, "provider_quota", None)
     client_settings = getattr(client, "settings", None)
-    if callable(quota_probe) and getattr(client_settings, "finmind_api_token", None):
+    if pre_evaluation["missing_reasons"] and callable(quota_probe) and getattr(client_settings, "finmind_api_token", None):
         try:
             raw_quota = quota_probe(source_revision=getattr(client_settings, "source_revision", "runtime"))
             quota = {
