@@ -936,9 +936,9 @@ async def fetch_and_score_stock(
                     progress_callback(f"{dataset}:{message}")
 
             if method == "broker":
-                metrics = await client.fetch_broker_stocks([stock_id], start.isoformat(), end.isoformat(), record_sink=sink, progress_callback=provider_progress)
+                metrics = await client.fetch_broker_stocks([stock_id], start.isoformat(), end.isoformat(), record_sink=sink, progress_callback=provider_progress, retry_deferred=True)
             else:
-                metrics = await client.fetch_stocks_dataset([stock_id], dataset, start.isoformat(), end.isoformat(), record_sink=sink, progress_callback=provider_progress)
+                metrics = await client.fetch_stocks_dataset([stock_id], dataset, start.isoformat(), end.isoformat(), record_sink=sink, progress_callback=provider_progress, retry_provider_missing=True)
             datasets[dataset] = {**metrics, "records_accepted": accepted, "rows_versioned": versioned}
             fatal = metrics.get("fatal_code") if isinstance(metrics, dict) else None
             if fatal:

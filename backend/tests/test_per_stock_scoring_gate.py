@@ -100,12 +100,14 @@ def test_targeted_fetch_reuses_complete_sources_and_scores_after_missing_broker_
         def __init__(self) -> None:
             self.calls: list[tuple[str, str, str]] = []
 
-        async def fetch_stocks_dataset(self, stock_ids, dataset, start_date, end_date, *, record_sink=None, progress_callback=None):
+        async def fetch_stocks_dataset(self, stock_ids, dataset, start_date, end_date, *, record_sink=None, progress_callback=None, retry_provider_missing=False):
             self.calls.append((dataset, start_date, end_date))
+            assert retry_provider_missing is True
             raise AssertionError("complete source datasets should be reused locally")
 
-        async def fetch_broker_stocks(self, stock_ids, start_date, end_date, *, record_sink=None, progress_callback=None):
+        async def fetch_broker_stocks(self, stock_ids, start_date, end_date, *, record_sink=None, progress_callback=None, retry_deferred=False):
             self.calls.append(("TaiwanStockTradingDailyReport", start_date, end_date))
+            assert retry_deferred is True
             rows = [
                 {
                     "stock_id": "9001",
@@ -153,10 +155,12 @@ def test_targeted_fetch_falls_back_to_latest_complete_source_date() -> None:
     target = date(2026, 8, 28)
 
     class PublicationLagClient:
-        async def fetch_stocks_dataset(self, stock_ids, dataset, start_date, end_date, *, record_sink=None, progress_callback=None):
+        async def fetch_stocks_dataset(self, stock_ids, dataset, start_date, end_date, *, record_sink=None, progress_callback=None, retry_provider_missing=False):
+            assert retry_provider_missing is True
             return {"physical_requests": 1, "rows": 0, "rows_received": 0, "fatal_code": None}
 
-        async def fetch_broker_stocks(self, stock_ids, start_date, end_date, *, record_sink=None, progress_callback=None):
+        async def fetch_broker_stocks(self, stock_ids, start_date, end_date, *, record_sink=None, progress_callback=None, retry_deferred=False):
+            assert retry_deferred is True
             return {"physical_requests": 1, "rows": 0, "rows_received": 0, "fatal_code": None}
 
     result = asyncio.run(fetch_and_score_stock(db, PublicationLagClient(), "9001", target))

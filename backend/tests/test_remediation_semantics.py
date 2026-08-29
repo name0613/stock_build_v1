@@ -8,7 +8,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 from app.config import Settings
-from app.finmind import BROKER_ROW_CONTRACT_VERSION, FinMindClient, FinMindError
+from app.finmind import BROKER_ROW_CONTRACT_VERSION, FinMindClient, FinMindError, expected_observation_dates
 from app.ingestion import holding_coverage_state, record_score_blocked, score_source_coverage_gate
 from app.models import AccumulationScore, Base, DataSyncStatus, JobRun, Stock
 from app.scoring import HOLDING_CANONICAL_LEVELS
@@ -109,6 +109,57 @@ def test_retryable_broker_failure_is_deferred_and_checkpointed(monkeypatch, tmp_
     second = asyncio.run(client.fetch_broker_stocks(["2330"], "2026-08-24", "2026-08-24"))
     assert second["retry_deferred"] == 1
     assert calls == []
+
+
+def test_targeted_broker_retry_ignores_deferred_checkpoint(monkeypatch, tmp_path) -> None:
+    settings = Settings(raw_root=tmp_path, broker_max_retries=0, broker_concurrency=1, broker_retry_base_seconds=3600)
+    client = FinMindClient(settings)
+    monkeypatch.setattr(client, "fetch", lambda *_args, **_kwargs: (_ for _ in ()).throw(FinMindError("TIMEOUT", "temporary")))
+    first = asyncio.run(client.fetch_broker_stocks(["2330"], "2026-08-24", "2026-08-24"))
+    assert first["retryable_failed"] == 1
+
+    calls: list[str] = []
+
+    def recover(_dataset: str, stock_id: str, *_args, **_kwargs):
+        calls.append(stock_id)
+        return ([{"stock_id": stock_id, "date": "2026-08-24", "securities_trader_id": "A", "buy": 10, "sell": 1}], {"attempt": 1, "provider_row_validated": True, "provider_row_contract_version": BROKER_ROW_CONTRACT_VERSION})
+
+    monkeypatch.setattr(client, "fetch", recover)
+    targeted = asyncio.run(client.fetch_broker_stocks(["2330"], "2026-08-24", "2026-08-24", retry_deferred=True))
+    assert targeted["retry_deferred_requested"] is True
+    assert targeted["retry_deferred"] == 0
+    assert targeted["selected_pending_count"] == 1
+    assert targeted["retryable_pending"] == 0
+    assert calls == ["2330"]
+
+
+def test_targeted_source_retry_revisits_provider_empty_checkpoint(tmp_path) -> None:
+    settings = Settings(raw_root=tmp_path, broker_max_retries=0, source_concurrency=1)
+    client = FinMindClient(settings)
+    empty_calls: list[tuple[str, str]] = []
+
+    def empty(_dataset: str, _stock_id: str, start: str, end: str, **_kwargs):
+        empty_calls.append((start, end))
+        dates = expected_observation_dates("TaiwanStockPrice", date.fromisoformat(start), date.fromisoformat(end))
+        return [], {"attempt": 1, "empty_is_valid": True, "empty_reason": "no_provider_observation", "empty_observation_dates": [day.isoformat() for day in dates]}
+
+    client.fetch = empty  # type: ignore[method-assign]
+    first = asyncio.run(client.fetch_stocks_dataset(["2330"], "TaiwanStockPrice", "2026-08-03", "2026-08-05"))
+    assert first["success"] == 1
+    assert first["provider_missing_observations"] == 3
+
+    recovered_calls: list[tuple[str, str]] = []
+
+    def recover(_dataset: str, stock_id: str, start: str, end: str, **_kwargs):
+        recovered_calls.append((start, end))
+        return ([{"stock_id": stock_id, "date": day.isoformat()} for day in expected_observation_dates("TaiwanStockPrice", date.fromisoformat(start), date.fromisoformat(end))], {"attempt": 1})
+
+    client.fetch = recover  # type: ignore[method-assign]
+    targeted = asyncio.run(client.fetch_stocks_dataset(["2330"], "TaiwanStockPrice", "2026-08-03", "2026-08-05", retry_provider_missing=True))
+    assert targeted["retry_provider_missing_requested"] is True
+    assert targeted["success"] == 1
+    assert targeted["provider_missing_observations"] == 0
+    assert recovered_calls == [("2026-08-03", "2026-08-05")]
 
 
 def test_holding_publication_wait_is_throttled_for_the_same_target(monkeypatch, tmp_path) -> None:
