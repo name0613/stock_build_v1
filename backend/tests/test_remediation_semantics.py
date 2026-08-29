@@ -133,6 +133,36 @@ def test_targeted_broker_retry_ignores_deferred_checkpoint(monkeypatch, tmp_path
     assert calls == ["2330"]
 
 
+def test_targeted_broker_retry_revisits_legacy_completed_checkpoint(monkeypatch, tmp_path) -> None:
+    settings = Settings(raw_root=tmp_path, broker_max_retries=0, broker_concurrency=1)
+    client = FinMindClient(settings)
+
+    monkeypatch.setattr(
+        client,
+        "fetch",
+        lambda *_args, **_kwargs: ([], {"attempt": 1, "empty_is_valid": True, "empty_reason": "no_provider_observation"}),
+    )
+    first = asyncio.run(client.fetch_broker_stocks(["2330"], "2026-08-24", "2026-08-24"))
+    assert first["success"] == 1
+
+    checkpoint_file = next((tmp_path / "checkpoints").glob("TaiwanStockTradingDailyReport-*.json"))
+    checkpoint = json.loads(checkpoint_file.read_text(encoding="utf-8"))
+    checkpoint.pop("provider_missing", None)  # Simulate an older checkpoint schema.
+    checkpoint_file.write_text(json.dumps(checkpoint), encoding="utf-8")
+
+    calls: list[str] = []
+
+    def recover(_dataset: str, stock_id: str, *_args, **_kwargs):
+        calls.append(stock_id)
+        return ([{"stock_id": stock_id, "date": "2026-08-24", "securities_trader_id": "A", "buy": 10, "sell": 1}], {"attempt": 1, "provider_row_validated": True, "provider_row_contract_version": BROKER_ROW_CONTRACT_VERSION})
+
+    monkeypatch.setattr(client, "fetch", recover)
+    targeted = asyncio.run(client.fetch_broker_stocks(["2330"], "2026-08-24", "2026-08-24", retry_deferred=True))
+    assert targeted["retry_legacy_completed"] == 1
+    assert targeted["physical_requests"] == 1
+    assert calls == ["2330"]
+
+
 def test_targeted_source_retry_revisits_provider_empty_checkpoint(tmp_path) -> None:
     settings = Settings(raw_root=tmp_path, broker_max_retries=0, source_concurrency=1)
     client = FinMindClient(settings)

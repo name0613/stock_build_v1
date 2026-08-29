@@ -649,11 +649,15 @@ class FinMindClient:
                 checkpoint_state = "corrupt_ignored"
         provider_missing = set(checkpoint.get("provider_missing", [])) & requested_keys
         completed = set(checkpoint.get("completed", [])) & requested_keys
+        legacy_completed = completed - provider_missing
         if retry_deferred:
             # A previously empty but valid response is only an ingestion
             # checkpoint, not usable broker coverage. Targeted remediation
-            # explicitly asks the provider again for those sessions.
-            completed -= provider_missing
+            # explicitly asks the provider again for those sessions. Older
+            # checkpoints predate ``provider_missing`` and therefore cannot
+            # distinguish an empty response from a row-bearing response; in
+            # that explicit mode, replay every non-permanent completed key.
+            completed = set()
         permanent_failed = set(checkpoint.get("permanent_failed", [])) & requested_keys
         failed_by_key = {
             str(item.get("key")): item
@@ -678,7 +682,7 @@ class FinMindClient:
         checkpoint_lock = asyncio.Lock()
         sink_lock = asyncio.Lock()
         fatal_event = asyncio.Event()
-        metrics = {"requested": len(stock_ids), "requested_keys": len(requested_keys), "skipped_checkpoint": len(completed), "reused_complete": len(completed), "reused_valid_no_data": len(provider_missing & completed), "observations_reused": len(completed), "newly_fetched": 0, "physical_requests": 0, "checkpoint_state": checkpoint_state, "checkpoint_manifest_hash": manifest_hash, "requested_start_date": start_date, "requested_end_date": end_date, "session_set_hash": session_hash, "universe_hash": universe_hash, "selection_policy": "no_data_then_oldest_updated_stock_cycle_v1", "success": len(completed), "failed": 0, "stocks_completed": 0, "stocks_failed": 0, "retryable_failed": 0, "permanent_failed": len(permanent_failed), "retryable_pending": len(candidate_keys) + len(deferred_retry_keys), "retry_deferred": len(deferred_retry_keys), "retry_deferred_requested": retry_deferred, "rows": 0, "rows_received": 0, "contract_validated_rows": 0, "retries": 0, "fatal_code": None, "quota_probe_status": "NOT_CONFIGURED", "quota_remaining": None, "quota_reserve": max(0, int(self.settings.broker_quota_reserve)), "usable_quota": None, "quota_selected_pending_count": 0, "quota_estimated_cost_per_item": max(1, self.settings.broker_max_retries + 1)}
+        metrics = {"requested": len(stock_ids), "requested_keys": len(requested_keys), "skipped_checkpoint": len(completed), "reused_complete": len(completed), "reused_valid_no_data": len(provider_missing & completed), "observations_reused": len(completed), "newly_fetched": 0, "physical_requests": 0, "checkpoint_state": checkpoint_state, "checkpoint_manifest_hash": manifest_hash, "requested_start_date": start_date, "requested_end_date": end_date, "session_set_hash": session_hash, "universe_hash": universe_hash, "selection_policy": "no_data_then_oldest_updated_stock_cycle_v1", "success": len(completed), "failed": 0, "stocks_completed": 0, "stocks_failed": 0, "retryable_failed": 0, "permanent_failed": len(permanent_failed), "retryable_pending": len(candidate_keys) + len(deferred_retry_keys), "retry_deferred": len(deferred_retry_keys), "retry_legacy_completed": len(legacy_completed) if retry_deferred else 0, "retry_deferred_requested": retry_deferred, "rows": 0, "rows_received": 0, "contract_validated_rows": 0, "retries": 0, "fatal_code": None, "quota_probe_status": "NOT_CONFIGURED", "quota_remaining": None, "quota_reserve": max(0, int(self.settings.broker_quota_reserve)), "usable_quota": None, "quota_selected_pending_count": 0, "quota_estimated_cost_per_item": max(1, self.settings.broker_max_retries + 1)}
 
         stock_order = {stock_id: index for index, stock_id in enumerate(stock_ids)}
         selected_keys = sorted(candidate_keys, key=lambda key: (stock_order.get(key.split(":", 1)[0], len(stock_order)), key.split(":", 1)[1]))
