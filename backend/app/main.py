@@ -18,7 +18,7 @@ from .config import get_settings
 from .db import SessionLocal, get_db, init_db
 from .finmind import GLOBAL_PROVIDER_FAILURE_CODES
 from .features import build_features, holding_distribution_features
-from .ingestion import TARGETED_STOCK_SYNC_DATASET, authoritative_expected_latest_source_date, authoritative_source_state_hash, evaluate_stock_readiness, evaluate_universe_readiness, fetch_and_score_stock, latest_ready_stock_evaluation, score_existing_data, score_snapshot_state, seed_score_version
+from .ingestion import FAVORITE_REFRESH_DATASET, TARGETED_STOCK_SYNC_DATASET, authoritative_expected_latest_source_date, authoritative_source_state_hash, evaluate_stock_readiness, evaluate_universe_readiness, favorite_refresh_job_payload, fetch_and_score_stock, latest_ready_stock_evaluation, score_existing_data, score_snapshot_state, seed_score_version
 from .models import AccumulationFeature, AccumulationScore, BrokerDaily, DataSyncStatus, ForeignShareholdingDaily, HoldingDistribution, InstitutionalDaily, JobRun, PriceDaily, Stock
 from .schemas import PaginatedStocks, StockListItem
 from .calendar import CALENDAR_HASH, CALENDAR_VERSION
@@ -43,6 +43,7 @@ CURRENT_SCORE_DATASETS = (
     "TaiwanStockPrice",
 )
 HOLDING_DISTRIBUTION_DATASET = "TaiwanStockHoldingSharesPer"
+FAVORITE_REFRESH_ACTIVE_STATUSES = ("QUEUED", "RUNNING", "WAITING_FOR_QUOTA", "WAITING_FOR_PROVIDER")
 
 PARTIAL_SOURCE_SPECS = {
     "institutional": (InstitutionalDaily, "TaiwanStockInstitutionalInvestorsBuySellWide"),
@@ -121,6 +122,24 @@ def worker_health() -> dict[str, Any]:
     result["age_seconds"] = result.get("heartbeat_age_seconds")
     result["overdue"] = result.get("stale")
     return result
+
+
+@app.get("/api/finmind/quota")
+def finmind_quota() -> dict[str, Any]:
+    """Return only sanitized FinMind quota counters for the UI action."""
+    from .finmind import FinMindClient, FinMindError
+    try:
+        quota = FinMindClient(settings).provider_quota(source_revision=settings.source_revision)
+    except FinMindError as exc:
+        raise HTTPException(status_code=503, detail={"code": exc.code, "message": "FinMind 額度目前無法讀取"}) from exc
+    return {
+        "status": quota.get("status"),
+        "remaining": quota.get("provider_reported_remaining"),
+        "limit_per_hour": quota.get("provider_reported_limit_per_hour"),
+        "used": quota.get("provider_reported_used"),
+        "plan": quota.get("plan"),
+        "checked_at": quota.get("generated_at"),
+    }
 
 
 @app.get("/api/summary")
@@ -384,6 +403,65 @@ def set_stock_favorite(stock_id: str, favorite: bool | None = Body(None, embed=T
     stock.is_favorite = not stock.is_favorite if favorite is None else favorite
     db.commit()
     return {"stock_id": stock.stock_id, "is_favorite": stock.is_favorite}
+
+
+@app.post("/api/favorites/fetch-and-score", status_code=202)
+def start_favorite_fetch_and_score(source_date: date | None = Query(None), db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Persist a score-ordered force-refresh queue for the worker."""
+    active = db.scalar(
+        select(JobRun)
+        .where(JobRun.dataset == FAVORITE_REFRESH_DATASET, JobRun.status.in_(FAVORITE_REFRESH_ACTIVE_STATUSES))
+        .order_by(JobRun.id.desc())
+        .limit(1)
+    )
+    if active is not None:
+        raise HTTPException(status_code=409, detail={"code": "FAVORITE_REFRESH_ALREADY_ACTIVE", "job_id": active.id})
+    latest_scores = _latest_numeric_scores_subquery()
+    rows = db.execute(
+        select(Stock.stock_id, latest_scores.c.score)
+        .outerjoin(latest_scores, and_(latest_scores.c.score_stock_id == Stock.stock_id, latest_scores.c.score_rank == 1))
+        .where(Stock.is_common_stock.is_(True), Stock.is_favorite.is_(True))
+        .order_by(nulls_last(desc(latest_scores.c.score)), asc(Stock.stock_id))
+    ).all()
+    stock_ids = [str(row[0]) for row in rows]
+    if not stock_ids:
+        raise HTTPException(status_code=400, detail={"code": "NO_FAVORITE_STOCKS"})
+    target = _current_data_date(db, source_date)
+    job = JobRun(
+        dataset=FAVORITE_REFRESH_DATASET,
+        requested_date=target,
+        requested_start_date=target,
+        requested_end_date=target,
+        status="QUEUED",
+        started_at=datetime.now(timezone.utc),
+        stocks_attempted=len(stock_ids),
+        checkpoint_state={
+            "run_mode": "favorite_force_refresh_and_score",
+            "target_date": target.isoformat(),
+            "phase": "queued",
+            "stock_ids": stock_ids,
+            "ordered_scores": {str(row[0]): row[1] for row in rows},
+            "completed_stock_ids": [],
+            "current_stock_id": None,
+            "next_retry_at": None,
+            "stock_progress": {},
+        },
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    return favorite_refresh_job_payload(job)
+
+
+@app.get("/api/favorites/fetch-and-score")
+def favorite_fetch_and_score_status(job_id: int | None = Query(None, ge=1), db: Session = Depends(get_db)) -> dict[str, Any]:
+    if job_id is not None:
+        job = db.get(JobRun, job_id)
+    else:
+        job = db.scalar(select(JobRun).where(JobRun.dataset == FAVORITE_REFRESH_DATASET).order_by(JobRun.id.desc()).limit(1))
+    if job is None or job.dataset != FAVORITE_REFRESH_DATASET:
+        raise HTTPException(status_code=404, detail="favorite refresh job not found")
+    return favorite_refresh_job_payload(job)
 
 
 @app.get("/api/rankings")

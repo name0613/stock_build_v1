@@ -19,6 +19,11 @@ footer { color: #667696; font-size: .72rem; padding: 8px 0; text-align: center; 
 .primary-button { min-height: 40px; color: #071224; background: #71d9aa; border: 1px solid #8ce9bf; border-radius: 9px; padding: 0 14px; font-weight: 800; }
 .primary-button:hover:not(:disabled) { background: #8ce9bf; }
 .primary-button:disabled { opacity: .4; cursor: not-allowed; }
+.favorite-refresh-panel { display: grid; grid-template-columns: minmax(260px, 1fr) auto; align-items: center; gap: 18px 28px; border-top: 3px solid #ef5066; }
+.favorite-refresh-panel p { max-width: 780px; margin: 8px 0 0; color: #91a3c7; font-size: .78rem; line-height: 1.6; }
+.favorite-refresh-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 11px; }
+.favorite-refresh-actions button { min-width: 235px; }
+.favorite-refresh-panel > .action-status, .favorite-refresh-panel > .action-error { grid-column: 1 / -1; margin-top: -4px; }
 .action-status, .action-error { margin: 12px 0 0; font-size: .76rem; color: #9eb4dd; }
 .action-error { color: #ff9eaa; }
 .diagnosis-panel { padding: 0; overflow: hidden; }
@@ -33,3 +38,4 @@ footer { color: #667696; font-size: .72rem; padding: 8px 0; text-align: center; 
 .diagnosis-block ul { margin: 0; padding-left: 20px; color: #9baaca; font-size: .75rem; line-height: 1.7; }
 .diagnosis-block li strong { color: #d2def7; }
 .diagnosis-note { color: #f0bd69 !important; font-size: .75rem; padding-bottom: 16px; }
+@media (max-width: 900px) { .favorite-refresh-panel { grid-template-columns: 1fr; } .favorite-refresh-actions { justify-content: stretch; } .favorite-refresh-actions button { flex: 1 1 100%; } }

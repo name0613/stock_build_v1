@@ -787,6 +787,14 @@ def calculate_stock_features_and_score(db: Session, stock_id: str, as_of: date |
 
 
 TARGETED_STOCK_SYNC_DATASET = "targeted_stock_sync_score"
+FAVORITE_REFRESH_DATASET = "favorite_refresh_score"
+FAVORITE_REFRESH_DATASETS = (
+    "TaiwanStockInstitutionalInvestorsBuySellWide",
+    "TaiwanStockShareholding",
+    "TaiwanStockPrice",
+    "TaiwanStockHoldingSharesPer",
+    "TaiwanStockTradingDailyReport",
+)
 TARGETED_SCORE_FALLBACK_SESSIONS = 20
 
 
@@ -837,6 +845,8 @@ async def fetch_and_score_stock(
     *,
     job: JobRun | None = None,
     progress_callback: Callable[[str], None] | None = None,
+    force_refresh: bool = False,
+    refreshed_datasets: set[str] | None = None,
 ) -> dict[str, Any]:
     """Fetch one stock's missing scoring inputs, then score it immediately.
 
@@ -855,6 +865,7 @@ async def fetch_and_score_stock(
     score_job = job or _job_start(db, TARGETED_STOCK_SYNC_DATASET, target, target, stocks_attempted=1)
     datasets: dict[str, Any] = {}
     fetch_errors: list[dict[str, str]] = []
+    refreshed_datasets = set(refreshed_datasets or ())
 
     def checkpoint(phase: str, **extra: Any) -> None:
         state = score_job.checkpoint_state if isinstance(score_job.checkpoint_state, dict) else {}
@@ -912,7 +923,11 @@ async def fetch_and_score_stock(
     completed = 0
     for dataset, reason, start, end, method in plan:
         completed += 1
-        if reason not in set(pre_evaluation["missing_reasons"]):
+        if dataset in refreshed_datasets:
+            datasets[dataset] = {"status": "REUSED_REFRESH_CHECKPOINT", "physical_requests": 0, "refresh_complete": True}
+            checkpoint(f"reused:{dataset}", pre_readiness=pre_readiness, quota=quota, progress={"completed": completed, "total": len(plan)})
+            continue
+        if not force_refresh and reason not in set(pre_evaluation["missing_reasons"]):
             datasets[dataset] = {"status": "REUSED_LOCAL", "physical_requests": 0, "reason": "stock readiness already satisfied before fetch"}
             checkpoint(f"reused:{dataset}", pre_readiness=pre_readiness, quota=quota, progress={"completed": completed, "total": len(plan)})
             continue
@@ -936,10 +951,26 @@ async def fetch_and_score_stock(
                     progress_callback(f"{dataset}:{message}")
 
             if method == "broker":
-                metrics = await client.fetch_broker_stocks([stock_id], start.isoformat(), end.isoformat(), record_sink=sink, progress_callback=provider_progress, retry_deferred=True)
+                broker_kwargs: dict[str, Any] = {"record_sink": sink, "progress_callback": provider_progress, "retry_deferred": True}
+                if force_refresh:
+                    broker_kwargs["force_refresh"] = True
+                metrics = await client.fetch_broker_stocks([stock_id], start.isoformat(), end.isoformat(), **broker_kwargs)
             else:
-                metrics = await client.fetch_stocks_dataset([stock_id], dataset, start.isoformat(), end.isoformat(), record_sink=sink, progress_callback=provider_progress, retry_provider_missing=True)
-            datasets[dataset] = {**metrics, "records_accepted": accepted, "rows_versioned": versioned}
+                source_kwargs: dict[str, Any] = {"record_sink": sink, "progress_callback": provider_progress, "retry_provider_missing": True}
+                if force_refresh:
+                    source_kwargs["force_refresh"] = True
+                metrics = await client.fetch_stocks_dataset([stock_id], dataset, start.isoformat(), end.isoformat(), **source_kwargs)
+            refresh_complete = (
+                not metrics.get("fatal_code")
+                and int(metrics.get("retryable_pending", 0) or 0) == 0
+                and int(metrics.get("permanent_failed", 0) or 0) == 0
+                and (
+                    int(metrics.get("remaining_pending_after_run", 0) or 0) == 0
+                    if method == "broker"
+                    else int(metrics.get("success", 0) or 0) >= 1
+                )
+            )
+            datasets[dataset] = {**metrics, "records_accepted": accepted, "rows_versioned": versioned, "refresh_complete": refresh_complete}
             fatal = metrics.get("fatal_code") if isinstance(metrics, dict) else None
             if fatal:
                 fetch_errors.append({"dataset": dataset, "error_code": str(fatal)})
@@ -988,6 +1019,170 @@ async def fetch_and_score_stock(
     }
     _job_finish(db, score_job, status, records=sum(int(item.get("records_accepted", 0)) for item in datasets.values()), stocks_completed=1 if final_evaluation["ready"] else 0, stocks_failed=0, error_code=(fetch_errors[0]["error_code"] if fetch_errors else None), checkpoint_state=_jsonable({"run_mode": "targeted_fetch_and_score", **result, "phase": "completed", "progress": {"completed": len(plan), "total": len(plan)}}))
     return result
+
+
+def favorite_refresh_job_payload(job: JobRun) -> dict[str, Any]:
+    """Return the durable, sanitized progress contract used by API and UI."""
+    checkpoint = job.checkpoint_state if isinstance(job.checkpoint_state, dict) else {}
+    stock_ids = [str(value) for value in checkpoint.get("stock_ids", [])]
+    completed = [str(value) for value in checkpoint.get("completed_stock_ids", [])]
+    return {
+        "job_id": job.id,
+        "status": job.status,
+        "run_mode": "favorite_force_refresh_and_score",
+        "target_date": job.requested_end_date,
+        "phase": checkpoint.get("phase", "queued"),
+        "current_stock_id": checkpoint.get("current_stock_id"),
+        "ordered_stock_ids": stock_ids,
+        "completed_stock_ids": completed,
+        "progress": {"completed": len(completed), "total": len(stock_ids)},
+        "next_retry_at": checkpoint.get("next_retry_at"),
+        "quota": checkpoint.get("quota"),
+        "stock_progress": checkpoint.get("stock_progress", {}),
+        "started_at": job.started_at,
+        "finished_at": job.finished_at,
+        "error_code": job.error_code,
+    }
+
+
+def _favorite_retry_at(minutes: int = 5) -> str:
+    return (_now() + timedelta(minutes=max(1, minutes))).isoformat()
+
+
+def _favorite_wait(db: Session, job: JobRun, checkpoint: dict[str, Any], status: str, error_code: str) -> dict[str, Any]:
+    checkpoint.update({"phase": "waiting_for_quota" if status == "WAITING_FOR_QUOTA" else "waiting_for_provider", "next_retry_at": _favorite_retry_at()})
+    job.status = status
+    job.error_code = error_code
+    job.checkpoint_state = _jsonable(checkpoint)
+    db.commit()
+    return favorite_refresh_job_payload(job)
+
+
+async def resume_favorite_refresh_job(
+    db: Session,
+    client: FinMindClient,
+    job: JobRun,
+    *,
+    progress_callback: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
+    """Resume one ordered favorites refresh until complete or provider-blocked.
+
+    The parent JobRun is the durable queue/checkpoint. Each stock is refreshed
+    in the score order captured when the user pressed the button. Completed
+    datasets and stocks are never repeated after a restart or quota reset.
+    """
+    checkpoint = dict(job.checkpoint_state or {})
+    stock_ids = [str(value) for value in checkpoint.get("stock_ids", [])]
+    completed_stock_ids = [str(value) for value in checkpoint.get("completed_stock_ids", [])]
+    completed_set = set(completed_stock_ids)
+    stock_progress = dict(checkpoint.get("stock_progress", {}))
+    target = job.requested_end_date or completed_source_end_date(_now())
+    next_retry_at = checkpoint.get("next_retry_at")
+    if next_retry_at:
+        try:
+            if datetime.fromisoformat(str(next_retry_at).replace("Z", "+00:00")) > _now():
+                return favorite_refresh_job_payload(job)
+        except ValueError:
+            pass
+
+    job.status = "RUNNING"
+    job.error_code = None
+    checkpoint.update({"phase": "quota_check", "next_retry_at": None})
+    job.checkpoint_state = _jsonable(checkpoint)
+    db.commit()
+
+    for stock_id in stock_ids:
+        if stock_id in completed_set:
+            continue
+        checkpoint.update({"phase": "quota_check", "current_stock_id": stock_id})
+        try:
+            raw_quota = client.provider_quota(source_revision=getattr(client.settings, "source_revision", "runtime"))
+            quota = {
+                "status": "PASS",
+                "remaining": raw_quota.get("provider_reported_remaining"),
+                "limit_per_hour": raw_quota.get("provider_reported_limit_per_hour"),
+                "plan": raw_quota.get("plan"),
+            }
+        except FinMindError as exc:
+            checkpoint["quota"] = {"status": "FAILED", "error_code": exc.code}
+            if exc.code in {"AUTHENTICATION_FAILED", "ACCESS_DENIED", "SCHEMA_MISMATCH"}:
+                _job_finish(db, job, "FAILED", stocks_completed=len(completed_stock_ids), stocks_failed=1, error_code=exc.code, error=str(exc), checkpoint_state=_jsonable({**checkpoint, "phase": "failed"}))
+                return favorite_refresh_job_payload(job)
+            return _favorite_wait(db, job, checkpoint, "WAITING_FOR_QUOTA", exc.code)
+        checkpoint["quota"] = quota
+        remaining = int(quota.get("remaining") or 0)
+        reserve = max(0, int(getattr(client.settings, "broker_quota_reserve", 0)))
+        if remaining <= reserve:
+            return _favorite_wait(db, job, checkpoint, "WAITING_FOR_QUOTA", "QUOTA_EXHAUSTED")
+
+        previous = dict(stock_progress.get(stock_id, {}))
+        refreshed = {
+            dataset
+            for dataset, value in dict(previous.get("datasets", {})).items()
+            if isinstance(value, dict) and value.get("refresh_complete") is True
+        }
+        checkpoint["phase"] = "refreshing_stock"
+        checkpoint["stock_progress"] = stock_progress
+        job.checkpoint_state = _jsonable(checkpoint)
+        db.commit()
+        if progress_callback:
+            progress_callback(f"favorite_refresh:{stock_id}")
+
+        result = await fetch_and_score_stock(
+            db,
+            client,
+            stock_id,
+            target,
+            progress_callback=progress_callback,
+            force_refresh=True,
+            refreshed_datasets=refreshed,
+        )
+        merged_datasets = {**dict(previous.get("datasets", {})), **dict(result.get("datasets", {}))}
+        current = {
+            "datasets": merged_datasets,
+            "score": result.get("score"),
+            "readiness": result.get("readiness"),
+            "fetch_errors": result.get("fetch_errors", []),
+            "last_attempt_at": _now().isoformat(),
+        }
+        stock_progress[stock_id] = current
+        checkpoint["stock_progress"] = stock_progress
+        completed_datasets = {
+            dataset
+            for dataset, value in merged_datasets.items()
+            if dataset in FAVORITE_REFRESH_DATASETS and isinstance(value, dict) and value.get("refresh_complete") is True
+        }
+        error_codes = {str(item.get("error_code")) for item in result.get("fetch_errors", []) if item.get("error_code")}
+        quota_blocked = "QUOTA_EXHAUSTED" in error_codes or any(
+            int(value.get("quota_unselected_pending_count", 0) or 0) > 0
+            for value in merged_datasets.values()
+            if isinstance(value, dict)
+        )
+        if quota_blocked:
+            return _favorite_wait(db, job, checkpoint, "WAITING_FOR_QUOTA", "QUOTA_EXHAUSTED")
+        fatal_codes = error_codes & set(GLOBAL_PROVIDER_FAILURE_CODES)
+        if fatal_codes:
+            code = sorted(fatal_codes)[0]
+            _job_finish(db, job, "FAILED", stocks_completed=len(completed_stock_ids), stocks_failed=1, error_code=code, checkpoint_state=_jsonable({**checkpoint, "phase": "failed"}))
+            return favorite_refresh_job_payload(job)
+        if completed_datasets != set(FAVORITE_REFRESH_DATASETS):
+            return _favorite_wait(db, job, checkpoint, "WAITING_FOR_PROVIDER", "REFRESH_INCOMPLETE")
+
+        completed_stock_ids.append(stock_id)
+        completed_set.add(stock_id)
+        checkpoint.update({"completed_stock_ids": completed_stock_ids, "current_stock_id": None, "phase": "stock_completed", "next_retry_at": None})
+        job.stocks_completed = len(completed_stock_ids)
+        job.checkpoint_state = _jsonable(checkpoint)
+        db.commit()
+
+    _job_finish(
+        db,
+        job,
+        "SUCCESS",
+        stocks_completed=len(completed_stock_ids),
+        checkpoint_state=_jsonable({**checkpoint, "phase": "completed", "current_stock_id": None, "next_retry_at": None}),
+    )
+    return favorite_refresh_job_payload(job)
 
 
 def score_existing_data(

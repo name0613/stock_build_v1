@@ -192,6 +192,44 @@ def test_targeted_source_retry_revisits_provider_empty_checkpoint(tmp_path) -> N
     assert recovered_calls == [("2026-08-03", "2026-08-05")]
 
 
+def test_explicit_force_refresh_replays_completed_source_and_broker_checkpoints(monkeypatch, tmp_path) -> None:
+    settings = Settings(raw_root=tmp_path, broker_max_retries=0, broker_concurrency=1, source_concurrency=1)
+    client = FinMindClient(settings)
+    source_calls: list[str] = []
+
+    def source_fetch(_dataset: str, stock_id: str, start: str, end: str, **_kwargs):
+        source_calls.append(stock_id)
+        rows = [{"stock_id": stock_id, "date": day.isoformat()} for day in expected_observation_dates("TaiwanStockPrice", date.fromisoformat(start), date.fromisoformat(end))]
+        return rows, {"attempt": 1, "pagination_complete": True}
+
+    monkeypatch.setattr(client, "fetch", source_fetch)
+    first_source = asyncio.run(client.fetch_stocks_dataset(["2330"], "TaiwanStockPrice", "2026-08-03", "2026-08-05"))
+    reused_source = asyncio.run(client.fetch_stocks_dataset(["2330"], "TaiwanStockPrice", "2026-08-03", "2026-08-05"))
+    refreshed_source = asyncio.run(client.fetch_stocks_dataset(["2330"], "TaiwanStockPrice", "2026-08-03", "2026-08-05", force_refresh=True))
+    assert first_source["physical_requests"] == 1
+    assert reused_source["physical_requests"] == 0
+    assert refreshed_source["force_refresh_requested"] is True
+    assert refreshed_source["physical_requests"] == 1
+    assert source_calls == ["2330", "2330"]
+
+    broker_calls: list[str] = []
+
+    def broker_fetch(_dataset: str, stock_id: str, _start: str, end: str, **_kwargs):
+        broker_calls.append(stock_id)
+        rows = [{"stock_id": stock_id, "date": end, "securities_trader_id": "A", "buy": 10, "sell": 1, "provider_row_validated": True, "provider_row_contract_version": BROKER_ROW_CONTRACT_VERSION}]
+        return rows, {"attempt": 1, "provider_row_validated": True, "provider_row_contract_version": BROKER_ROW_CONTRACT_VERSION}
+
+    monkeypatch.setattr(client, "fetch", broker_fetch)
+    first_broker = asyncio.run(client.fetch_broker_stocks(["2330"], "2026-08-24", "2026-08-24"))
+    reused_broker = asyncio.run(client.fetch_broker_stocks(["2330"], "2026-08-24", "2026-08-24"))
+    refreshed_broker = asyncio.run(client.fetch_broker_stocks(["2330"], "2026-08-24", "2026-08-24", force_refresh=True))
+    assert first_broker["physical_requests"] == 1
+    assert reused_broker["physical_requests"] == 0
+    assert refreshed_broker["force_refresh_requested"] is True
+    assert refreshed_broker["physical_requests"] == 1
+    assert broker_calls == ["2330", "2330"]
+
+
 def test_holding_publication_wait_is_throttled_for_the_same_target(monkeypatch, tmp_path) -> None:
     client = FinMindClient(Settings(raw_root=tmp_path, holding_publication_check_interval_hours=24))
 

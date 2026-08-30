@@ -5,6 +5,9 @@ test("dashboard loads and exposes evidence controls", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "低調持續建倉監控" })).toBeVisible();
   await expect(page.getByLabel("股票代碼或名稱搜尋")).toBeVisible();
   await expect(page.getByRole("button", { name: "只看 Strong" })).toBeVisible();
+  await expect(page.getByTestId("favorite-refresh-panel")).toBeVisible();
+  await expect(page.getByTestId("finmind-quota-button")).toContainText("FinMind");
+  await expect(page.getByTestId("favorite-refresh-button")).toContainText("我的最愛");
   const health = await page.request.get("/health");
   expect(health.status()).toBe(200);
   const stocks = await page.request.get("/api/stocks?page=1&page_size=50");

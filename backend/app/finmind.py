@@ -614,7 +614,7 @@ class FinMindClient:
         dates = [str(row.get("date") or row.get("Date") or row.get("source_date")) for row in records if row.get("date") or row.get("Date") or row.get("source_date")]
         return max(dates) if dates else None
 
-    async def fetch_broker_stocks(self, stock_ids: list[str], start_date: str, end_date: str, dataset: str = "TaiwanStockTradingDailyReport", *, record_sink: Callable[[list[dict[str, Any]]], int] | None = None, progress_callback: Callable[[str], None] | None = None, retry_deferred: bool = False) -> dict[str, Any]:
+    async def fetch_broker_stocks(self, stock_ids: list[str], start_date: str, end_date: str, dataset: str = "TaiwanStockTradingDailyReport", *, record_sink: Callable[[list[dict[str, Any]]], int] | None = None, progress_callback: Callable[[str], None] | None = None, retry_deferred: bool = False, force_refresh: bool = False) -> dict[str, Any]:
         """Bounded async Sponsor-compatible path with checkpoint/resume semantics.
 
         ``retry_deferred`` is reserved for an explicit targeted remediation.
@@ -650,7 +650,7 @@ class FinMindClient:
         provider_missing = set(checkpoint.get("provider_missing", [])) & requested_keys
         completed = set(checkpoint.get("completed", [])) & requested_keys
         legacy_completed = completed - provider_missing
-        if retry_deferred:
+        if retry_deferred or force_refresh:
             # A previously empty but valid response is only an ingestion
             # checkpoint, not usable broker coverage. Targeted remediation
             # explicitly asks the provider again for those sessions. Older
@@ -682,7 +682,7 @@ class FinMindClient:
         checkpoint_lock = asyncio.Lock()
         sink_lock = asyncio.Lock()
         fatal_event = asyncio.Event()
-        metrics = {"requested": len(stock_ids), "requested_keys": len(requested_keys), "skipped_checkpoint": len(completed), "reused_complete": len(completed), "reused_valid_no_data": len(provider_missing & completed), "observations_reused": len(completed), "newly_fetched": 0, "physical_requests": 0, "checkpoint_state": checkpoint_state, "checkpoint_manifest_hash": manifest_hash, "requested_start_date": start_date, "requested_end_date": end_date, "session_set_hash": session_hash, "universe_hash": universe_hash, "selection_policy": "no_data_then_oldest_updated_stock_cycle_v1", "success": len(completed), "failed": 0, "stocks_completed": 0, "stocks_failed": 0, "retryable_failed": 0, "permanent_failed": len(permanent_failed), "retryable_pending": len(candidate_keys) + len(deferred_retry_keys), "retry_deferred": len(deferred_retry_keys), "retry_legacy_completed": len(legacy_completed) if retry_deferred else 0, "retry_deferred_requested": retry_deferred, "rows": 0, "rows_received": 0, "contract_validated_rows": 0, "retries": 0, "fatal_code": None, "quota_probe_status": "NOT_CONFIGURED", "quota_remaining": None, "quota_reserve": max(0, int(self.settings.broker_quota_reserve)), "usable_quota": None, "quota_selected_pending_count": 0, "quota_estimated_cost_per_item": max(1, self.settings.broker_max_retries + 1)}
+        metrics = {"requested": len(stock_ids), "requested_keys": len(requested_keys), "skipped_checkpoint": len(completed), "reused_complete": len(completed), "reused_valid_no_data": len(provider_missing & completed), "observations_reused": len(completed), "newly_fetched": 0, "physical_requests": 0, "checkpoint_state": checkpoint_state, "checkpoint_manifest_hash": manifest_hash, "requested_start_date": start_date, "requested_end_date": end_date, "session_set_hash": session_hash, "universe_hash": universe_hash, "selection_policy": "no_data_then_oldest_updated_stock_cycle_v1", "success": len(completed), "failed": 0, "stocks_completed": 0, "stocks_failed": 0, "retryable_failed": 0, "permanent_failed": len(permanent_failed), "retryable_pending": len(candidate_keys) + len(deferred_retry_keys), "retry_deferred": len(deferred_retry_keys), "retry_legacy_completed": len(legacy_completed) if retry_deferred else 0, "retry_deferred_requested": retry_deferred, "force_refresh_requested": force_refresh, "rows": 0, "rows_received": 0, "contract_validated_rows": 0, "retries": 0, "fatal_code": None, "quota_probe_status": "NOT_CONFIGURED", "quota_remaining": None, "quota_reserve": max(0, int(self.settings.broker_quota_reserve)), "usable_quota": None, "quota_selected_pending_count": 0, "quota_estimated_cost_per_item": max(1, self.settings.broker_max_retries + 1)}
 
         stock_order = {stock_id: index for index, stock_id in enumerate(stock_ids)}
         selected_keys = sorted(candidate_keys, key=lambda key: (stock_order.get(key.split(":", 1)[0], len(stock_order)), key.split(":", 1)[1]))
@@ -827,7 +827,7 @@ class FinMindClient:
         metrics["remaining_pending_after_run"] = metrics["retryable_pending"] + metrics["permanent_failed"]
         return metrics
 
-    async def fetch_stocks_dataset(self, stock_ids: list[str], dataset: str, start_date: str, end_date: str, *, record_sink: Callable[[list[dict[str, Any]]], int | dict[str, Any]] | None = None, progress_callback: Callable[[str], None] | None = None, retry_provider_missing: bool = False) -> dict[str, Any]:
+    async def fetch_stocks_dataset(self, stock_ids: list[str], dataset: str, start_date: str, end_date: str, *, record_sink: Callable[[list[dict[str, Any]]], int | dict[str, Any]] | None = None, progress_callback: Callable[[str], None] | None = None, retry_provider_missing: bool = False, force_refresh: bool = False) -> dict[str, Any]:
         """Fetch per-stock history with observation-verified checkpoint coverage.
 
         Targeted remediation can set ``retry_provider_missing`` to distinguish
@@ -943,7 +943,7 @@ class FinMindClient:
                 entry = entries.get(stock_id, {})
                 record_dates = set(entry.get("verified_record_dates", [])) & requested_observations
                 provider_missing_dates = set(entry.get("verified_missing_dates", entry.get("verified_no_data_dates", []))) & requested_observations
-                covered = record_dates if retry_provider_missing else record_dates | provider_missing_dates
+                covered = set() if force_refresh else (record_dates if retry_provider_missing else record_dates | provider_missing_dates)
                 missing = [day for day in expected_strings if day not in covered]
                 if not missing:
                     initial_complete.add(stock_id)
@@ -1024,6 +1024,7 @@ class FinMindClient:
             "publication_check_performed": False,
             "publication_wait_invalidated": False,
             "retry_provider_missing_requested": retry_provider_missing,
+            "force_refresh_requested": force_refresh,
         }
 
         async def persist() -> None:
@@ -1057,7 +1058,7 @@ class FinMindClient:
         # request to detect a newly published target.  A partial state is
         # never throttled: it must keep resuming the authoritative per-stock
         # checkpoint until every stock passes the 15-bucket contract.
-        if publication_target and publication_wait and publication_wait.get("target_date") == publication_target:
+        if publication_target and publication_wait and publication_wait.get("target_date") == publication_target and not force_refresh:
             if publication_wait_state == HOLDING_PUBLICATION_WAIT_STATE and not publication_recheck_due:
                 canary_stock_id = HOLDING_PUBLICATION_CANARY_STOCK_ID if HOLDING_PUBLICATION_CANARY_STOCK_ID in stock_ids else (stock_ids[0] if stock_ids else None)
                 if canary_stock_id and self.settings.finmind_api_token:
@@ -1240,7 +1241,9 @@ class FinMindClient:
 
                 previous = entries.get(stock_id, {})
                 previous_covered = set(previous.get("covered_dates", [])) & requested_observations
-                if retry_provider_missing:
+                if force_refresh:
+                    previous_covered = set()
+                elif retry_provider_missing:
                     previous_covered = set(previous.get("verified_record_dates", [])) & requested_observations
                 newly_verified = (verified_record_dates | provider_missing_dates) - previous_covered
                 if not newly_verified:

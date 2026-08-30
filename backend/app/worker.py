@@ -13,11 +13,12 @@ from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_EXECUTED, EVENT_JOB_MI
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.combining import OrTrigger
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 
 from .config import get_settings
 from .db import SessionLocal, init_db
 from .finmind import FinMindClient
-from .ingestion import catch_up, intraday_sync, seed_score_version
+from .ingestion import FAVORITE_REFRESH_DATASET, catch_up, intraday_sync, resume_favorite_refresh_job, seed_score_version
 from .calendar import MARKET_CLOSE_TIME, MARKET_OPEN_TIME, completed_source_end_date, is_trading_session, market_session_state, source_publication_window_open
 from .models import JobRun
 from .worker_health import start_health_server
@@ -29,6 +30,7 @@ OPEN_MARKET_SYNC_JOB_ID = "market-open-sync"
 SCHEDULE_CONTRACT = {"main-sync": (21, 30), "retry-sync": (23, 0), OPEN_MARKET_SYNC_JOB_ID: (9, 0)}
 _heartbeat_lock = Lock()
 _scheduler_state_lock = Lock()
+_provider_work_lock = Lock()
 _scheduler_runtime: BlockingScheduler | None = None
 _scheduler_job_state: dict[str, dict[str, Any]] = {}
 
@@ -154,6 +156,16 @@ def _scheduler_listener(event: Any) -> None:
 
 def _reconcile_interrupted_jobs(db: object) -> None:
     for job in db.query(JobRun).filter(JobRun.status == "RUNNING").all():
+        if job.dataset == FAVORITE_REFRESH_DATASET:
+            checkpoint = dict(job.checkpoint_state or {})
+            checkpoint["phase"] = "queued_after_worker_restart"
+            checkpoint["next_retry_at"] = None
+            job.status = "QUEUED"
+            job.error_code = "WORKER_RESTARTED_RESUMING"
+            job.error = None
+            job.finished_at = None
+            job.checkpoint_state = checkpoint
+            continue
         job.status = "PARTIAL"
         job.error_code = "WORKER_RESTARTED"
         job.error = "worker restarted before job completion"
@@ -175,6 +187,9 @@ def _heartbeat_pulse() -> None:
 
 
 def run_catch_up() -> None:
+    if not _provider_work_lock.acquire(blocking=False):
+        _heartbeat(status="idle", ready=True, last_job_status="DEFERRED_PROVIDER_WORK_BUSY", last_error_code=None)
+        return
     started = datetime.now(timezone.utc).isoformat()
     _heartbeat(status="running", ready=True, scheduler_ready=False, market_session=market_session_state(), last_scheduler_heartbeat_at=started, last_job_started_at=started, last_error_code=None)
     db = SessionLocal()
@@ -193,6 +208,7 @@ def run_catch_up() -> None:
         _heartbeat(status="idle", ready=True, scheduler_ready=bool(_scheduler_runtime and _scheduler_runtime.running), market_session=market_session_state(), last_job_finished_at=finished, last_job_status="FAILED", last_error_code=getattr(exc, "code", "UNEXPECTED"), current_job_run_id=None)
     finally:
         db.close()
+        _provider_work_lock.release()
 
 
 def run_open_market_sync() -> None:
@@ -213,6 +229,9 @@ def run_open_market_sync() -> None:
 
 
 def run_intraday_sync() -> None:
+    if not _provider_work_lock.acquire(blocking=False):
+        _heartbeat(status="idle", ready=True, last_job_status="DEFERRED_PROVIDER_WORK_BUSY", last_error_code=None)
+        return
     started = datetime.now(timezone.utc).isoformat()
     _heartbeat(status="running", ready=True, scheduler_ready=False, market_session=market_session_state(), last_scheduler_heartbeat_at=started, last_job_started_at=started, last_error_code=None)
     db = SessionLocal()
@@ -231,6 +250,49 @@ def run_intraday_sync() -> None:
         _heartbeat(status="idle", ready=True, scheduler_ready=bool(_scheduler_runtime and _scheduler_runtime.running), market_session=market_session_state(), last_job_finished_at=finished, last_job_status="FAILED", last_error_code=getattr(exc, "code", "UNEXPECTED"), current_job_run_id=None)
     finally:
         db.close()
+        _provider_work_lock.release()
+
+
+def run_favorite_refresh() -> None:
+    """Resume the oldest durable favorite refresh without overlapping sync."""
+    if not _provider_work_lock.acquire(blocking=False):
+        return
+    db = SessionLocal()
+    try:
+        job = (
+            db.query(JobRun)
+            .filter(
+                JobRun.dataset == FAVORITE_REFRESH_DATASET,
+                JobRun.status.in_(("QUEUED", "RUNNING", "WAITING_FOR_QUOTA", "WAITING_FOR_PROVIDER")),
+            )
+            .order_by(JobRun.id.asc())
+            .first()
+        )
+        if job is None:
+            return
+        started = datetime.now(timezone.utc).isoformat()
+
+        def report_progress(phase: str) -> None:
+            _heartbeat(last_job_progress_at=datetime.now(timezone.utc).isoformat(), job_phase=phase, current_job_run_id=job.id)
+
+        _heartbeat(status="running", ready=True, last_job_started_at=started, current_job_run_id=job.id, job_phase="favorite_refresh", last_error_code=None)
+        result = asyncio.run(resume_favorite_refresh_job(db, FinMindClient(settings), job, progress_callback=report_progress))
+        _heartbeat(
+            status="idle",
+            ready=True,
+            last_job_finished_at=datetime.now(timezone.utc).isoformat(),
+            last_job_status=result.get("status"),
+            last_error_code=result.get("error_code"),
+            current_job_run_id=None,
+            job_phase=result.get("phase"),
+        )
+    except Exception as exc:
+        db.rollback()
+        logger.error("favorite refresh failed code=%s", getattr(exc, "code", "UNEXPECTED"))
+        _heartbeat(status="idle", ready=True, last_job_status="FAILED", last_error_code=getattr(exc, "code", "UNEXPECTED"), current_job_run_id=None)
+    finally:
+        db.close()
+        _provider_work_lock.release()
 
 
 def main() -> None:
@@ -274,6 +336,7 @@ def main() -> None:
         replace_existing=True,
         misfire_grace_time=300,
     )
+    scheduler.add_job(run_favorite_refresh, IntervalTrigger(minutes=1, timezone=settings.timezone), id="favorite-refresh-resume", replace_existing=True, max_instances=1, coalesce=True, misfire_grace_time=60)
     scheduler.add_listener(_scheduler_listener, EVENT_JOB_SUBMITTED | EVENT_JOB_EXECUTED | EVENT_JOB_ERROR | EVENT_JOB_MISSED)
     _scheduler_runtime = scheduler
     logger.info("worker scheduled timezone=%s", settings.timezone)
