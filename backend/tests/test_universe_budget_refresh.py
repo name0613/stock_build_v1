@@ -192,3 +192,73 @@ def test_two_complete_empty_fetches_are_persisted_and_skipped(monkeypatch: pytes
             if stock is not None:
                 db.delete(stock)
             db.commit()
+
+
+def test_two_unverified_empty_broker_fetches_are_persisted_and_skipped(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    stock_id = "9997"
+    with SessionLocal() as db:
+        db.add(Stock(stock_id=stock_id, stock_name="券商空資料測試", market="上市", is_common_stock=True))
+        job = JobRun(
+            dataset=UNIVERSE_BUDGET_REFRESH_DATASET,
+            requested_date=date(2026, 8, 20),
+            requested_start_date=date(2026, 8, 20),
+            requested_end_date=date(2026, 8, 20),
+            status="QUEUED",
+            started_at=datetime.now(timezone.utc),
+            stocks_attempted=1,
+            checkpoint_state={
+                "phase": "queued",
+                "stock_ids": [stock_id],
+                "cycle_stock_ids": [stock_id],
+                "queue_index": 0,
+                "budget": {"limit": 2, "used": 0, "remaining": 2},
+            },
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+        job_id = job.id
+
+    budget = FinMindRequestBudget(2, tmp_path / "unverified-empty-budget.json")
+
+    class FakeClient:
+        settings = SimpleNamespace(source_revision="test", broker_quota_reserve=0)
+        request_budget = budget
+
+        def provider_quota(self, *, source_revision: str):
+            return {"provider_reported_remaining": 6000, "provider_reported_limit_per_hour": 6000, "plan": "Sponsor"}
+
+    async def fake_fetch(_db, client, candidate, _target, **_kwargs):
+        assert candidate == stock_id
+        client.request_budget.reserve()
+        datasets = {dataset: {"refresh_complete": True} for dataset in FAVORITE_REFRESH_DATASETS}
+        datasets["TaiwanStockTradingDailyReport"] = {
+            "refresh_complete": False,
+            "failure_codes": ["EMPTY_RESPONSE_UNVERIFIED"],
+            "retryable_pending": 20,
+        }
+        return {
+            "datasets": datasets,
+            "score": {"score": None, "status": "DATA_INSUFFICIENT"},
+            "readiness": {"ready": False},
+            "fetch_errors": [],
+        }
+
+    monkeypatch.setattr(ingestion_module, "fetch_and_score_stock", fake_fetch)
+    try:
+        with SessionLocal() as db:
+            result = asyncio.run(resume_universe_budget_refresh_job(db, FakeClient(), db.get(JobRun, job_id)))
+            issue = db.get(StockRefreshIssue, stock_id)
+            assert result["status"] == "SUCCESS"
+            assert result["budget"] == {"limit": 2, "used": 2, "remaining": 0}
+            assert issue is not None
+            assert issue.no_data_attempts == 2
+            assert issue.status == "SKIPPED_AFTER_TWO_NO_DATA"
+    finally:
+        with SessionLocal() as db:
+            db.query(JobRun).filter(JobRun.id == job_id).delete(synchronize_session=False)
+            db.query(StockRefreshIssue).filter(StockRefreshIssue.stock_id == stock_id).delete(synchronize_session=False)
+            stock = db.get(Stock, stock_id)
+            if stock is not None:
+                db.delete(stock)
+            db.commit()

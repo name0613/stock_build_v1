@@ -889,6 +889,11 @@ class FinMindClient:
         metrics["retryable_pending"] = sum(1 for item in checkpoint.get("failed", []) if item.get("key") in requested_keys and item.get("classification") == "retryable_failed")
         metrics["retryable_pending"] = max(metrics["retryable_pending"], len(deferred_retry_keys) + int(metrics.get("quota_unselected_pending_count", 0)))
         metrics["permanent_failed"] = len(set(checkpoint.get("permanent_failed", [])) & requested_keys)
+        metrics["failure_codes"] = sorted({
+            str(item.get("code"))
+            for item in checkpoint.get("failed", [])
+            if item.get("key") in requested_keys and item.get("code")
+        })
         metrics["remaining_pending_after_run"] = metrics["retryable_pending"] + metrics["permanent_failed"]
         return metrics
 
