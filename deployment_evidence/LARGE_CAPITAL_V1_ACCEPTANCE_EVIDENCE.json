@@ -1,0 +1,88 @@
+{
+  "evidence_version": "large-capital-v1",
+  "generated_at": "2026-08-31T15:24:28.6588620Z",
+  "source_revision": "d810c03a0dd8ac55321ed9588a0cfb5cc7e21ce5",
+  "implementation_commits": [
+    "7d4addd45d23c240f4b7573804585e0dc07acb84",
+    "d810c03a0dd8ac55321ed9588a0cfb5cc7e21ce5"
+  ],
+  "score_versions": {
+    "legacy": {
+      "version": "s-only-v6",
+      "formula_hash": "21df6cf28188f6ef3973e8283cb6f482d9895203e9f023f3dc9c69bec926f99b",
+      "preserved": true
+    },
+    "capital_aware": {
+      "version": "capital-aware-v7",
+      "formula_hash": "e866288ce9665ff9250e798379aa0e28edbc1aceacb11537982501834d3388b9"
+    }
+  },
+  "migration": {
+    "postgresql_file": "migrations/013_capital_aware_v7.sql",
+    "postgresql_status": "PENDING_NAS_EXECUTION",
+    "sqlite_compatibility_status": "PASS",
+    "sqlite_notes": "Recovered legacy accumulation_features and accumulation_scores unique constraints and preserved existing rows; formal price columns and capital_aware_scores are present."
+  },
+  "raw_replay": {
+    "raw_price_files": 147,
+    "rows_read": 139394,
+    "rows_accepted": 6028,
+    "stocks_scored": 2148,
+    "score_target_date": "2026-08-20",
+    "knowledge_cutoff_watermark": "2026-08-20T12:33:28.440876+00:00",
+    "same_watermark_first_counts": {"s-only-v6": 4296, "capital-aware-v7": 4296},
+    "same_watermark_second_counts": {"s-only-v6": 4296, "capital-aware-v7": 4296},
+    "idempotency_verified": true,
+    "source_revision_preserved": true
+  },
+  "calibration": {
+    "raw_unique_stock_date_rows": 65009,
+    "stocks_with_20d_formal_money": 3,
+    "median_trading_value_20d_twd": {"sample_count": 3, "p25": 12719296269.5, "median": 35619588241.0, "p75": 59504001202.0},
+    "estimated_institutional_net_value_20d_twd": {"sample_count": 3, "p25": -37177998813.0022, "median": -9488076223.411964, "p75": 9140477936.540598},
+    "market_samples": {"上市": 3, "上櫃": 0, "興櫃": 0},
+    "legacy_s_top20_top50": {"numeric_score_count": 0, "top20_count": 0, "top50_count": 0, "note": "Current local 2026-08-20 v6 is fail-closed because current foreign/broker coverage is incomplete; no numeric legacy rows were substituted."},
+    "capital_aware_top20": {
+      "large_capital": {"returned": 20, "numeric": 3, "minimum_median_trading_value_twd": 12719296269.5, "median_median_trading_value_twd": 35619588241.0},
+      "high_confidence": {"returned": 20, "numeric": 3, "minimum_median_trading_value_twd": 12719296269.5, "median_median_trading_value_twd": 35619588241.0}
+    },
+    "fixed_threshold_reason": "Formal-money history currently covers only three stocks for 20 sessions, so fixed TWD knots are conservative and absolute; low-liquidity/high-ratio stocks cannot qualify from ratio alone."
+  },
+  "representative_stocks": {
+    "2317": {"market": "上市", "median_trading_value_20d_twd": 12719296269.5, "estimated_institutional_net_value_20d_twd": 9140477936.54, "large_capital_score": 91.75, "high_confidence_score": 58.75, "status": "LARGE_CAPITAL_ACCUMULATION", "confirmation_sources": 1, "eligibility_reasons": ["stealth_score_unavailable", "fewer_than_two_independent_sources"]},
+    "2330": {"market": "上市", "median_trading_value_20d_twd": 59504001202.0, "estimated_institutional_net_value_20d_twd": -37177998813.0, "large_capital_score": 26.75, "high_confidence_score": 25.0, "status": "CAPITAL_TOO_SMALL", "confirmation_sources": 0, "eligibility_reasons": ["capital_reference_below_200m_twd", "stealth_score_unavailable", "fewer_than_two_independent_sources"]},
+    "2454": {"market": "上市", "median_trading_value_20d_twd": 35619588241.0, "estimated_institutional_net_value_20d_twd": -9488076223.41, "large_capital_score": 26.63, "high_confidence_score": 28.61, "status": "CAPITAL_TOO_SMALL", "confirmation_sources": 1, "eligibility_reasons": ["capital_reference_below_200m_twd", "stealth_score_unavailable", "fewer_than_two_independent_sources"]},
+    "1101": {"market": "上市", "median_trading_value_20d_twd": null, "status": "DATA_INSUFFICIENT", "eligibility_reasons": ["missing_MedianTradingValue20D", "missing_AverageTradingValue20D", "missing_MedianVolume20D", "missing_CapitalReference20D"]}
+  },
+  "verification": {
+    "backend_pytest": "PASS: 191 passed, 31 warnings",
+    "backend_targeted_api_capital_tests": "PASS: 17 passed",
+    "ruff": "PASS",
+    "frontend_npm_test": "PASS: exit 0 (0 test files configured)",
+    "frontend_lint": "PASS",
+    "frontend_build": "PASS",
+    "playwright": "PASS: deterministic 11/11; capital-aware 2/2; combined 13/13",
+    "api_smoke": "PASS: health/spec/v6-stealth/v7-large/v7-high/summary/detail/readiness 200; invalid ranking kind 422",
+    "secret_scan": "PASS: 569 files, no findings, secret_values_redacted=true"
+  },
+  "nas": {
+    "status": "BLOCKED_MISSING_CREDENTIALS",
+    "required_environment_variables_present": {"NAS_HOST": false, "NAS_USER": false, "NAS_PASSWORD": false, "FINMIND_API_TOKEN": false},
+    "deploy_script_result": "Stopped before connection: NAS_USER and NAS_PASSWORD must be provided by the execution environment.",
+    "deployed_source_revision": null,
+    "health": null,
+    "ranking_api": null,
+    "frontend_and_restart_persistence": null,
+    "postgres_lan_exposure": null
+  },
+  "preexisting_dirty_files_preserved": [
+    "deployment_evidence/CATCH_UP_ATTEMPT_EVIDENCE.json",
+    "deployment_evidence/FINMIND_PROVIDER_QUOTA_EVIDENCE.json",
+    "deployment_evidence/NAS_COMPOSE_PERSISTENCE_EVIDENCE.json",
+    "deployment_evidence/NAS_DEPLOYMENT_EVIDENCE.json",
+    "deployment_evidence/NAS_DEPLOYMENT_EVIDENCE.md",
+    "deployment_evidence/NAS_RUNTIME_METADATA_EVIDENCE.json",
+    "deployment_evidence/QUOTA_BUDGET_EVIDENCE.json"
+  ],
+  "secrets_included": false
+}

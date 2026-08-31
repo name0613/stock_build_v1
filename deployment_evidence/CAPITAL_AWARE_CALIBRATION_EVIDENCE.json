@@ -1,0 +1,181 @@
+{
+  "generated_at": "2026-08-31T15:21:59.295614+00:00",
+  "source_revision": "d810c03a0dd8ac55321ed9588a0cfb5cc7e21ce5",
+  "score_version": "capital-aware-v7",
+  "formula_hash": "e866288ce9665ff9250e798379aa0e28edbc1aceacb11537982501834d3388b9",
+  "legacy_score_version": "s-only-v6",
+  "legacy_formula_hash": "21df6cf28188f6ef3973e8283cb6f482d9895203e9f023f3dc9c69bec926f99b",
+  "raw_price_files": 147,
+  "raw_unique_stock_date_rows": 65009,
+  "stocks_with_20d_formal_money": 3,
+  "median_trading_value_20d_distribution": {
+    "median": 35619588241.0,
+    "p25": 12719296269.5,
+    "p50": 35619588241.0,
+    "p75": 59504001202.0,
+    "p90": 59504001202.0,
+    "sample_count": 3
+  },
+  "estimated_institutional_net_value_20d_distribution": {
+    "median": -9488076223.411964,
+    "p25": -37177998813.0022,
+    "p50": -9488076223.411964,
+    "p75": 9140477936.540598,
+    "p90": 9140477936.540598,
+    "sample_count": 3
+  },
+  "market_distributions": {
+    "上市": {
+      "formal_money_sample_count_20d": 3,
+      "formal_money_median": 35619588241.0,
+      "formal_money_p25": 12719296269.5,
+      "formal_money_p75": 59504001202.0,
+      "estimated_institutional_sample_count_20d": 3,
+      "estimated_institutional_median": -9488076223.411964,
+      "estimated_institutional_p25": -37177998813.0022,
+      "estimated_institutional_p75": 9140477936.540598
+    },
+    "上櫃": {
+      "formal_money_sample_count_20d": 0,
+      "formal_money_median": null,
+      "formal_money_p25": null,
+      "formal_money_p75": null,
+      "estimated_institutional_sample_count_20d": 0,
+      "estimated_institutional_median": null,
+      "estimated_institutional_p25": null,
+      "estimated_institutional_p75": null
+    },
+    "興櫃": {
+      "formal_money_sample_count_20d": 0,
+      "formal_money_median": null,
+      "formal_money_p25": null,
+      "formal_money_p75": null,
+      "estimated_institutional_sample_count_20d": 0,
+      "estimated_institutional_median": null,
+      "estimated_institutional_p25": null,
+      "estimated_institutional_p75": null
+    }
+  },
+  "existing_s_top20": [],
+  "existing_s_top50": [],
+  "legacy_s_top20_summary": {
+    "score_version": "s-only-v6",
+    "numeric_score_count": 0,
+    "top20_count": 0,
+    "top50_count": 0,
+    "note": "The current 2026-08-20 v6 run is fail-closed because the local provider snapshot lacks required current foreign/broker coverage; no numeric v6 rows were silently substituted."
+  },
+  "representative_stocks": {
+    "2330": {
+      "market": "上市",
+      "raw_price_sessions": 25,
+      "median_trading_value_20d_raw": 59504001202.0,
+      "capital_aware_status": "CAPITAL_TOO_SMALL",
+      "capital_aware_components": {
+        "StealthAccumulationScore": null,
+        "LiquidityScore": 100.0,
+        "CapitalScaleScore": 0.0,
+        "ConfirmationScore": 0.0,
+        "LargeCapitalScore": 26.75,
+        "HighConfidenceScore": 25.0,
+        "CapitalReference20D": 0.0,
+        "MedianTradingValue20D": 59504001202.0,
+        "PricePenalty": 0.0,
+        "ConfirmationSourceCount": 0,
+        "eligibility_reasons": [
+          "capital_reference_below_200m_twd",
+          "stealth_score_unavailable",
+          "fewer_than_two_independent_sources"
+        ]
+      },
+      "eligibility_reasons": [
+        "capital_reference_below_200m_twd",
+        "stealth_score_unavailable",
+        "fewer_than_two_independent_sources"
+      ]
+    },
+    "2317": {
+      "market": "上市",
+      "raw_price_sessions": 25,
+      "median_trading_value_20d_raw": 12719296269.5,
+      "capital_aware_status": "LARGE_CAPITAL_ACCUMULATION",
+      "capital_aware_components": {
+        "StealthAccumulationScore": null,
+        "LiquidityScore": 100.0,
+        "CapitalScaleScore": 100.0,
+        "ConfirmationScore": 25.0,
+        "LargeCapitalScore": 91.75,
+        "HighConfidenceScore": 58.75,
+        "CapitalReference20D": 9140477936.54,
+        "MedianTradingValue20D": 12719296269.5,
+        "PricePenalty": 0.0,
+        "ConfirmationSourceCount": 1,
+        "eligibility_reasons": [
+          "stealth_score_unavailable",
+          "fewer_than_two_independent_sources"
+        ]
+      },
+      "eligibility_reasons": [
+        "stealth_score_unavailable",
+        "fewer_than_two_independent_sources"
+      ]
+    },
+    "2454": {
+      "market": "上市",
+      "raw_price_sessions": 25,
+      "median_trading_value_20d_raw": 35619588241.0,
+      "capital_aware_status": "CAPITAL_TOO_SMALL",
+      "capital_aware_components": {
+        "StealthAccumulationScore": null,
+        "LiquidityScore": 99.42,
+        "CapitalScaleScore": 0.0,
+        "ConfirmationScore": 25.0,
+        "LargeCapitalScore": 26.63,
+        "HighConfidenceScore": 28.61,
+        "CapitalReference20D": 0.0,
+        "MedianTradingValue20D": 35619588241.0,
+        "PricePenalty": 0.0,
+        "ConfirmationSourceCount": 1,
+        "eligibility_reasons": [
+          "capital_reference_below_200m_twd",
+          "stealth_score_unavailable",
+          "fewer_than_two_independent_sources"
+        ]
+      },
+      "eligibility_reasons": [
+        "capital_reference_below_200m_twd",
+        "stealth_score_unavailable",
+        "fewer_than_two_independent_sources"
+      ]
+    },
+    "1101": {
+      "market": "上市",
+      "raw_price_sessions": 3,
+      "median_trading_value_20d_raw": null,
+      "capital_aware_status": "DATA_INSUFFICIENT",
+      "capital_aware_components": {
+        "StealthAccumulationScore": null,
+        "LiquidityScore": null,
+        "CapitalScaleScore": null,
+        "ConfirmationScore": null,
+        "LargeCapitalScore": null,
+        "HighConfidenceScore": null,
+        "CapitalReference20D": null,
+        "eligibility_reasons": [
+          "missing_MedianTradingValue20D",
+          "missing_AverageTradingValue20D",
+          "missing_MedianVolume20D",
+          "missing_CapitalReference20D"
+        ]
+      },
+      "eligibility_reasons": [
+        "missing_MedianTradingValue20D",
+        "missing_AverageTradingValue20D",
+        "missing_MedianVolume20D",
+        "missing_CapitalReference20D"
+      ]
+    }
+  },
+  "calibration_note": "Fixed TWD breakpoints are selected from the available formal-money and estimated-institutional distributions, with conservative absolute gates so a high buy-ratio low-liquidity stock cannot qualify as large capital. The raw cache currently has limited 20D coverage, so thresholds require later re-calibration when broader formal-money history is available.",
+  "secrets_included": false
+}
