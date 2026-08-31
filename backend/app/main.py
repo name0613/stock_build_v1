@@ -577,7 +577,8 @@ def _capital_ranking_metrics(db: Session) -> dict[str, Any]:
     statuses = [row[0] for row in rows]
     result: dict[str, Any] = {}
     for kind, eligible_status in (("large_capital", "LARGE_CAPITAL_ACCUMULATION"), ("high_confidence", "HIGH_CONFIDENCE_ACCUMULATION")):
-        result[kind] = {"scorable": len(statuses), "data_insufficient": statuses.count("DATA_INSUFFICIENT"), "gate_excluded": sum(status not in {eligible_status, "DATA_INSUFFICIENT"} for status in statuses), "eligible": statuses.count(eligible_status)}
+        data_insufficient = statuses.count("DATA_INSUFFICIENT")
+        result[kind] = {"scorable": len(statuses) - data_insufficient, "data_insufficient": data_insufficient, "gate_excluded": sum(status not in {eligible_status, "DATA_INSUFFICIENT"} for status in statuses), "eligible": statuses.count(eligible_status)}
     return result
 
 
