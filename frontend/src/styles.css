@@ -43,3 +43,15 @@ footer { color: #667696; font-size: .72rem; padding: 8px 0; text-align: center; 
 .diagnosis-block li strong { color: #d2def7; }
 .diagnosis-note { color: #f0bd69 !important; font-size: .75rem; padding-bottom: 16px; }
 @media (max-width: 900px) { .favorite-refresh-panel { grid-template-columns: 1fr; } .favorite-refresh-actions { justify-content: stretch; } .favorite-refresh-actions button { flex: 1 1 100%; } }
+ .ranking-tabs { display: flex; flex-wrap: wrap; gap: 9px; align-items: center; padding: 12px; }
+ .ranking-tabs button { min-height: 42px; padding: 0 18px; color: #9fb7e7; background: #101a34; border: 1px solid #304a80; border-radius: 10px; font-weight: 750; }
+ .ranking-tabs button:hover, .ranking-tabs button.active { color: #071224; background: #78dcb0; border-color: #9aefc6; }
+ .tab-note { margin-left: auto; color: #8f9fbe; font-size: .75rem; }
+ .capital-detail { border-top: 3px solid #71d9aa; }
+ .capital-metric-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 12px 0; }
+ .capital-metric-grid .metric { min-height: 88px; }
+ .capital-metric-grid .metric strong { font-size: 1.4rem; }
+ .capital-note, .capital-warning { color: #9aabca; font-size: .76rem; line-height: 1.7; }
+ .capital-warning { color: #f0bd69; border-top: 1px solid #283d67; padding-top: 10px; margin-bottom: 0; }
+ .capital-chart { margin-top: 13px; }
+ @media (max-width: 700px) { .tab-note { width: 100%; margin-left: 0; } .capital-metric-grid { grid-template-columns: 1fr; } }

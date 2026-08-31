@@ -3,16 +3,17 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import date, timedelta
 import math
+from statistics import median, pstdev
 from typing import Any
 
-from .scoring import BROKER_ROW_CONTRACT_VERSION, HOLDING_SCHEMA_VERSION, holding_period_anchor, holding_schema_state, one_day_spike_ratio, parse_holding_level, positive_day_ratio, rolling_sum, slope
+from .scoring import BROKER_CONFIRMATION_TWD, BROKER_ROW_CONTRACT_VERSION, HOLDING_SCHEMA_VERSION, INSTITUTIONAL_CONFIRMATION_TWD, MIN_CONFIRMATION_POSITIVE_DAYS, holding_period_anchor, holding_schema_state, one_day_spike_ratio, parse_holding_level, positive_day_ratio, rolling_sum, slope
 
 
 def _ordered(rows: list[dict[str, Any]], date_key: str = "date") -> list[dict[str, Any]]:
-    return sorted(rows, key=lambda row: str(row.get(date_key) or ""))
+    return sorted(rows, key=lambda row: str(row.get(date_key) or row.get("source_date") or ""))
 
 
-def institutional_features(rows: list[dict[str, Any]]) -> dict[str, Any]:
+def institutional_features(rows: list[dict[str, Any]], prices: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     ordered = _ordered(rows)
     keys = ("foreign_net", "investment_trust_net", "dealer_net", "institutional_net")
     values = {key: [row.get(key) for row in ordered] for key in keys}
@@ -28,6 +29,28 @@ def institutional_features(rows: list[dict[str, Any]]) -> dict[str, Any]:
     features["InstitutionalPositiveDayRatio20D"] = positive_day_ratio(values["institutional_net"], 20)
     features["InstitutionalNetSlope20D"] = slope(values["institutional_net"], 20)
     features["InstitutionalOneDaySpikeRatio20D"] = one_day_spike_ratio(values["institutional_net"], 20)
+    # Trading_money is the provider's formal field.  A missing value makes the
+    # corresponding estimated amount unavailable; it is never reconstructed
+    # from close * volume.
+    price_by_date = {
+        str(row.get("date") or row.get("source_date") or "")[:10]: row
+        for row in (prices or [])
+    }
+    for prefix, key in (("Foreign", "foreign_net"), ("InvestmentTrust", "investment_trust_net"), ("Dealer", "dealer_net"), ("Institutional", "institutional_net")):
+        daily_values: list[float | None] = []
+        for row in ordered:
+            day = str(row.get("date") or row.get("source_date") or "")[:10]
+            value = _finite_number(row.get(key))
+            vwap = _daily_vwap(price_by_date.get(day))
+            daily_values.append(value * vwap if value is not None and vwap is not None else None)
+        if prefix == "Institutional":
+            features["EstimatedInstitutionalNetValueSeries20D"] = [{"source_date": str(row.get("date") or row.get("source_date") or "")[:10], "value": value} for row, value in zip(ordered[-20:], daily_values[-20:])]
+        for window in (5, 20):
+            features[f"Estimated{prefix}NetValue{window}D"] = rolling_sum(daily_values, window)
+    trading_values = [_positive_number(price_by_date.get(str(row.get("date") or row.get("source_date") or "")[:10], {}).get("trading_money")) for row in ordered]
+    estimated_institutional = features.get("EstimatedInstitutionalNetValue20D")
+    trading_total = sum(trading_values[-20:]) if len(trading_values) >= 20 and all(value is not None for value in trading_values[-20:]) else None
+    features["InstitutionalNetToTradingValue20D"] = estimated_institutional / trading_total if estimated_institutional is not None and trading_total and trading_total > 0 else None
     return features
 
 
@@ -146,8 +169,27 @@ def broker_features(rows: list[dict[str, Any]]) -> dict[str, Any]:
         return _broker_unavailable("no_broker_rows")
     if any(row.get("provider_row_validated") is not True or row.get("provider_row_contract_version") != BROKER_ROW_CONTRACT_VERSION for row in rows):
         return _broker_unavailable("provider_row_contract_not_proven")
+    # Exact duplicate provider events are ignored.  A single branch/day is
+    # still one confirmation event even when the provider emits price-level
+    # rows; this prevents a duplicated branch/day amount from inflating Top 3.
+    unique_rows: list[dict[str, Any]] = []
+    seen_events: set[tuple[Any, ...]] = set()
+    for row in rows:
+        event_key = (
+            str(row.get("date") or row.get("source_date") or ""),
+            str(row.get("securities_trader_id") or "unknown"),
+            row.get("buy_volume"), row.get("sell_volume"), row.get("net_volume"),
+            row.get("buy_amount"), row.get("sell_amount"),
+        )
+        if event_key in seen_events:
+            continue
+        seen_events.add(event_key)
+        unique_rows.append(row)
+    rows = unique_rows
     dates = sorted({str(row.get("date") or row.get("source_date") or "") for row in rows})
     broker_daily: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    broker_amount_daily: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    amount_complete = True
     for row in rows:
         day = str(row.get("date") or row.get("source_date") or "")
         net = _finite_number(row.get("net_volume"))
@@ -159,6 +201,12 @@ def broker_features(rows: list[dict[str, Any]]) -> dict[str, Any]:
             return _broker_unavailable("null_or_invalid_broker_net")
         broker = str(row.get("securities_trader_id") or "unknown")
         broker_daily[broker][day] += float(net)
+        buy_amount = _finite_number(row.get("buy_amount"))
+        sell_amount = _finite_number(row.get("sell_amount"))
+        if buy_amount is None or sell_amount is None:
+            amount_complete = False
+        else:
+            broker_amount_daily[broker][day] += buy_amount - sell_amount
     if len(dates) < 20 or any(day not in {d for daily in broker_daily.values() for d in daily} for day in dates[-20:]):
         return _broker_unavailable("incomplete_provider_sessions")
     last_dates = dates[-20:]
@@ -171,6 +219,17 @@ def broker_features(rows: list[dict[str, Any]]) -> dict[str, Any]:
     persistent_count = len(positive_brokers)
     score = (min(persistent_count, 10) / 10) * 70 + (sum(x[1] for x in positive_brokers) / max(persistent_count * 20, 1)) * 30
     ranked = sorted(positive_brokers, key=lambda x: x[2], reverse=True)
+    amount_ranked: list[tuple[str, float, int]] = []
+    if amount_complete:
+        for broker, daily in broker_amount_daily.items():
+            positive_days = sum(1 for day in last_dates if daily.get(day, 0.0) > 0)
+            total_amount = sum(max(0.0, daily.get(day, 0.0)) for day in last_dates)
+            if positive_days >= MIN_CONFIRMATION_POSITIVE_DAYS and total_amount > 0:
+                amount_ranked.append((broker, total_amount, positive_days))
+        amount_ranked.sort(key=lambda x: (-x[1], x[0]))
+    confirmed_positive_amount = sum(item[1] for item in amount_ranked)
+    top_broker_amount = amount_ranked[0][1] if amount_ranked else None
+    top3_broker_amount = sum(item[1] for item in amount_ranked[:3]) if amount_ranked else None
     true_window_counts: dict[int, int | None] = {}
     for window in (5, 10, 20):
         window_dates = last_dates[-window:]
@@ -190,6 +249,11 @@ def broker_features(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "BrokerPersistenceScore": min(100.0, score),
         "BrokerOneDaySpikeRatio20D": None,
         "BrokerPositiveFlowSpikeRatio20D": None,
+        "ConfirmedTopBrokerNetBuyAmount20D": top_broker_amount,
+        "ConfirmedTop3BrokerNetBuyAmount20D": top3_broker_amount,
+        "ConfirmedPositiveBrokerAmount20D": confirmed_positive_amount if amount_ranked else None,
+        "BrokerAmountPersistence20D": (sum(item[2] for item in amount_ranked) / (len(amount_ranked) * 20)) if amount_ranked else None,
+        "BrokerAmountDataAvailable": amount_complete and bool(amount_ranked),
         "BrokerDataContract": {"available": True, "reason": None, "omitted_branch_policy": "unknown_not_zero", "report_completeness_required": False},
     }
 
@@ -203,7 +267,7 @@ def _finite_number(value: Any) -> float | None:
 
 
 def _broker_unavailable(reason: str) -> dict[str, Any]:
-    return {"BrokerPersistenceScore": None, "BrokerOneDaySpikeRatio20D": None, "BrokerDataContract": {"available": False, "reason": reason}}
+    return {"BrokerPersistenceScore": None, "BrokerOneDaySpikeRatio20D": None, "ConfirmedTopBrokerNetBuyAmount20D": None, "ConfirmedTop3BrokerNetBuyAmount20D": None, "ConfirmedPositiveBrokerAmount20D": None, "BrokerAmountPersistence20D": None, "BrokerAmountDataAvailable": False, "BrokerDataContract": {"available": False, "reason": reason}}
 
 
 def _concentration(ranked: list[tuple[str, int, float]], count: int, total: float) -> float | None:
@@ -216,13 +280,34 @@ def price_features(rows: list[dict[str, Any]]) -> dict[str, Any]:
     ordered = _ordered(rows)
     closes = [row.get("close") for row in ordered]
     volumes = [row.get("volume") for row in ordered]
+    trading_values = [row.get("trading_money") for row in ordered]
     out: dict[str, Any] = {}
     for window in (5, 10, 20):
         out[f"PriceReturn{window}D"] = _return(closes, window)
     if len(volumes) >= 20 and all(v is not None for v in volumes[-20:]):
         out["AverageVolume20D"] = sum(volumes[-20:]) / 20
+        out["MedianVolume20D"] = float(median(volumes[-20:]))
     else:
         out["AverageVolume20D"] = None
+        out["MedianVolume20D"] = None
+    valid_trading_values = [_positive_number(value) for value in trading_values[-20:]] if len(trading_values) >= 20 else []
+    if len(valid_trading_values) == 20 and all(value is not None for value in valid_trading_values):
+        numeric_values = [float(value) for value in valid_trading_values]
+        out["TradingValue1D"] = numeric_values[-1]
+        out["AverageTradingValue20D"] = sum(numeric_values) / 20
+        out["MedianTradingValue20D"] = float(median(numeric_values))
+        out["LowLiquidityDays20D"] = sum(value < 10_000_000 for value in numeric_values)
+        average = out["AverageTradingValue20D"]
+        out["TradingValueStability20D"] = max(0.0, min(1.0, 1.0 - pstdev(numeric_values) / average)) if average else None
+    else:
+        out["TradingValue1D"] = _positive_number(trading_values[-1]) if trading_values else None
+        out["AverageTradingValue20D"] = None
+        out["MedianTradingValue20D"] = None
+        out["LowLiquidityDays20D"] = None
+        out["TradingValueStability20D"] = None
+    out["TradingValueSeries20D"] = [{"source_date": str(row.get("date") or row.get("source_date") or "")[:10], "value": _positive_number(row.get("trading_money"))} for row in ordered[-20:]]
+    latest_price = ordered[-1] if ordered else None
+    out["DailyVWAP"] = _daily_vwap(latest_price)
     institutional_net = rolling_sum([row.get("institutional_net") for row in ordered], 20)
     broker_net = rolling_sum([row.get("broker_net") for row in ordered], 20)
     avg_volume = out["AverageVolume20D"]
@@ -239,6 +324,19 @@ def price_features(rows: list[dict[str, Any]]) -> dict[str, Any]:
     return out
 
 
+def _positive_number(value: Any) -> float | None:
+    number = _finite_number(value)
+    return number if number is not None and number > 0 else None
+
+
+def _daily_vwap(row: dict[str, Any] | None) -> float | None:
+    if not row:
+        return None
+    money = _positive_number(row.get("trading_money"))
+    volume = _positive_number(row.get("volume"))
+    return money / volume if money is not None and volume is not None else None
+
+
 def _return(values: list[float | None], window: int) -> float | None:
     if len(values) < window + 1 or values[-1] is None or values[-window - 1] in (None, 0):
         return None
@@ -247,7 +345,7 @@ def _return(values: list[float | None], window: int) -> float | None:
 
 def build_features(institutional: list[dict[str, Any]], foreign: list[dict[str, Any]], holdings: list[dict[str, Any]], brokers: list[dict[str, Any]], prices: list[dict[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
-    result.update(institutional_features(institutional))
+    result.update(institutional_features(institutional, prices))
     result.update(foreign_holding_features(foreign))
     result.update(holding_distribution_features(holdings))
     broker_daily = defaultdict(float)
@@ -264,4 +362,26 @@ def build_features(institutional: list[dict[str, Any]], foreign: list[dict[str, 
         price_rows.append(price_row)
     result.update(broker_features(brokers))
     result.update(price_features(price_rows))
+    result["CrossSourceConfirmation"] = cross_source_confirmation(result)
     return result
+
+
+def cross_source_confirmation(features: dict[str, Any]) -> dict[str, Any]:
+    """Build independent source-family confirmations without double counting."""
+    families: list[dict[str, Any]] = []
+    institutional_value = features.get("EstimatedInstitutionalNetValue20D")
+    institutional_ratio = features.get("InstitutionalPositiveDayRatio20D")
+    if institutional_value is not None and institutional_ratio is not None and institutional_value >= INSTITUTIONAL_CONFIRMATION_TWD and institutional_ratio >= 0.50:
+        families.append({"family": "institutional_positive_net_value", "dataset": "TaiwanStockInstitutionalInvestorsBuySellWide", "reason": "20D 估算法人淨買金額達門檻且正買超日過半"})
+    foreign_change = features.get("ForeignSharesChange20D")
+    foreign_ratio_change = features.get("ForeignShareRatioChange20D")
+    if (foreign_change is not None and foreign_change > 0) or (foreign_ratio_change is not None and foreign_ratio_change > 0):
+        families.append({"family": "foreign_holding_increase", "dataset": "TaiwanStockShareholding", "reason": "外資實際持股股數或比例 20D 增加"})
+    large_holder_change = features.get("LargeHolder400Change4W")
+    if large_holder_change is not None and large_holder_change > 0:
+        families.append({"family": "large_holder_400_increase", "dataset": "TaiwanStockHoldingSharesPer", "reason": ">400 張持股比例 4W 增加"})
+    broker_amount = features.get("ConfirmedTop3BrokerNetBuyAmount20D")
+    broker_persistence = features.get("BrokerAmountPersistence20D")
+    if broker_amount is not None and broker_persistence is not None and broker_amount >= BROKER_CONFIRMATION_TWD and broker_persistence >= 0.25:
+        families.append({"family": "verified_broker_positive_amount", "dataset": "TaiwanStockTradingDailyReport", "reason": "已驗證分點正買金額達門檻且具 20D 持續性"})
+    return {"independent_source_count": len(families), "families": families, "source_datasets": [item["dataset"] for item in families], "available": bool(families), "independence_policy": "one family per dataset; fields within a dataset are not separate sources"}

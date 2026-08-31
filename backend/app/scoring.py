@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 import hashlib
 import json
+import math
 from statistics import mean
 from typing import Any, Iterable
 
@@ -280,3 +281,144 @@ def calculate_score(features: dict[str, Any], coverage: dict[str, bool], score_v
         {"label": "低調修正", "value": round(modifier, 2), "detail": "價格影響僅作 -10 至 +10 modifier；若 unavailable 則明確不套用"},
     ]
     return ScoreResult(score, classify_score(score), {"InstitutionalPersistence": round(institutional, 2), "OwnershipAccumulation": round(ownership, 2), "BrokerPersistence": round(broker, 2), "LowProfileModifier": round(modifier, 2)}, explanation)
+
+
+# v7 is deliberately additive.  The v6 constants and calculate_score above
+# are the historical stealth contract and must not be changed in place.
+CAPITAL_AWARE_SCORE_VERSION = "capital-aware-v7"
+CAPITAL_TWD_KNOTS = (0.0, 10_000_000.0, 50_000_000.0, 200_000_000.0, 500_000_000.0, 1_000_000_000.0, 5_000_000_000.0)
+CAPITAL_SCORE_KNOTS = (0.0, 15.0, 35.0, 55.0, 70.0, 85.0, 100.0)
+LIQUIDITY_TWD_KNOTS = (0.0, 10_000_000.0, 50_000_000.0, 200_000_000.0, 1_000_000_000.0, 5_000_000_000.0)
+LIQUIDITY_SCORE_KNOTS = (0.0, 20.0, 45.0, 70.0, 90.0, 100.0)
+VOLUME_KNOTS = (0.0, 100_000.0, 500_000.0, 2_000_000.0, 10_000_000.0)
+VOLUME_SCORE_KNOTS = (0.0, 20.0, 45.0, 70.0, 100.0)
+MIN_LIQUIDITY_TWD_20D = 50_000_000.0
+MIN_CAPITAL_TWD_20D = 200_000_000.0
+LOW_LIQUIDITY_TWD_20D = 10_000_000.0
+PRICE_REFLECTED_RETURN_20D = 0.30
+INSTITUTIONAL_CONFIRMATION_TWD = 100_000_000.0
+BROKER_CONFIRMATION_TWD = 50_000_000.0
+MIN_CONFIRMATION_POSITIVE_DAYS = 5
+
+CAPITAL_AWARE_SCORE_SPEC = {
+    "version": CAPITAL_AWARE_SCORE_VERSION,
+    "policy": "capital scale is absolute TWD first; ratios are supporting evidence only",
+    "outputs": ["StealthAccumulationScore", "LiquidityScore", "CapitalScaleScore", "ConfirmationScore", "LargeCapitalScore", "HighConfidenceScore"],
+    "weights": {"large_capital": {"capital": 0.65, "liquidity": 0.20, "persistence": 0.15}, "high_confidence": {"stealth": 0.30, "capital": 0.30, "liquidity": 0.25, "confirmation": 0.15}},
+    "breakpoints_twd": {"capital": list(CAPITAL_TWD_KNOTS), "capital_scores": list(CAPITAL_SCORE_KNOTS), "liquidity": list(LIQUIDITY_TWD_KNOTS), "liquidity_scores": list(LIQUIDITY_SCORE_KNOTS), "volume_shares": list(VOLUME_KNOTS), "volume_scores": list(VOLUME_SCORE_KNOTS)},
+    "thresholds": {"minimum_median_trading_value_20d_twd": MIN_LIQUIDITY_TWD_20D, "minimum_capital_reference_20d_twd": MIN_CAPITAL_TWD_20D, "low_liquidity_median_trading_value_20d_twd": LOW_LIQUIDITY_TWD_20D, "minimum_confirmation_sources": 2, "minimum_stealth_score": 50, "price_reflected_return_20d": PRICE_REFLECTED_RETURN_20D, "institutional_confirmation_twd": INSTITUTIONAL_CONFIRMATION_TWD, "broker_confirmation_twd": BROKER_CONFIRMATION_TWD, "minimum_confirmation_positive_days": MIN_CONFIRMATION_POSITIVE_DAYS},
+    "windows": {"liquidity": 20, "capital": [5, 20], "confirmation": 20, "price": 20},
+    "missing_policy": "Trading_money, Trading_Volume, VWAP or required 20D institutional value remains NULL; no zero substitution",
+    "overlap_policy": "CapitalReference20D is max(positive estimated institutional net value, confirmed top-3 broker net buy amount), never a sum of overlapping sources",
+    "confirmation_families": ["institutional_positive_net_value", "foreign_holding_increase", "large_holder_400_increase", "verified_broker_positive_amount"],
+    "broker_policy": "only provider-row-contract-valid positive events; omitted branches unknown; exact duplicate normalized events ignored; no complete-market concentration claim",
+    "price_policy": "PriceReturn20D above 30% subtracts 20 points from H and fails the high-confidence gate; S is unchanged",
+    "status_policy": ["HIGH_CONFIDENCE_ACCUMULATION", "LARGE_CAPITAL_ACCUMULATION", "CAPITAL_WATCH", "LIQUIDITY_TOO_LOW", "CAPITAL_TOO_SMALL", "DATA_INSUFFICIENT"],
+    "formula": "C=piecewise(CapitalReference20D); L=0.8*piecewise(MedianTradingValue20D)+0.2*piecewise(MedianVolume20D); E=min(100, confirmations/4*100); P=100*mean(InstitutionalPositiveDayRatio20D, BrokerAmountPersistence20D when available); Large=0.65C+0.20L+0.15P; H=0.30S+0.30C+0.25L+0.15E-price_penalty",
+    "formula_version": "capital-aware-v7-piecewise-fixed-twd-v1",
+    "source_semantics": {"estimated_institutional_value": "daily institutional net shares multiplied by formal DailyVWAP; estimated, not actual execution cash flow", "broker_amount": "verified positive broker-row events only; broker branch is not a beneficial owner"},
+}
+CAPITAL_AWARE_SCORE_MANIFEST = CAPITAL_AWARE_SCORE_SPEC
+CAPITAL_AWARE_FORMULA_HASH = hashlib.sha256(json.dumps(CAPITAL_AWARE_SCORE_SPEC, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+@dataclass(frozen=True)
+class CapitalAwareScoreResult:
+    score: float | None
+    status: str
+    components: dict[str, Any] = field(default_factory=dict)
+    explanation: list[dict[str, Any]] = field(default_factory=list)
+    eligible: bool = False
+    eligibility_reasons: list[str] = field(default_factory=list)
+    large_capital_score: float | None = None
+
+
+def _piecewise(value: float, x_knots: tuple[float, ...], y_knots: tuple[float, ...]) -> float:
+    if value <= x_knots[0]:
+        return y_knots[0]
+    for left, right, left_score, right_score in zip(x_knots, x_knots[1:], y_knots, y_knots[1:]):
+        if value <= right:
+            fraction = (value - left) / (right - left)
+            return left_score + fraction * (right_score - left_score)
+    return y_knots[-1]
+
+
+def _capital_reference(features: dict[str, Any]) -> float | None:
+    values = []
+    for name in ("EstimatedInstitutionalNetValue20D", "ConfirmedTop3BrokerNetBuyAmount20D"):
+        value = features.get(name)
+        if value is not None:
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(number):
+                values.append(max(0.0, number))
+    return max(values) if values else None
+
+
+def calculate_capital_aware_score(features: dict[str, Any], coverage: dict[str, Any], stealth_score: float | None = None) -> CapitalAwareScoreResult:
+    """Calculate v7 without changing the historical v6 score.
+
+    A score can be numerically calculated for a partial gate state, but its
+    status remains an explicit gate outcome.  Missing formal trading value or
+    a required 20-session value is DATA_INSUFFICIENT, never zero-filled.
+    """
+    if stealth_score is None:
+        raw_stealth = features.get("StealthAccumulationScore")
+        stealth_score = float(raw_stealth) if raw_stealth is not None else None
+    required = {"MedianTradingValue20D": features.get("MedianTradingValue20D"), "AverageTradingValue20D": features.get("AverageTradingValue20D"), "MedianVolume20D": features.get("MedianVolume20D")}
+    reference = _capital_reference(features)
+    missing = [name for name, value in required.items() if value is None]
+    if reference is None:
+        missing.append("CapitalReference20D")
+    if missing:
+        return CapitalAwareScoreResult(None, "DATA_INSUFFICIENT", {"StealthAccumulationScore": stealth_score, "LiquidityScore": None, "CapitalScaleScore": None, "ConfirmationScore": None, "LargeCapitalScore": None, "HighConfidenceScore": None, "CapitalReference20D": None, "eligibility_reasons": [f"missing_{name}" for name in missing]}, [{"label": "資料不足", "value": None, "detail": "正式 Trading_money／Trading_Volume 或 20 日估算法人金額不足；不補 0。"}], False, [f"missing_{name}" for name in missing], None)
+
+    median_value = float(features["MedianTradingValue20D"])
+    median_volume = float(features["MedianVolume20D"])
+    liquidity = _bounded(0.8 * _piecewise(median_value, LIQUIDITY_TWD_KNOTS, LIQUIDITY_SCORE_KNOTS) + 0.2 * _piecewise(median_volume, VOLUME_KNOTS, VOLUME_SCORE_KNOTS))
+    capital = _piecewise(float(reference), CAPITAL_TWD_KNOTS, CAPITAL_SCORE_KNOTS)
+    confirmation = features.get("CrossSourceConfirmation") or {}
+    confirmation_count = int(confirmation.get("independent_source_count", confirmation.get("count", 0)) or 0)
+    confirmation_score = _bounded(min(4, confirmation_count) / 4 * 100)
+    institutional_ratio = features.get("InstitutionalPositiveDayRatio20D")
+    broker_persistence = features.get("BrokerAmountPersistence20D")
+    persistence_values = [float(value) for value in (institutional_ratio, broker_persistence) if value is not None]
+    persistence = _bounded(sum(persistence_values) / len(persistence_values) * 100) if persistence_values else None
+    if persistence is None:
+        return CapitalAwareScoreResult(None, "DATA_INSUFFICIENT", {"StealthAccumulationScore": stealth_score, "LiquidityScore": round(liquidity, 2), "CapitalScaleScore": round(capital, 2), "ConfirmationScore": round(confirmation_score, 2), "LargeCapitalScore": None, "HighConfidenceScore": None}, [{"label": "資料不足", "value": None, "detail": "持續性窗口不足；不把缺值當成零。"}], False, ["missing_persistence_20d"], None)
+
+    large = _bounded(capital * 0.65 + liquidity * 0.20 + persistence * 0.15)
+    price_return = features.get("PriceReturn20D")
+    penalty = 20.0 if price_return is not None and float(price_return) > PRICE_REFLECTED_RETURN_20D else (10.0 if price_return is not None and float(price_return) > 0.20 else 0.0)
+    high = _bounded((float(stealth_score) if stealth_score is not None else 0.0) * 0.30 + capital * 0.30 + liquidity * 0.25 + confirmation_score * 0.15 - penalty)
+    reasons: list[str] = []
+    if median_value < LOW_LIQUIDITY_TWD_20D:
+        reasons.append("median_trading_value_below_10m_twd")
+    if median_value < MIN_LIQUIDITY_TWD_20D:
+        reasons.append("median_trading_value_below_50m_twd")
+    if reference < MIN_CAPITAL_TWD_20D:
+        reasons.append("capital_reference_below_200m_twd")
+    if stealth_score is None:
+        reasons.append("stealth_score_unavailable")
+    elif stealth_score < 50:
+        reasons.append("stealth_score_below_50")
+    if confirmation_count < 2:
+        reasons.append("fewer_than_two_independent_sources")
+    if price_return is not None and float(price_return) > PRICE_REFLECTED_RETURN_20D:
+        reasons.append("price_already_reflected_20d_return_above_30pct")
+    eligible = not reasons
+    if "median_trading_value_below_10m_twd" in reasons:
+        status = "LIQUIDITY_TOO_LOW"
+    elif "capital_reference_below_200m_twd" in reasons:
+        status = "CAPITAL_TOO_SMALL"
+    elif eligible:
+        status = "HIGH_CONFIDENCE_ACCUMULATION"
+    elif large >= 60 and median_value >= LOW_LIQUIDITY_TWD_20D:
+        status = "LARGE_CAPITAL_ACCUMULATION"
+    else:
+        status = "CAPITAL_WATCH"
+    components = {"StealthAccumulationScore": round(stealth_score, 2) if stealth_score is not None else None, "LiquidityScore": round(liquidity, 2), "CapitalScaleScore": round(capital, 2), "ConfirmationScore": round(confirmation_score, 2), "LargeCapitalScore": round(large, 2), "HighConfidenceScore": round(high, 2), "CapitalReference20D": round(reference, 2), "MedianTradingValue20D": round(median_value, 2), "PricePenalty": round(penalty, 2), "ConfirmationSourceCount": confirmation_count, "eligibility_reasons": reasons}
+    explanation = [{"label": "絕對資金規模 C", "value": round(capital, 2), "detail": f"20D 保守資金參考值約新台幣 {reference:,.0f} 元；取估算法人金額與已確認前三分點金額較大者，不相加。"}, {"label": "流動性 L", "value": round(liquidity, 2), "detail": f"20D 中位日成交金額新台幣 {median_value:,.0f} 元；成交金額權重 80%，成交量權重 20%。"}, {"label": "獨立確認 E", "value": round(confirmation_score, 2), "detail": f"{confirmation_count} 個獨立來源家族確認；同一資料集欄位不重複算來源。"}, {"label": "高可信 H", "value": round(high, 2), "detail": "估算法人金額不是實際成交成本；分點是營業據點彙總，不是單一受益所有人。"}]
+    return CapitalAwareScoreResult(round(high, 2), status, components, explanation, eligible, reasons, round(large, 2))

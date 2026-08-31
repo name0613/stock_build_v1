@@ -6,6 +6,17 @@ FinMind API -> bounded worker -> raw Parquet on NAS
 nginx -> React/Vite frontend -> FastAPI -> PostgreSQL
 ```
 
+`PriceDaily` preserves FinMind `Trading_money` and `Trading_turnover` as
+nullable provider fields. Raw Parquet replay uses the sanitized raw fetch
+timestamp and writes the same source revision/upsert path; it never derives
+Trading_money from close and volume. `capital_aware_scores` stores the
+versioned `capital-aware-v7` snapshot beside immutable `s-only-v6` rows.
+
+The homepage has three whitelisted rankings: `stealth` (v6), `large_capital`
+and `high_confidence` (v7), with high confidence as the default view. v7 uses
+fixed TWD breakpoints and independent source families, not a daily universe
+percentile or a sum of potentially overlapping flow estimates.
+
 Services are `postgres`, `api`, `worker`, `frontend`, `nginx`. The Compose network is internal; nginx is the only LAN-facing port. `postgres_data` and `raw_data` are persistent named volumes. All ingestion paths are idempotent UPSERTs keyed by `(stock_id, source_date[, broker])`.
 
 The database stores `source_date`, `fetched_at`, `calculated_at`, and `score_version` separately. Raw broker rows stay in date-partitioned Parquet; PostgreSQL stores normalized rows, aggregation, query-ready features, explanations and health evidence.

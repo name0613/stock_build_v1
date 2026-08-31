@@ -63,14 +63,94 @@ def _apply_sqlite_compatibility_migrations() -> None:
         "job_runs": {"requested_start_date": "DATE", "requested_end_date": "DATE", "error_code": "VARCHAR(64)", "stocks_attempted": "INTEGER DEFAULT 0", "stocks_completed": "INTEGER DEFAULT 0", "stocks_failed": "INTEGER DEFAULT 0", "checkpoint_state": "JSON"},
         "score_versions": {"manifest_hash": "VARCHAR(64)"},
         "broker_daily": {"provider_report_complete": "BOOLEAN DEFAULT FALSE", "provider_contract_version": "VARCHAR(100)", "provider_row_validated": "BOOLEAN DEFAULT FALSE", "provider_row_contract_version": "VARCHAR(100)"},
+        "price_daily": {"trading_money": "FLOAT", "trading_turnover": "FLOAT"},
     }
-    inspector = inspect(engine)
     with engine.begin() as connection:
+        inspector = inspect(connection)
+        # Recover an interrupted compatibility rebuild from an older local
+        # database.  The legacy table is created only by this function, so a
+        # zero-row destination can be safely completed before normal checks.
+        tables = {row[0] for row in connection.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))}
+        if "accumulation_features_legacy_v1" in tables and "accumulation_features" in tables:
+            destination_count = int(connection.execute(text("SELECT count(*) FROM accumulation_features")).scalar_one())
+            if destination_count == 0:
+                for index in connection.execute(text("PRAGMA index_list('accumulation_features_legacy_v1')")).all():
+                    index_name = str(index[1])
+                    if not index_name.startswith("sqlite_autoindex_"):
+                        connection.execute(text(f"DROP INDEX IF EXISTS '{index_name}'"))
+                legacy_columns = {column[1] for column in connection.execute(text("PRAGMA table_info('accumulation_features_legacy_v1')")).all()}
+                knowledge_cutoff = "knowledge_cutoff" if "knowledge_cutoff" in legacy_columns else "NULL"
+                input_snapshot_hash = "input_snapshot_hash" if "input_snapshot_hash" in legacy_columns else "NULL"
+                connection.execute(text(f"INSERT INTO accumulation_features (stock_id, source_date, \"values\", coverage, latest_source_date, calculated_at, knowledge_cutoff, input_snapshot_hash) SELECT stock_id, source_date, \"values\", coverage, latest_source_date, calculated_at, {knowledge_cutoff}, {input_snapshot_hash} FROM accumulation_features_legacy_v1"))
+                connection.execute(text("DROP TABLE accumulation_features_legacy_v1"))
         for table, columns in additions.items():
             existing = {column["name"] for column in inspector.get_columns(table)}
             for name, sql_type in columns.items():
                 if name not in existing:
                     connection.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {sql_type}"))
+        # SQLite cannot alter a table-level UNIQUE constraint in place.  Some
+        # early local databases used (stock_id, source_date) for features,
+        # which would reject a second point-in-time snapshot.  Rebuild only
+        # this known legacy table and copy every row before dropping the old
+        # schema; fresh databases take the normal create_all path.
+        indexes = connection.execute(text("PRAGMA index_list('accumulation_features')")).all()
+        legacy_unique = False
+        for index in indexes:
+            if not index[2]:
+                continue
+            columns_for_index = [row[2] for row in connection.execute(text(f"PRAGMA index_info('{index[1]}')")).all()]
+            if columns_for_index == ["stock_id", "source_date"]:
+                legacy_unique = True
+                break
+        if legacy_unique:
+            connection.execute(text("ALTER TABLE accumulation_features RENAME TO accumulation_features_legacy_v1"))
+            for index in connection.execute(text("PRAGMA index_list('accumulation_features_legacy_v1')")).all():
+                index_name = str(index[1])
+                if not index_name.startswith("sqlite_autoindex_"):
+                    connection.execute(text(f"DROP INDEX IF EXISTS '{index_name}'"))
+            Base.metadata.create_all(bind=connection)
+            legacy_columns = {column[1] for column in connection.execute(text("PRAGMA table_info('accumulation_features_legacy_v1')")).all()}
+            knowledge_cutoff = "knowledge_cutoff" if "knowledge_cutoff" in legacy_columns else "NULL"
+            input_snapshot_hash = "input_snapshot_hash" if "input_snapshot_hash" in legacy_columns else "NULL"
+            connection.execute(text(f"INSERT INTO accumulation_features (stock_id, source_date, \"values\", coverage, latest_source_date, calculated_at, knowledge_cutoff, input_snapshot_hash) SELECT stock_id, source_date, \"values\", coverage, latest_source_date, calculated_at, {knowledge_cutoff}, {input_snapshot_hash} FROM accumulation_features_legacy_v1"))
+            connection.execute(text("DROP TABLE accumulation_features_legacy_v1"))
+
+        # Apply the same compatibility repair to scores.  Older SQLite
+        # databases used (stock_id, source_date, score_version), which makes
+        # a second knowledge-cutoff snapshot fail even though PostgreSQL has
+        # already moved to the versioned constraint.
+        score_tables = {row[0] for row in connection.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))}
+        if "accumulation_scores_legacy_v1" in score_tables and "accumulation_scores" in score_tables:
+            destination_count = int(connection.execute(text("SELECT count(*) FROM accumulation_scores")).scalar_one())
+            if destination_count == 0:
+                legacy_columns = {column[1] for column in connection.execute(text("PRAGMA table_info('accumulation_scores_legacy_v1')")).all()}
+                score_columns = ("stock_id", "source_date", "score", "status", "score_version", "components", "explanation", "coverage", "calculated_at", "knowledge_cutoff", "input_snapshot_hash", "input_source_hashes", "formula_hash")
+                defaults = {"components": "'{}'", "explanation": "'[]'", "coverage": "'{}'", "input_source_hashes": "'[]'"}
+                select_columns = ", ".join(f"COALESCE({column}, {defaults[column]})" if column in defaults and column in legacy_columns else column if column in legacy_columns else "NULL" for column in score_columns)
+                connection.execute(text(f"INSERT INTO accumulation_scores ({', '.join(score_columns)}) SELECT {select_columns} FROM accumulation_scores_legacy_v1"))
+                connection.execute(text("DROP TABLE accumulation_scores_legacy_v1"))
+        score_indexes = connection.execute(text("PRAGMA index_list('accumulation_scores')")).all()
+        legacy_score_unique = False
+        for index in score_indexes:
+            if not index[2]:
+                continue
+            columns_for_index = [row[2] for row in connection.execute(text(f"PRAGMA index_info('{index[1]}')")).all()]
+            if columns_for_index == ["stock_id", "source_date", "score_version"]:
+                legacy_score_unique = True
+                break
+        if legacy_score_unique:
+            connection.execute(text("ALTER TABLE accumulation_scores RENAME TO accumulation_scores_legacy_v1"))
+            for index in connection.execute(text("PRAGMA index_list('accumulation_scores_legacy_v1')")).all():
+                index_name = str(index[1])
+                if not index_name.startswith("sqlite_autoindex_"):
+                    connection.execute(text(f"DROP INDEX IF EXISTS '{index_name}'"))
+            Base.metadata.create_all(bind=connection)
+            legacy_columns = {column[1] for column in connection.execute(text("PRAGMA table_info('accumulation_scores_legacy_v1')")).all()}
+            score_columns = ("stock_id", "source_date", "score", "status", "score_version", "components", "explanation", "coverage", "calculated_at", "knowledge_cutoff", "input_snapshot_hash", "input_source_hashes", "formula_hash")
+            defaults = {"components": "'{}'", "explanation": "'[]'", "coverage": "'{}'", "input_source_hashes": "'[]'"}
+            select_columns = ", ".join(f"COALESCE({column}, {defaults[column]})" if column in defaults and column in legacy_columns else column if column in legacy_columns else "NULL" for column in score_columns)
+            connection.execute(text(f"INSERT INTO accumulation_scores ({', '.join(score_columns)}) SELECT {select_columns} FROM accumulation_scores_legacy_v1"))
+            connection.execute(text("DROP TABLE accumulation_scores_legacy_v1"))
 
 
 def get_db() -> Generator[Session, None, None]:

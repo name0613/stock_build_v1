@@ -18,3 +18,14 @@ Statuses are `RUNNING`, `SUCCESS`, `REUSED`, `PARTIAL`, `FAILED`, `QUOTA_EXHAUST
 User-triggered favorites refreshes add `QUEUED`, `WAITING_FOR_QUOTA`, and `WAITING_FOR_PROVIDER`. Their parent `JobRun` preserves the original score-descending stock order, completed stock IDs, per-dataset completion, current stock, quota snapshot, and next retry time. Worker restarts return an interrupted favorites job to `QUEUED` and resume it; scheduled full/intraday sync and favorites refresh share a provider-work lock so they do not spend quota concurrently inside the worker.
 
 Never run `docker system prune`, delete unknown volumes, or stop unrelated services. Broker checkpoint files make retries resumable and idempotent.
+
+## Capital-aware rankings
+
+`/api/rankings?kind=stealth` is the historical S-only view. The two v7 views
+are `/api/rankings?kind=large_capital` and
+`/api/rankings?kind=high_confidence`; their responses include S/L/C/E, the
+selected score, fixed formula hash, source date, knowledge cutoff, 20D median
+Trading_money, estimated institutional net value, ratio, confirmation count
+and gate reasons. `/api/summary` reports v7 scorable, data-insufficient and
+gate-excluded counts. A v7 score is only regenerated from persisted source
+rows by the same PIT scoring job; missing formal Trading_money is not filled.

@@ -9,7 +9,7 @@
 | `TaiwanStockHoldingSharesPer` | holding levels, people, percent, shares | S3 | latest weekly source date |
 | `TaiwanStockTradingDailyReport` | broker branch daily rows | S4 | daily source date |
 | `TaiwanStockTradingDailyReportSecIdAgg` | capability probe only; zero-row/non-equivalent path is not production-used | not used | n/a |
-| `TaiwanStockPrice` | price, volume, return, price impact modifier | supporting only | daily source date |
+| `TaiwanStockPrice` | price, volume, formal Trading_money/Trading_turnover, return, price impact modifier | supporting for v6; primary liquidity/value input for v7 | daily source date |
 | `TaiwanSecuritiesTraderInfo` | broker id -> broker name | reference only | reference source date |
 
 The following are explicitly forbidden in this release: block trades, active ETF holdings, margin, securities lending, short-sale balances, government bank flow, industry-chain money flow, price tick, futures, options and US stocks. The client rejects them before an HTTP request.
@@ -23,3 +23,15 @@ Daily checkpoint coverage is the set of verified Taiwan trading sessions. Holdin
 ## 5%+ disclosure
 
 `MajorShareholderDisclosure` is reserved for an official, stable, legal machine-readable TWSE/TPEx/MOPS source. No brittle DOM scraper is included. Until one is separately validated, the UI and documentation report unavailable instead of filling zero.
+
+## Capital-aware semantics
+
+`Trading_money` is persisted exactly as supplied by FinMind in New Taiwan
+dollars; it is never replaced by `close * Trading_Volume`. `Trading_turnover`
+is persisted as the provider's transaction-count field. Missing formal values
+keep VWAP, 20D value windows and dependent capital scores unavailable.
+Institutional net-value features are calculated as daily net shares multiplied
+by formal daily VWAP and are explicitly estimates, not actual cash costs.
+Validated broker rows can confirm positive broker amount events, but a broker
+branch is an execution-venue aggregate, not one investor, and omitted rows
+remain unknown.

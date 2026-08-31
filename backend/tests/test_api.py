@@ -105,6 +105,22 @@ def test_api_contract_exposes_score_hash_filters_rankings_and_sync_counters() ->
             assert row["rows_versioned_this_attempt"] <= row["rows_accepted_this_attempt"]
 
 
+def test_capital_aware_spec_and_ranking_kind_allowlist_are_public() -> None:
+    with TestClient(app) as client:
+        spec = client.get("/api/score-spec").json()
+        stealth = client.get("/api/rankings", params={"kind": "stealth", "limit": 5})
+        large = client.get("/api/rankings", params={"kind": "large_capital", "limit": 5})
+        confidence = client.get("/api/rankings", params={"kind": "high_confidence", "limit": 5})
+        invalid = client.get("/api/rankings", params={"kind": "unknown"})
+    assert spec["capital_aware_score_version"] == "capital-aware-v7"
+    assert len(spec["capital_aware_formula_hash"]) == 64
+    assert "Trading_money" in spec["capital_aware_spec"]["missing_policy"] or "Trading_money" in str(spec["capital_aware_spec"])
+    assert stealth.status_code == large.status_code == confidence.status_code == 200
+    assert stealth.json()["score_version"] == "s-only-v6"
+    assert large.json()["score_version"] == confidence.json()["score_version"] == "capital-aware-v7"
+    assert invalid.status_code == 422
+
+
 def test_readiness_endpoint_exposes_side_effect_free_stock_audit() -> None:
     with TestClient(app) as client:
         response = client.get("/api/readiness", params={"source_date": "2026-08-27", "stock_id": "2330"})

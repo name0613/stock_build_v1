@@ -7,6 +7,8 @@
 - Universe 動態來自 FinMind `TaiwanStockInfo`；依市場與普通股欄位篩選，不把代碼硬寫死。
 - S-only scoring：三大法人 Wide、外資實際持股、集保持股級距、券商分點；原始法人 dataset 在等價 normalization 完成前明確拒絕，不假稱為 fallback。
 - `TaiwanStockPrice` 只作顯示、成交量 normalization、價格影響 modifier；`TaiwanSecuritiesTraderInfo` 只作券商名稱對照。
+- `capital-aware-v7` 為獨立的大資金判定層：使用正式 `Trading_money`／`Trading_turnover`、VWAP 法人金額估算、分點直接金額（若提供）與多來源確認；首頁預設高可信榜，`s-only-v6` 歷史表與公式不改寫。
+- v7 的絕對資金門檻固定以新台幣 breakpoints 計分，並以流動性、資金規模、S 分數、至少兩個獨立來源及價格反映 gate 排除假訊號；必要資料不足時維持 `DATA_INSUFFICIENT`／`NULL`。
 - 分點是券商營業據點彙總，不等同於單一投資人或「主力」。
 - 缺重要資料時為 `DATA_INSUFFICIENT` 且 score 為 `NULL`，不把 missing 轉成 0。
 - 5%+ 重大持股申報 schema 已保留；在確認官方、穩定、合法 machine-readable source 前不偽造、不補 0。
@@ -68,6 +70,7 @@ Worker 啟動時在來源發布窗口已開啟後才做完整 catch-up：動態 
 - `POST /api/favorites/fetch-and-score`：把按下按鈕當下的「我的最愛」依現有數值評分由高到低固化為持久佇列，逐檔強制重抓五項來源並重評；以同路徑 `GET` 查詢進度。額度不足會進入 `WAITING_FOR_QUOTA`，worker 每分鐘檢查並從未完成股票與資料集自動續跑。
 - `POST /api/universe/refresh-and-score`：每次按鈕固定配置 3,500 次 FinMind 資料 HTTP 請求，先處理無來源資料且無數值評分的股票，再依最舊寫入時間輪替強制刷新並評分；使用量會在每次真正送出請求前持久化，額度恢復後由 worker 自動續跑。連續兩次完整補抓仍無任何來源資料的股票會寫入 `stock_refresh_issues`、停止自動重試並在清單顯示原因。
 - `/api/readiness?stock_id=<代碼>`：單股 side-effect-free 診斷，列出缺少的評分欄位、來源日期與穩定缺失原因；若最新目標日尚未發布但較早資料日已完整，也會回傳 `latest_ready_source_date`。
+- `/api/rankings?kind=large_capital|high_confidence`：v7 大型資金／高可信榜；`kind=top|stealth` 保留 v6 榜單。`/api/score-spec` 同時公開兩個版本、固定門檻與 formula hash。
 - `/api/docs`：API schema。
 - `ACCESS_DENIED` 代表 plan permission，不代表沒有資料；`SCHEMA_MISMATCH` 代表欄位漂移，不會 silent ingest。
 - Raw Parquet 在 `/data/raw/<dataset>/date=YYYY-MM-DD/`，metadata sidecar 保存 source、parameters（不含 token）、source date、fetched_at、SHA256。

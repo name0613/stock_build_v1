@@ -18,6 +18,13 @@ curl 'http://192.168.31.138:<PORT>/api/summary'
 
 Then restart `worker`, `api`, and `frontend` one at a time, re-check health and database row counts. Verify PostgreSQL is not published to LAN. Confirm the actual port in the sanitized deployment evidence.
 
+For the capital-aware release also verify `/api/score-spec` contains
+`capital-aware-v7` and its 64-character formula hash, then call
+`/api/rankings?kind=stealth`, `?kind=large_capital` and
+`?kind=high_confidence`. Confirm the latter two return v7 metadata and that a
+stock without formal Trading_money is `DATA_INSUFFICIENT`, never a zero-valued
+capital signal. Repeat these checks after each service restart.
+
 ## Port selection
 
 Default is `18080`. Preflight lists current listeners. If occupied, set `WEB_PORT` to a verified unused port and record only the final URL, never credentials.

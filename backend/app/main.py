@@ -20,10 +20,10 @@ from .finmind import GLOBAL_PROVIDER_FAILURE_CODES
 from .features import build_features, holding_distribution_features
 from .ingestion import FAVORITE_REFRESH_DATASET, TARGETED_STOCK_SYNC_DATASET, UNIVERSE_BUDGET_LIMIT, UNIVERSE_BUDGET_REFRESH_DATASET, authoritative_expected_latest_source_date, authoritative_source_state_hash, evaluate_stock_readiness, evaluate_universe_readiness, favorite_refresh_job_payload, fetch_and_score_stock, latest_ready_stock_evaluation, score_existing_data, score_snapshot_state, seed_score_version, stock_refresh_issue_payload, universe_budget_job_payload
 from .ingestion import REFRESH_SKIPPED_STATUSES
-from .models import AccumulationFeature, AccumulationScore, BrokerDaily, DataSyncStatus, ForeignShareholdingDaily, HoldingDistribution, InstitutionalDaily, JobRun, PriceDaily, Stock, StockRefreshIssue
+from .models import AccumulationFeature, AccumulationScore, BrokerDaily, CapitalAwareScore, DataSyncStatus, ForeignShareholdingDaily, HoldingDistribution, InstitutionalDaily, JobRun, PriceDaily, Stock, StockRefreshIssue
 from .schemas import PaginatedStocks, StockListItem
 from .calendar import CALENDAR_HASH, CALENDAR_VERSION
-from .scoring import FORMULA_HASH, SCORE_MANIFEST, SCORE_VERSION
+from .scoring import CAPITAL_AWARE_FORMULA_HASH, CAPITAL_AWARE_SCORE_MANIFEST, CAPITAL_AWARE_SCORE_VERSION, FORMULA_HASH, SCORE_MANIFEST, SCORE_VERSION
 from .worker_health import evaluate_health
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -81,7 +81,7 @@ def health(db: Session = Depends(get_db)) -> dict[str, Any]:
 
 @app.get("/api/score-spec")
 def score_spec() -> dict[str, Any]:
-    return {"score_version": SCORE_VERSION, "formula_hash": FORMULA_HASH, "calendar_version": CALENDAR_VERSION, "spec": SCORE_MANIFEST}
+    return {"score_version": SCORE_VERSION, "formula_hash": FORMULA_HASH, "calendar_version": CALENDAR_VERSION, "spec": SCORE_MANIFEST, "capital_aware_score_version": CAPITAL_AWARE_SCORE_VERSION, "capital_aware_formula_hash": CAPITAL_AWARE_FORMULA_HASH, "capital_aware_spec": CAPITAL_AWARE_SCORE_MANIFEST, "versions": {SCORE_VERSION: {"formula_hash": FORMULA_HASH, "spec": SCORE_MANIFEST}, CAPITAL_AWARE_SCORE_VERSION: {"formula_hash": CAPITAL_AWARE_FORMULA_HASH, "spec": CAPITAL_AWARE_SCORE_MANIFEST}}}
 
 
 @app.get("/api/build-metadata")
@@ -156,7 +156,7 @@ def summary(db: Session = Depends(get_db)) -> dict[str, Any]:
     last_updates = [s.last_fetch_at or s.last_successful_sync for s in sync if s.last_fetch_at or s.last_successful_sync]
     score_job = db.scalar(select(JobRun).where(JobRun.dataset == "score").order_by(JobRun.finished_at.desc(), JobRun.id.desc()).limit(1))
     score_metrics = _display_score_metrics(total, counts, score_job)
-    return {"stock_count": total, "strong_count": counts["STRONG_ACCUMULATION"], "accumulation_count": counts["ACCUMULATION"], "watch_count": counts["WATCH"], "data_insufficient_count": counts["DATA_INSUFFICIENT"], "no_strong_evidence_count": counts["NO_STRONG_EVIDENCE"], "status_invariant": sum(counts.values()) == total, "latest_score_date": latest_score_date, "historical_latest_score_date": historical_latest, "score_ready": latest_score_date is not None, "historical_score_blocked": provider_state.get("score_blocked") is True, "score_version": SCORE_VERSION, "formula_hash": FORMULA_HASH, "last_data_update": max(last_updates, default=None), "provider_state": provider_state, "score_metrics": score_metrics, "sync_status": [_sync_dict(s) for s in sync]}
+    return {"stock_count": total, "strong_count": counts["STRONG_ACCUMULATION"], "accumulation_count": counts["ACCUMULATION"], "watch_count": counts["WATCH"], "data_insufficient_count": counts["DATA_INSUFFICIENT"], "no_strong_evidence_count": counts["NO_STRONG_EVIDENCE"], "status_invariant": sum(counts.values()) == total, "latest_score_date": latest_score_date, "historical_latest_score_date": historical_latest, "score_ready": latest_score_date is not None, "historical_score_blocked": provider_state.get("score_blocked") is True, "score_version": SCORE_VERSION, "formula_hash": FORMULA_HASH, "capital_aware_score_version": CAPITAL_AWARE_SCORE_VERSION, "capital_aware_formula_hash": CAPITAL_AWARE_FORMULA_HASH, "last_data_update": max(last_updates, default=None), "provider_state": provider_state, "score_metrics": score_metrics, "capital_ranking_metrics": _capital_ranking_metrics(db), "sync_status": [_sync_dict(s) for s in sync]}
 
 
 @app.get("/api/readiness")
@@ -171,6 +171,7 @@ def readiness(source_date: date | None = Query(None), stock_id: str | None = Que
         latest_ready, fallback = latest_ready_stock_evaluation(db, stock_id, target, datetime.now(timezone.utc))
         return {
             **current,
+            "capital_aware_score": _capital_score_dict(db, stock_id, target),
             "latest_ready_source_date": latest_ready["as_of"].isoformat() if latest_ready["ready"] else None,
             "fallback_available": fallback,
         }
@@ -559,21 +560,59 @@ def universe_budget_refresh_status(job_id: int | None = Query(None, ge=1), db: S
     return universe_budget_job_payload(job)
 
 
+RANKING_KINDS = {"top", "stealth", "large_capital", "high_confidence"}
+
+
+def _latest_capital_scores_subquery():
+    ordering = (CapitalAwareScore.source_date.desc(), CapitalAwareScore.calculated_at.desc(), CapitalAwareScore.id.desc())
+    return select(
+        CapitalAwareScore.stock_id.label("capital_stock_id"), CapitalAwareScore.source_date.label("capital_source_date"), CapitalAwareScore.score.label("capital_score"), CapitalAwareScore.status.label("capital_status"), CapitalAwareScore.large_capital_score, CapitalAwareScore.high_confidence_score, CapitalAwareScore.components, CapitalAwareScore.features.label("capital_features"), CapitalAwareScore.coverage.label("capital_coverage"), CapitalAwareScore.knowledge_cutoff, CapitalAwareScore.formula_hash, CapitalAwareScore.score_version.label("capital_score_version"),
+        func.row_number().over(partition_by=CapitalAwareScore.stock_id, order_by=ordering).label("capital_rank"),
+    ).where(CapitalAwareScore.score_version == CAPITAL_AWARE_SCORE_VERSION, CapitalAwareScore.knowledge_cutoff.is_not(None)).subquery("latest_capital_scores")
+
+
+def _capital_ranking_metrics(db: Session) -> dict[str, Any]:
+    latest = _latest_capital_scores_subquery()
+    rows = db.execute(select(latest.c.capital_status).where(latest.c.capital_rank == 1)).all()
+    statuses = [row[0] for row in rows]
+    result: dict[str, Any] = {}
+    for kind, eligible_status in (("large_capital", "LARGE_CAPITAL_ACCUMULATION"), ("high_confidence", "HIGH_CONFIDENCE_ACCUMULATION")):
+        result[kind] = {"scorable": len(statuses), "data_insufficient": statuses.count("DATA_INSUFFICIENT"), "gate_excluded": sum(status not in {eligible_status, "DATA_INSUFFICIENT"} for status in statuses), "eligible": statuses.count(eligible_status)}
+    return result
+
+
+def _capital_ranking_item(stock: Stock, row: Any, kind: str) -> dict[str, Any]:
+    def value(name: str, default: Any = None) -> Any:
+        return row.get(name, default) if hasattr(row, "get") else getattr(row, name, default)
+
+    features = value("capital_features") or {}
+    components = value("components") or {}
+    selected_score = value("capital_score") if kind == "high_confidence" else value("large_capital_score")
+    return {"stock_id": stock.stock_id, "stock_name": stock.stock_name, "market": stock.market, "is_favorite": stock.is_favorite, "score": selected_score, "status": value("capital_status"), "score_version": value("capital_score_version"), "formula_hash": value("formula_hash"), "source_date": value("capital_source_date"), "knowledge_cutoff": value("knowledge_cutoff"), "stealth_score": components.get("StealthAccumulationScore"), "liquidity_score": components.get("LiquidityScore"), "capital_scale_score": components.get("CapitalScaleScore"), "confirmation_score": components.get("ConfirmationScore"), "large_capital_score": value("large_capital_score"), "high_confidence_score": value("high_confidence_score"), "median_trading_value_20d": features.get("MedianTradingValue20D"), "estimated_institutional_net_value_20d": features.get("EstimatedInstitutionalNetValue20D"), "institutional_net_to_trading_value_20d": features.get("InstitutionalNetToTradingValue20D"), "confirmed_top3_broker_net_buy_amount_20d": features.get("ConfirmedTop3BrokerNetBuyAmount20D"), "confirmation_source_count": components.get("ConfirmationSourceCount", (features.get("CrossSourceConfirmation") or {}).get("independent_source_count", 0)), "price_return_20d": features.get("PriceReturn20D"), "eligibility_reasons": components.get("eligibility_reasons", []), "features": features, "components": components, "coverage": value("capital_coverage") or {}}
+
+
 @app.get("/api/rankings")
 def rankings(kind: str = Query("top"), limit: int = Query(50, ge=1, le=200), db: Session = Depends(get_db)) -> dict[str, Any]:
+    if kind not in RANKING_KINDS:
+        raise HTTPException(status_code=422, detail={"code": "INVALID_RANKING_KIND", "allowed": ["stealth", "large_capital", "high_confidence"]})
     sync = db.scalars(select(DataSyncStatus).order_by(DataSyncStatus.dataset)).all()
     provider_state = _provider_state(sync)
-    latest = _latest_score_date(db)
-    if latest is None:
-        return {"source_date": None, "score_version": SCORE_VERSION, "provider_state": provider_state, "items": []}
-    latest_scores = _latest_numeric_scores_subquery()
-    score_value = latest_scores.c.score
-    query = select(Stock, score_value, latest_scores.c.status, latest_scores.c.components).join(
-        latest_scores,
-        and_(latest_scores.c.score_stock_id == Stock.stock_id, latest_scores.c.score_rank == 1),
-    ).where(Stock.is_common_stock.is_(True)).order_by(desc(score_value), asc(Stock.stock_id)).limit(limit)
+    if kind in {"top", "stealth"}:
+        latest = _latest_score_date(db)
+        if latest is None:
+            return {"source_date": None, "kind": "stealth", "score_version": SCORE_VERSION, "formula_hash": FORMULA_HASH, "provider_state": provider_state, "items": []}
+        latest_scores = _latest_numeric_scores_subquery()
+        query = select(Stock, latest_scores.c.score, latest_scores.c.status, latest_scores.c.components, latest_scores.c.coverage, latest_scores.c.score_version).join(latest_scores, and_(latest_scores.c.score_stock_id == Stock.stock_id, latest_scores.c.score_rank == 1)).where(Stock.is_common_stock.is_(True)).order_by(nulls_last(desc(latest_scores.c.score)), asc(Stock.stock_id)).limit(limit)
+        rows = db.execute(query).all()
+        items = [{"stock_id": row[0].stock_id, "stock_name": row[0].stock_name, "market": row[0].market, "score": row[1], "status": row[2], "score_version": row[5], "formula_hash": FORMULA_HASH, "source_date": latest, "components": row[3], "coverage": row[4]} for row in rows]
+        return {"source_date": latest, "kind": "stealth", "score_version": SCORE_VERSION, "formula_hash": FORMULA_HASH, "provider_state": provider_state, "items": items}
+    latest = _latest_capital_scores_subquery()
+    score_column = latest.c.high_confidence_score if kind == "high_confidence" else latest.c.large_capital_score
+    query = select(Stock, latest).join(latest, latest.c.capital_stock_id == Stock.stock_id).where(Stock.is_common_stock.is_(True), latest.c.capital_rank == 1).order_by(nulls_last(desc(score_column)), asc(Stock.stock_id)).limit(limit)
     rows = db.execute(query).all()
-    return {"source_date": latest, "kind": kind, "score_version": SCORE_VERSION, "provider_state": provider_state, "items": [{"stock_id": row[0].stock_id, "stock_name": row[0].stock_name, "market": row[0].market, "score": row[1], "status": row[2], "components": row[3]} for row in rows]}
+    items = [_capital_ranking_item(row[0], row._mapping, kind) for row in rows]
+    source_date = max((item["source_date"] for item in items if item["source_date"] is not None), default=None)
+    return {"source_date": source_date, "kind": kind, "score_version": CAPITAL_AWARE_SCORE_VERSION, "formula_hash": CAPITAL_AWARE_FORMULA_HASH, "provider_state": provider_state, "items": items}
 
 
 @app.post("/api/stocks/{stock_id}/fetch-and-score", status_code=202)
@@ -633,7 +672,7 @@ def stock_detail(stock_id: str, limit: int = Query(365, ge=1, le=1000), db: Sess
     provider_state = _provider_state(sync)
     partial_data = _partial_stock_snapshots(db, [stock_id]).get(stock_id, {})
     stock_payload = {"stock_id": stock.stock_id, "stock_name": stock.stock_name, "market": stock.market, "industry": stock.industry, "is_favorite": stock.is_favorite, "refresh_issue": stock_refresh_issue_payload(db.get(StockRefreshIssue, stock_id)), **{key: partial_data.get(key) for key in ("data_status", "data_latest_source_date", "last_updated_at", "data_sources", "features", "coverage")}}
-    return {"stock": stock_payload, "score": _score_dict(db, stock_id, None), "provider_state": provider_state, "sources": _source_status(db, stock_id), "institutional": _rows(db, InstitutionalDaily, stock_id, min(limit, 365), "TaiwanStockInstitutionalInvestorsBuySellWide"), "foreign_holding": _rows(db, ForeignShareholdingDaily, stock_id, min(limit, 365), "TaiwanStockShareholding"), "holding_distribution": _rows(db, HoldingDistribution, stock_id, min(limit, 200), "TaiwanStockHoldingSharesPer"), "holding_series": _holding_chart_series(db, stock_id, min(limit, 200)), "brokers": _broker_summary(db, stock_id), "prices": _rows(db, PriceDaily, stock_id, min(limit, 365), "TaiwanStockPrice"), "score_history": _score_history(db, stock_id, min(limit, 365)), "calendar_version": CALENDAR_VERSION}
+    return {"stock": stock_payload, "score": _score_dict(db, stock_id, None), "capital_aware_score": _capital_score_dict(db, stock_id, None), "provider_state": provider_state, "sources": _source_status(db, stock_id), "institutional": _rows(db, InstitutionalDaily, stock_id, min(limit, 365), "TaiwanStockInstitutionalInvestorsBuySellWide"), "foreign_holding": _rows(db, ForeignShareholdingDaily, stock_id, min(limit, 365), "TaiwanStockShareholding"), "holding_distribution": _rows(db, HoldingDistribution, stock_id, min(limit, 200), "TaiwanStockHoldingSharesPer"), "holding_series": _holding_chart_series(db, stock_id, min(limit, 200)), "brokers": _broker_summary(db, stock_id), "prices": _rows(db, PriceDaily, stock_id, min(limit, 365), "TaiwanStockPrice"), "score_history": _score_history(db, stock_id, min(limit, 365)), "calendar_version": CALENDAR_VERSION}
 
 
 @app.get("/api/holdings/status")
@@ -1060,6 +1099,17 @@ def _score_dict(db: Session, stock_id: str, latest: date | None) -> dict[str, An
     if not score:
         return {"score": None, "status": "DATA_INSUFFICIENT", "score_version": SCORE_VERSION, "formula_hash": FORMULA_HASH, "coverage": {}, "explanation": [{"label": "資料不足", "value": 0, "detail": "required source coverage is incomplete; no zero substitution"}], "input_source_hashes": []}
     return {"score": score.score, "status": score.status, "score_version": score.score_version, "formula_hash": score.formula_hash or FORMULA_HASH, "components": score.components, "explanation": score.explanation, "coverage": score.coverage, "source_date": score.source_date, "calculated_at": score.calculated_at, "knowledge_cutoff": score.knowledge_cutoff, "input_snapshot_hash": score.input_snapshot_hash, "input_source_hashes": score.input_source_hashes}
+
+
+def _capital_score_dict(db: Session, stock_id: str, latest: date | None) -> dict[str, Any]:
+    query = select(CapitalAwareScore).where(CapitalAwareScore.stock_id == stock_id, CapitalAwareScore.score_version == CAPITAL_AWARE_SCORE_VERSION, CapitalAwareScore.knowledge_cutoff.is_not(None))
+    if latest is not None:
+        query = query.where(CapitalAwareScore.source_date == latest)
+    order = (CapitalAwareScore.source_date.desc(), CapitalAwareScore.calculated_at.desc(), CapitalAwareScore.id.desc())
+    row = db.scalar(query.order_by(*order).limit(1))
+    if row is None:
+        return {"score": None, "status": "DATA_INSUFFICIENT", "score_version": CAPITAL_AWARE_SCORE_VERSION, "formula_hash": CAPITAL_AWARE_FORMULA_HASH, "components": {}, "explanation": [{"label": "資料不足", "value": None, "detail": "尚無 capital-aware-v7 的正式快照；不補 0。"}], "coverage": {}}
+    return {"score": row.high_confidence_score, "status": row.status, "score_version": row.score_version, "formula_hash": row.formula_hash or CAPITAL_AWARE_FORMULA_HASH, "large_capital_score": row.large_capital_score, "high_confidence_score": row.high_confidence_score, "components": row.components, "features": row.features, "explanation": row.explanation, "coverage": row.coverage, "source_date": row.source_date, "calculated_at": row.calculated_at, "knowledge_cutoff": row.knowledge_cutoff, "input_snapshot_hash": row.input_snapshot_hash, "input_source_hashes": row.input_source_hashes, "eligibility_reasons": (row.components or {}).get("eligibility_reasons", [])}
 
 
 def _rows(db: Session, model: type[Any], stock_id: str, limit: int, source_dataset: str) -> list[dict[str, Any]]:

@@ -119,6 +119,10 @@ class PriceDaily(Base):
     close: Mapped[float | None] = mapped_column(Float, nullable=True)
     volume: Mapped[float | None] = mapped_column(Float, nullable=True)
     change: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # These are provider-supplied FinMind fields.  They intentionally remain
+    # nullable: a missing Trading_money is unavailable, never close * volume.
+    trading_money: Mapped[float | None] = mapped_column(Float, nullable=True)
+    trading_turnover: Mapped[float | None] = mapped_column(Float, nullable=True)
     source_dataset: Mapped[str] = mapped_column(String(100))
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     __table_args__ = (UniqueConstraint("stock_id", "source_date", name="uq_price_stock_date"),)
@@ -155,6 +159,30 @@ class AccumulationScore(Base):
     input_source_hashes: Mapped[list[str]] = mapped_column(JSON, default=list)
     formula_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     __table_args__ = (UniqueConstraint("stock_id", "source_date", "score_version", "knowledge_cutoff", name="uq_score_stock_date_version_cutoff"),)
+
+
+class CapitalAwareScore(Base):
+    """Versioned capital-aware score, kept separate from immutable v6 rows."""
+
+    __tablename__ = "capital_aware_scores"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    stock_id: Mapped[str] = mapped_column(ForeignKey("stocks.stock_id"), index=True)
+    source_date: Mapped[date] = mapped_column(Date, index=True)
+    score: Mapped[float | None] = mapped_column(Float, nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(64), index=True)
+    score_version: Mapped[str] = mapped_column(String(64), index=True)
+    large_capital_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    high_confidence_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    components: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    features: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    explanation: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    coverage: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    calculated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    knowledge_cutoff: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    input_snapshot_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    input_source_hashes: Mapped[list[str]] = mapped_column(JSON, default=list)
+    formula_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    __table_args__ = (UniqueConstraint("stock_id", "source_date", "score_version", "knowledge_cutoff", name="uq_capital_score_stock_date_version_cutoff"),)
 
 
 class DataSyncStatus(Base):

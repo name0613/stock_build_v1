@@ -14,11 +14,11 @@ from .calendar import CALENDAR_HASH, CALENDAR_VERSION, completed_source_end_date
 from .features import build_features
 from .finmind import CAPABILITY_ONLY_DATASETS, GLOBAL_PROVIDER_FAILURE_CODES, FinMindClient, FinMindError, SchemaMismatch
 from .models import (
-    AccumulationFeature, AccumulationScore, BrokerDaily, DataSyncStatus, ForeignShareholdingDaily,
+    AccumulationFeature, AccumulationScore, BrokerDaily, CapitalAwareScore, DataSyncStatus, ForeignShareholdingDaily,
     HoldingDistribution, InstitutionalDaily, JobRun, PriceDaily, ScoreVersion, SourceRevision, Stock,
     StockRefreshIssue,
 )
-from .scoring import FORMULA_HASH, HOLDING_CANONICAL_THRESHOLDS, SCORE_MANIFEST, SCORE_VERSION, calculate_score, holding_schema_state
+from .scoring import CAPITAL_AWARE_FORMULA_HASH, CAPITAL_AWARE_SCORE_VERSION, FORMULA_HASH, HOLDING_CANONICAL_THRESHOLDS, SCORE_MANIFEST, SCORE_VERSION, calculate_capital_aware_score, calculate_score, holding_schema_state
 
 PIPELINE_ADVISORY_LOCK_KEY = 8_202_608_210_001
 
@@ -37,6 +37,16 @@ def _as_date(value: Any) -> date | None:
         return date.fromisoformat(str(value)[:10])
     except ValueError:
         return None
+
+
+def _as_datetime(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
 
 
 def _now() -> datetime:
@@ -182,7 +192,10 @@ def normalize_broker(row: dict[str, Any], fetched_at: datetime | None = None, da
         net_value = buy - sell
     avg_buy = _num(_v(row, "avg_buy_price"))
     avg_sell = _num(_v(row, "avg_sell_price"))
-    return {"stock_id": stock_id, "source_date": source_date, "securities_trader_id": trader_id, "securities_trader_name": _v(row, "securities_trader_name", "securities_trader", "券商名稱"), "buy_volume": buy, "sell_volume": sell, "net_volume": net_value, "buy_amount": buy * price if buy is not None and price is not None else _num(_v(row, "buy_amount", "買進金額")), "sell_amount": sell * price if sell is not None and price is not None else _num(_v(row, "sell_amount", "賣出金額")), "avg_buy_price": avg_buy if avg_buy is not None else price, "avg_sell_price": avg_sell if avg_sell is not None else price, "source_dataset": dataset, "provider_report_complete": False, "provider_contract_version": None, "provider_row_validated": _v(row, "provider_row_validated") is True, "provider_row_contract_version": _v(row, "provider_row_contract_version"), "fetched_at": fetched_at or _now()}
+    # The broker endpoint does not expose a formal amount in every contract.
+    # Do not manufacture an amount from a row price: v7 amount confirmations
+    # are available only when both provider amount fields are present.
+    return {"stock_id": stock_id, "source_date": source_date, "securities_trader_id": trader_id, "securities_trader_name": _v(row, "securities_trader_name", "securities_trader", "券商名稱"), "buy_volume": buy, "sell_volume": sell, "net_volume": net_value, "buy_amount": _num(_v(row, "buy_amount", "BuyAmount", "買進金額")), "sell_amount": _num(_v(row, "sell_amount", "SellAmount", "賣出金額")), "avg_buy_price": avg_buy if avg_buy is not None else price, "avg_sell_price": avg_sell if avg_sell is not None else price, "source_dataset": dataset, "provider_report_complete": False, "provider_contract_version": None, "provider_row_validated": _v(row, "provider_row_validated") is True, "provider_row_contract_version": _v(row, "provider_row_contract_version"), "fetched_at": fetched_at or _now()}
 
 
 def normalize_price(row: dict[str, Any], fetched_at: datetime | None = None) -> dict[str, Any] | None:
@@ -190,7 +203,7 @@ def normalize_price(row: dict[str, Any], fetched_at: datetime | None = None) -> 
     stock_id = str(_v(row, "stock_id", "證券代號") or "").strip()
     if not source_date or not stock_id:
         return None
-    return {"stock_id": stock_id, "source_date": source_date, "close": _num(_v(row, "close", "收盤價")), "volume": _num(_v(row, "TradingVolume", "Trading_Volume", "volume", "成交股數")), "change": _num(_v(row, "change", "spread", "漲跌價差")), "source_dataset": "TaiwanStockPrice", "fetched_at": fetched_at or _now()}
+    return {"stock_id": stock_id, "source_date": source_date, "close": _num(_v(row, "close", "收盤價")), "volume": _num(_v(row, "TradingVolume", "Trading_Volume", "volume", "成交股數")), "change": _num(_v(row, "change", "spread", "漲跌價差")), "trading_money": _num(_v(row, "Trading_money", "trading_money")), "trading_turnover": _num(_v(row, "Trading_turnover", "trading_turnover")), "source_dataset": "TaiwanStockPrice", "fetched_at": fetched_at or _now()}
 
 
 def _num(value: Any) -> float | None:
@@ -278,28 +291,32 @@ def ingest_records(db: Session, dataset: str, records: list[dict[str, Any]]) -> 
     count = 0
     fetched_at = _now()
     for row in records:
+        # Raw Parquet replay carries the original provider fetch timestamp in
+        # its sanitized evidence column.  Live responses use one attempt
+        # timestamp.  In both cases source_date and fetched_at remain separate.
+        row_fetched_at = _as_datetime(_v(row, "_evidence_fetched_at", "fetched_at")) or fetched_at
         if dataset == "TaiwanStockInfo":
-            normalized = normalize_stock(row, fetched_at)
+            normalized = normalize_stock(row, row_fetched_at)
             model, unique, values = Stock, {"stock_id": normalized["stock_id"]} if normalized else None, normalized
         elif dataset == "TaiwanStockInstitutionalInvestorsBuySellWide":
-            normalized = normalize_institutional(row, fetched_at)
+            normalized = normalize_institutional(row, row_fetched_at)
             model, unique, values = InstitutionalDaily, {"stock_id": normalized["stock_id"], "source_date": normalized["source_date"]} if normalized else None, normalized
         elif dataset == "TaiwanStockShareholding":
-            normalized = normalize_foreign(row, fetched_at)
+            normalized = normalize_foreign(row, row_fetched_at)
             model, unique, values = ForeignShareholdingDaily, {"stock_id": normalized["stock_id"], "source_date": normalized["source_date"]} if normalized else None, normalized
         elif dataset == "TaiwanStockHoldingSharesPer":
-            normalized = normalize_holding(row, fetched_at)
+            normalized = normalize_holding(row, row_fetched_at)
             model, unique, values = HoldingDistribution, {"stock_id": normalized["stock_id"], "source_date": normalized["source_date"], "holding_shares_level": normalized["holding_shares_level"]} if normalized else None, normalized
         elif dataset == "TaiwanStockTradingDailyReport":
-            normalized = normalize_broker(row, fetched_at, dataset=dataset)
+            normalized = normalize_broker(row, row_fetched_at, dataset=dataset)
             model, unique, values = BrokerDaily, {"stock_id": normalized["stock_id"], "source_date": normalized["source_date"], "securities_trader_id": normalized["securities_trader_id"]} if normalized else None, normalized
         elif dataset == "TaiwanStockPrice":
-            normalized = normalize_price(row, fetched_at)
+            normalized = normalize_price(row, row_fetched_at)
             model, unique, values = PriceDaily, {"stock_id": normalized["stock_id"], "source_date": normalized["source_date"]} if normalized else None, normalized
         else:
             continue
         if normalized and unique and (valid_stock_ids is None or normalized["stock_id"] in valid_stock_ids):
-            _record_revision(db, dataset, normalized, unique, fetched_at)
+            _record_revision(db, dataset, normalized, unique, row_fetched_at)
             _upsert(db, model, unique, {k: v for k, v in values.items() if k not in unique})
             count += 1
     db.commit()
@@ -777,6 +794,13 @@ def _persist_stock_evaluation(db: Session, evaluation: dict[str, Any]) -> Accumu
     result = evaluation["score_result"]
     score_filters = {"stock_id": stock_id, "source_date": as_of, "score_version": SCORE_VERSION, "knowledge_cutoff": cutoff}
     score = _upsert(db, AccumulationScore, score_filters, {"score": result.score, "status": result.status, "components": result.components, "explanation": result.explanation, "coverage": evaluation["coverage"], "calculated_at": now, "input_snapshot_hash": evaluation["snapshot_hash"], "input_source_hashes": evaluation["input_hashes"], "formula_hash": FORMULA_HASH})
+    # Persist v7 beside (never over) the historical v6 score.  The v7 row
+    # contains the derived feature snapshot so the API can explain every gate
+    # without recalculating against a moving database.
+    capital_result = calculate_capital_aware_score(evaluation["features"], evaluation["coverage"], result.score)
+    capital_filters = {"stock_id": stock_id, "source_date": as_of, "score_version": CAPITAL_AWARE_SCORE_VERSION, "knowledge_cutoff": cutoff}
+    capital_coverage = {**evaluation["coverage"], "capital_aware": {"eligible": capital_result.eligible, "eligibility_reasons": capital_result.eligibility_reasons, "status": capital_result.status}}
+    _upsert(db, CapitalAwareScore, capital_filters, {"score": capital_result.score, "status": capital_result.status, "large_capital_score": capital_result.large_capital_score, "high_confidence_score": capital_result.score, "components": capital_result.components, "features": evaluation["features"], "explanation": capital_result.explanation, "coverage": capital_coverage, "calculated_at": now, "input_snapshot_hash": evaluation["snapshot_hash"], "input_source_hashes": evaluation["input_hashes"], "formula_hash": CAPITAL_AWARE_FORMULA_HASH})
     db.commit()
     return score
 
