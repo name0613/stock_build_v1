@@ -63,7 +63,7 @@
     "frontend_build": "PASS",
     "playwright": "PASS: deterministic 11/11; capital-aware 2/2; combined 13/13",
     "api_smoke": "PASS: health/spec/v6-stealth/v7-large/v7-high/summary/detail/readiness 200; invalid ranking kind 422",
-    "secret_scan": "PASS: 569 files, no findings, secret_values_redacted=true"
+    "secret_scan": "PASS: 572 files, no findings, secret_values_redacted=true"
   },
   "nas": {
     "status": "BLOCKED_MISSING_CREDENTIALS",
