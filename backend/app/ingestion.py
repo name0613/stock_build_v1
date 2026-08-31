@@ -1324,6 +1324,11 @@ async def resume_universe_budget_refresh_job(
             for code in value.get("failure_codes", [])
             if code
         }
+        attempt_rows = sum(
+            int(value.get("records_accepted", value.get("rows_received", value.get("rows", 0))) or 0)
+            for value in merged_datasets.values()
+            if isinstance(value, dict)
+        )
         # FinMind can return a successful but empty payload for every broker
         # observation.  That is a stock-level no-data attempt, not a provider
         # outage.  Count it toward the explicit two-attempt skip policy so one
@@ -1331,14 +1336,14 @@ async def resume_universe_budget_refresh_job(
         empty_stock_attempt = (
             bool(incomplete_datasets)
             and incomplete_failure_codes == {"EMPTY_RESPONSE_UNVERIFIED"}
-            and not _stock_has_source_data(db, stock_id)
+            and attempt_rows == 0
         )
         if empty_stock_attempt:
             completed_datasets = set(FAVORITE_REFRESH_DATASETS)
         if completed_datasets != set(FAVORITE_REFRESH_DATASETS):
             return _budget_wait(db, job, checkpoint, "WAITING_FOR_PROVIDER", "REFRESH_INCOMPLETE")
 
-        if _stock_has_source_data(db, stock_id):
+        if _stock_has_source_data(db, stock_id) and not empty_stock_attempt:
             _clear_refresh_issue(db, stock_id)
         else:
             issue = _record_no_data_attempt(db, stock_id, job.id, result)

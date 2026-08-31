@@ -245,6 +245,9 @@ def test_two_unverified_empty_broker_fetches_are_persisted_and_skipped(monkeypat
         }
 
     monkeypatch.setattr(ingestion_module, "fetch_and_score_stock", fake_fetch)
+    # Historical rows must not hide the fact that both current refresh
+    # attempts returned no data.
+    monkeypatch.setattr(ingestion_module, "_stock_has_source_data", lambda _db, _stock_id: True)
     try:
         with SessionLocal() as db:
             result = asyncio.run(resume_universe_budget_refresh_job(db, FakeClient(), db.get(JobRun, job_id)))
