@@ -1400,6 +1400,11 @@ class FinMindClient:
         metrics["provider_missing_observations"] = sum(len(set(entries.get(stock_id, {}).get("verified_missing_dates", entries.get(stock_id, {}).get("verified_no_data_dates", []))) & requested_observations) for stock_id in stock_ids)
         metrics["unresolved_observations"] = len(stock_ids) * len(expected_strings) - metrics["verified_observations"]
         metrics["per_stock"] = {key: value for key, value in entries.items() if key in stock_ids}
+        metrics["failure_codes"] = sorted({
+            str(item["error_code"])
+            for item in checkpoint.get("failed", [])
+            if item.get("stock_id") in stock_ids and item.get("error_code")
+        })
         metrics["fair_cursor_end_stock_id"] = checkpoint.get("fair_cursor_stock_id")
         if publication_target:
             target_records = sum(1 for stock_id in stock_ids if publication_target in set(entries.get(stock_id, {}).get("verified_record_dates", [])))

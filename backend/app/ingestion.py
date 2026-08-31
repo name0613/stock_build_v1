@@ -791,6 +791,7 @@ TARGETED_STOCK_SYNC_DATASET = "targeted_stock_sync_score"
 FAVORITE_REFRESH_DATASET = "favorite_refresh_score"
 UNIVERSE_BUDGET_REFRESH_DATASET = "universe_budget_refresh_score"
 UNIVERSE_BUDGET_LIMIT = 3_500
+REFRESH_SKIPPED_STATUSES = ("SKIPPED_AFTER_TWO_NO_DATA", "SKIPPED_AFTER_TWO_INCOMPLETE")
 FAVORITE_REFRESH_DATASETS = (
     "TaiwanStockInstitutionalInvestorsBuySellWide",
     "TaiwanStockShareholding",
@@ -1114,21 +1115,26 @@ def _stock_has_source_data(db: Session, stock_id: str) -> bool:
     )
 
 
-def _record_no_data_attempt(db: Session, stock_id: str, job_id: int, result: dict[str, Any]) -> StockRefreshIssue:
+def _record_no_data_attempt(db: Session, stock_id: str, job_id: int, result: dict[str, Any], *, partial: bool = False) -> StockRefreshIssue:
     now = _now()
     issue = db.get(StockRefreshIssue, stock_id)
     attempts = min(2, int(issue.no_data_attempts if issue else 0) + 1)
-    status = "SKIPPED_AFTER_TWO_NO_DATA" if attempts >= 2 else "RETRY_PENDING"
+    terminal_status = "SKIPPED_AFTER_TWO_INCOMPLETE" if partial else "SKIPPED_AFTER_TWO_NO_DATA"
+    status = terminal_status if attempts >= 2 else "RETRY_PENDING"
+    reason = ("INCOMPLETE_AFTER_TWO_FETCHES" if attempts >= 2 else "INCOMPLETE_FIRST_ATTEMPT") if partial else ("NO_DATA_AFTER_TWO_FETCHES" if attempts >= 2 else "NO_DATA_FIRST_ATTEMPT")
     details = {
         "message": "FinMind 連續兩次未回傳此股票的可用資料，已停止自動重試。" if attempts >= 2 else "FinMind 第一次未回傳此股票的可用資料，將再嘗試一次。",
         "last_fetch_errors": result.get("fetch_errors", []),
     }
+    if partial:
+        details["message"] = "FinMind 連續兩次仍缺少必要來源資料，已保留取得的資料並跳過自動補抓。" if attempts >= 2 else "FinMind 部分來源資料仍缺漏，已保留取得的資料，將再嘗試一次。"
+    details["incomplete_datasets"] = [dataset for dataset, value in result.get("datasets", {}).items() if isinstance(value, dict) and value.get("refresh_complete") is not True]
     if issue is None:
         issue = StockRefreshIssue(
             stock_id=stock_id,
             no_data_attempts=attempts,
             status=status,
-            reason_code="NO_DATA_AFTER_TWO_FETCHES" if attempts >= 2 else "NO_DATA_FIRST_ATTEMPT",
+            reason_code=reason,
             first_attempt_at=now,
             last_attempt_at=now,
             last_job_id=job_id,
@@ -1138,7 +1144,7 @@ def _record_no_data_attempt(db: Session, stock_id: str, job_id: int, result: dic
     else:
         issue.no_data_attempts = attempts
         issue.status = status
-        issue.reason_code = "NO_DATA_AFTER_TWO_FETCHES" if attempts >= 2 else "NO_DATA_FIRST_ATTEMPT"
+        issue.reason_code = reason
         issue.last_attempt_at = now
         issue.last_job_id = job_id
         issue.details = details
@@ -1219,7 +1225,7 @@ async def resume_universe_budget_refresh_job(
         queue_index = int(checkpoint.get("queue_index", 0) or 0)
         if queue_index >= len(stock_ids):
             cycle_source = [str(value) for value in checkpoint.get("cycle_stock_ids", [])]
-            skipped = set(db.scalars(select(StockRefreshIssue.stock_id).where(StockRefreshIssue.status == "SKIPPED_AFTER_TWO_NO_DATA")).all())
+            skipped = set(db.scalars(select(StockRefreshIssue.stock_id).where(StockRefreshIssue.status.in_(REFRESH_SKIPPED_STATUSES))).all())
             next_cycle = [stock_id for stock_id in cycle_source if stock_id not in skipped]
             if not next_cycle:
                 _job_finish(db, job, "FAILED", error_code="NO_ELIGIBLE_STOCKS", checkpoint_state=_jsonable({**checkpoint, "phase": "failed"}))
@@ -1233,7 +1239,7 @@ async def resume_universe_budget_refresh_job(
 
         stock_id = stock_ids[queue_index]
         issue = db.get(StockRefreshIssue, stock_id)
-        if issue is not None and issue.status == "SKIPPED_AFTER_TWO_NO_DATA":
+        if issue is not None and issue.status in REFRESH_SKIPPED_STATUSES:
             checkpoint["queue_index"] = queue_index + 1
             checkpoint["skipped_no_data_count"] = int(checkpoint.get("skipped_no_data_count", 0) or 0) + 1
             continue
@@ -1281,7 +1287,12 @@ async def resume_universe_budget_refresh_job(
             force_refresh=True,
             refreshed_datasets=refreshed,
         )
-        merged_datasets = {**dict(previous.get("datasets", {})), **dict(result.get("datasets", {}))}
+        merged_datasets = dict(previous.get("datasets", {}))
+        for dataset, value in dict(result.get("datasets", {})).items():
+            # A resume marker has no row counts; retain the actual completed
+            # observation so partial data cannot be mistaken for an empty run.
+            if not (isinstance(value, dict) and value.get("status") == "REUSED_REFRESH_CHECKPOINT" and dataset in merged_datasets):
+                merged_datasets[dataset] = value
         checkpoint["current_stock_progress"] = {
             "stock_id": stock_id,
             "datasets": merged_datasets,
@@ -1318,37 +1329,33 @@ async def resume_universe_budget_refresh_job(
             and isinstance(value, dict)
             and value.get("refresh_complete") is not True
         }
-        incomplete_failure_codes = {
-            str(code)
-            for value in incomplete_datasets.values()
-            for code in value.get("failure_codes", [])
-            if code
-        }
         attempt_rows = sum(
             int(value.get("records_accepted", value.get("rows_received", value.get("rows", 0))) or 0)
             for value in merged_datasets.values()
             if isinstance(value, dict)
         )
-        # FinMind can return a successful but empty payload for every broker
-        # observation.  That is a stock-level no-data attempt, not a provider
-        # outage.  Count it toward the explicit two-attempt skip policy so one
-        # empty stock cannot park the entire durable queue forever.
-        empty_stock_attempt = (
+        # Only proven stock-level empty/partial responses may advance the
+        # queue. Network errors, unclassified failures, and unattempted sources
+        # must not be recorded as two no-data attempts.
+        incomplete_stock_attempt = (
             bool(incomplete_datasets)
-            and incomplete_failure_codes == {"EMPTY_RESPONSE_UNVERIFIED"}
-            and attempt_rows == 0
+            and not error_codes
+            and set(merged_datasets) >= set(FAVORITE_REFRESH_DATASETS)
+            and all(
+                bool(value.get("failure_codes"))
+                and set(value["failure_codes"]) <= {"EMPTY_RESPONSE_UNVERIFIED", "PARTIAL_OBSERVATION_COVERAGE"}
+                for value in incomplete_datasets.values()
+            )
         )
-        if empty_stock_attempt:
-            completed_datasets = set(FAVORITE_REFRESH_DATASETS)
-        if completed_datasets != set(FAVORITE_REFRESH_DATASETS):
+        if completed_datasets != set(FAVORITE_REFRESH_DATASETS) and not incomplete_stock_attempt:
             return _budget_wait(db, job, checkpoint, "WAITING_FOR_PROVIDER", "REFRESH_INCOMPLETE")
 
-        if _stock_has_source_data(db, stock_id) and not empty_stock_attempt:
+        if _stock_has_source_data(db, stock_id) and not incomplete_stock_attempt:
             _clear_refresh_issue(db, stock_id)
         else:
-            issue = _record_no_data_attempt(db, stock_id, job.id, result)
-            if issue.status != "SKIPPED_AFTER_TWO_NO_DATA":
-                stock_ids.append(stock_id)
+            issue = _record_no_data_attempt(db, stock_id, job.id, {**result, "datasets": merged_datasets}, partial=incomplete_stock_attempt and attempt_rows > 0)
+            if issue.status not in REFRESH_SKIPPED_STATUSES:
+                stock_ids.insert(queue_index + 1, stock_id)
                 checkpoint["stock_ids"] = stock_ids
                 job.stocks_attempted = len(stock_ids)
             else:

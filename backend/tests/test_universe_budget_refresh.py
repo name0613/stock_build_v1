@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import httpx
@@ -194,7 +194,13 @@ def test_two_complete_empty_fetches_are_persisted_and_skipped(monkeypatch: pytes
             db.commit()
 
 
-def test_two_unverified_empty_broker_fetches_are_persisted_and_skipped(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+@pytest.mark.parametrize("source_codes,source_rows,expected_issue", [
+    (None, 0, "SKIPPED_AFTER_TWO_NO_DATA"),
+    (["PARTIAL_OBSERVATION_COVERAGE"], 60, "SKIPPED_AFTER_TWO_INCOMPLETE"),
+    (["NETWORK_ERROR"], 0, None),
+    ([], 0, None),
+])
+def test_stock_level_missing_responses_do_not_block_queue(monkeypatch: pytest.MonkeyPatch, tmp_path, source_codes, source_rows, expected_issue) -> None:
     stock_id = "9997"
     with SessionLocal() as db:
         db.add(Stock(stock_id=stock_id, stock_name="券商空資料測試", market="上市", is_common_stock=True))
@@ -237,6 +243,13 @@ def test_two_unverified_empty_broker_fetches_are_persisted_and_skipped(monkeypat
             "failure_codes": ["EMPTY_RESPONSE_UNVERIFIED"],
             "retryable_pending": 20,
         }
+        if source_codes is not None:
+            datasets["TaiwanStockHoldingSharesPer"] = {
+                "refresh_complete": False,
+                "failure_codes": source_codes,
+                "records_accepted": source_rows,
+                "retryable_pending": 1,
+            }
         return {
             "datasets": datasets,
             "score": {"score": None, "status": "DATA_INSUFFICIENT"},
@@ -252,11 +265,24 @@ def test_two_unverified_empty_broker_fetches_are_persisted_and_skipped(monkeypat
         with SessionLocal() as db:
             result = asyncio.run(resume_universe_budget_refresh_job(db, FakeClient(), db.get(JobRun, job_id)))
             issue = db.get(StockRefreshIssue, stock_id)
+            if expected_issue is None:
+                assert result["status"] == "WAITING_FOR_PROVIDER"
+                assert result["budget"]["used"] == 1
+                assert issue is None
+                return
             assert result["status"] == "SUCCESS"
             assert result["budget"] == {"limit": 2, "used": 2, "remaining": 0}
             assert issue is not None
             assert issue.no_data_attempts == 2
-            assert issue.status == "SKIPPED_AFTER_TWO_NO_DATA"
+            assert issue.status == expected_issue
+        with TestClient(api_app) as api:
+            payload = api.get(f"/api/stocks/{stock_id}").json()["stock"]["refresh_issue"]
+            assert payload["status"] == expected_issue
+            if source_rows:
+                assert "保留取得的資料" in payload["details"]["message"]
+        with SessionLocal() as db:
+            from app.main import _universe_budget_queue
+            assert stock_id not in _universe_budget_queue(db)[0]
     finally:
         with SessionLocal() as db:
             db.query(JobRun).filter(JobRun.id == job_id).delete(synchronize_session=False)
@@ -264,4 +290,62 @@ def test_two_unverified_empty_broker_fetches_are_persisted_and_skipped(monkeypat
             stock = db.get(Stock, stock_id)
             if stock is not None:
                 db.delete(stock)
+            db.commit()
+
+
+def test_budget_quota_wait_and_restart_resume_to_exactly_3500(monkeypatch, tmp_path) -> None:
+    now = datetime.now(timezone.utc)
+    path = tmp_path / "resume-budget.json"
+    budget = FinMindRequestBudget(3500, path, used=3498)
+    calls = []
+
+    class FakeClient:
+        settings = SimpleNamespace(source_revision="test", broker_quota_reserve=0)
+
+        def __init__(self, request_budget):
+            self.request_budget = request_budget
+
+        def provider_quota(self, **_kwargs):
+            return {"provider_reported_remaining": 6000, "provider_reported_limit_per_hour": 6000}
+
+    async def fake_fetch(_db, client, stock_id, _target, **kwargs):
+        calls.append((stock_id, kwargs["refreshed_datasets"]))
+        client.request_budget.reserve()
+        if len(calls) == 1:
+            return {"datasets": {"TaiwanStockPrice": {"refresh_complete": True, "records_accepted": 21}}, "fetch_errors": [{"error_code": "QUOTA_EXHAUSTED"}]}
+        return {"datasets": {dataset: {"refresh_complete": True, "status": "REUSED_REFRESH_CHECKPOINT" if dataset == "TaiwanStockPrice" else "SUCCESS"} for dataset in FAVORITE_REFRESH_DATASETS}, "fetch_errors": []}
+
+    monkeypatch.setattr(ingestion_module, "fetch_and_score_stock", fake_fetch)
+    monkeypatch.setattr(ingestion_module, "_now", lambda: now)
+    with SessionLocal() as db:
+        job = JobRun(dataset=UNIVERSE_BUDGET_REFRESH_DATASET, status="QUEUED", started_at=now, requested_end_date=date(2026, 8, 20), checkpoint_state={"stock_ids": ["2330"], "cycle_stock_ids": ["2330"], "budget": budget.snapshot()})
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+        job_id = job.id
+    try:
+        with SessionLocal() as db:
+            first = asyncio.run(resume_universe_budget_refresh_job(db, FakeClient(budget), db.get(JobRun, job_id)))
+            assert first["status"] == "WAITING_FOR_QUOTA"
+            assert first["budget"] == {"limit": 3500, "used": 3499, "remaining": 1}
+        # Fresh session/client simulates a restarted worker; stale DB counters
+        # cannot reset the durable request file or spend beyond the final unit.
+        client = FakeClient(FinMindRequestBudget(3500, path, used=3498))
+        with SessionLocal() as db:
+            waiting = asyncio.run(resume_universe_budget_refresh_job(db, client, db.get(JobRun, job_id)))
+            assert waiting["status"] == "WAITING_FOR_QUOTA"
+            assert len(calls) == 1
+        monkeypatch.setattr(ingestion_module, "_now", lambda: now + timedelta(minutes=10))
+        with SessionLocal() as db:
+            job = db.get(JobRun, job_id)
+            done = asyncio.run(resume_universe_budget_refresh_job(db, client, job))
+            assert done["status"] == "SUCCESS"
+            assert done["budget"] == {"limit": 3500, "used": 3500, "remaining": 0}
+            assert calls == [("2330", set()), ("2330", {"TaiwanStockPrice"})]
+            # Re-running a completed budget cannot perform another fetch.
+            asyncio.run(resume_universe_budget_refresh_job(db, client, job))
+            assert len(calls) == 2
+    finally:
+        with SessionLocal() as db:
+            db.query(JobRun).filter(JobRun.id == job_id).delete(synchronize_session=False)
             db.commit()

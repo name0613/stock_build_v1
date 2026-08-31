@@ -19,6 +19,7 @@ from .db import SessionLocal, get_db, init_db
 from .finmind import GLOBAL_PROVIDER_FAILURE_CODES
 from .features import build_features, holding_distribution_features
 from .ingestion import FAVORITE_REFRESH_DATASET, TARGETED_STOCK_SYNC_DATASET, UNIVERSE_BUDGET_LIMIT, UNIVERSE_BUDGET_REFRESH_DATASET, authoritative_expected_latest_source_date, authoritative_source_state_hash, evaluate_stock_readiness, evaluate_universe_readiness, favorite_refresh_job_payload, fetch_and_score_stock, latest_ready_stock_evaluation, score_existing_data, score_snapshot_state, seed_score_version, stock_refresh_issue_payload, universe_budget_job_payload
+from .ingestion import REFRESH_SKIPPED_STATUSES
 from .models import AccumulationFeature, AccumulationScore, BrokerDaily, DataSyncStatus, ForeignShareholdingDaily, HoldingDistribution, InstitutionalDaily, JobRun, PriceDaily, Stock, StockRefreshIssue
 from .schemas import PaginatedStocks, StockListItem
 from .calendar import CALENDAR_HASH, CALENDAR_VERSION
@@ -471,7 +472,7 @@ def favorite_fetch_and_score_status(job_id: int | None = Query(None, ge=1), db: 
 
 def _universe_budget_queue(db: Session) -> tuple[list[str], dict[str, str | None], int]:
     stocks = list(db.scalars(select(Stock).where(Stock.is_common_stock.is_(True)).order_by(Stock.stock_id)).all())
-    skipped = set(db.scalars(select(StockRefreshIssue.stock_id).where(StockRefreshIssue.status == "SKIPPED_AFTER_TWO_NO_DATA")).all())
+    skipped = set(db.scalars(select(StockRefreshIssue.stock_id).where(StockRefreshIssue.status.in_(REFRESH_SKIPPED_STATUSES))).all())
     latest_scores = {
         str(stock_id): score
         for stock_id, score in db.execute(
