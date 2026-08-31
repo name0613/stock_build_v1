@@ -16,6 +16,7 @@ from app.finmind import FinMindClient, FinMindError, FinMindRequestBudget
 from app.ingestion import FAVORITE_REFRESH_DATASETS, UNIVERSE_BUDGET_REFRESH_DATASET, resume_universe_budget_refresh_job
 from app.main import app as api_app
 from app.models import JobRun, Stock, StockRefreshIssue
+from app.worker import _next_durable_refresh_job
 
 
 class _Response:
@@ -87,6 +88,35 @@ def test_universe_queue_prioritizes_stock_without_data_and_score() -> None:
             stock = db.get(Stock, "9999")
             if stock is not None:
                 db.delete(stock)
+            db.commit()
+
+
+def test_single_dispatcher_selects_oldest_job_across_both_refresh_types() -> None:
+    with SessionLocal() as db:
+        older = JobRun(
+            dataset=UNIVERSE_BUDGET_REFRESH_DATASET,
+            requested_date=date(2026, 8, 20),
+            status="QUEUED",
+            started_at=datetime(2026, 8, 31, 8, tzinfo=timezone.utc),
+            checkpoint_state={"budget": {"limit": 3500, "used": 0, "remaining": 3500}},
+        )
+        newer = JobRun(
+            dataset="favorite_refresh_score",
+            requested_date=date(2026, 8, 20),
+            status="QUEUED",
+            started_at=datetime(2026, 8, 31, 9, tzinfo=timezone.utc),
+            checkpoint_state={},
+        )
+        db.add_all([older, newer])
+        db.commit()
+        db.refresh(older)
+        db.refresh(newer)
+        try:
+            assert _next_durable_refresh_job(db).id == older.id
+            assert _next_durable_refresh_job(db, "favorite_refresh_score").id == newer.id
+        finally:
+            db.delete(newer)
+            db.delete(older)
             db.commit()
 
 

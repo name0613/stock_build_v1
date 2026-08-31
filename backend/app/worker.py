@@ -253,30 +253,51 @@ def run_intraday_sync() -> None:
         _provider_work_lock.release()
 
 
-def run_favorite_refresh() -> None:
-    """Resume the oldest durable favorite refresh without overlapping sync."""
+REFRESH_ACTIVE_STATUSES = ("QUEUED", "RUNNING", "WAITING_FOR_QUOTA", "WAITING_FOR_PROVIDER")
+
+
+def _next_durable_refresh_job(db: object, dataset: str | None = None) -> JobRun | None:
+    datasets = (dataset,) if dataset else (FAVORITE_REFRESH_DATASET, UNIVERSE_BUDGET_REFRESH_DATASET)
+    return (
+        db.query(JobRun)
+        .filter(JobRun.dataset.in_(datasets), JobRun.status.in_(REFRESH_ACTIVE_STATUSES))
+        .order_by(JobRun.id.asc())
+        .first()
+    )
+
+
+def _run_durable_refresh(dataset: str | None = None) -> None:
+    """Claim one provider lock, then dispatch the oldest durable refresh."""
     if not _provider_work_lock.acquire(blocking=False):
         return
     db = SessionLocal()
     try:
-        job = (
-            db.query(JobRun)
-            .filter(
-                JobRun.dataset == FAVORITE_REFRESH_DATASET,
-                JobRun.status.in_(("QUEUED", "RUNNING", "WAITING_FOR_QUOTA", "WAITING_FOR_PROVIDER")),
-            )
-            .order_by(JobRun.id.asc())
-            .first()
-        )
+        job = _next_durable_refresh_job(db, dataset)
         if job is None:
             return
-        started = datetime.now(timezone.utc).isoformat()
 
         def report_progress(phase: str) -> None:
             _heartbeat(last_job_progress_at=datetime.now(timezone.utc).isoformat(), job_phase=phase, current_job_run_id=job.id)
 
-        _heartbeat(status="running", ready=True, last_job_started_at=started, current_job_run_id=job.id, job_phase="favorite_refresh", last_error_code=None)
-        result = asyncio.run(resume_favorite_refresh_job(db, FinMindClient(settings), job, progress_callback=report_progress))
+        if job.dataset == FAVORITE_REFRESH_DATASET:
+            phase = "favorite_refresh"
+            client = FinMindClient(settings)
+            coroutine = resume_favorite_refresh_job(db, client, job, progress_callback=report_progress)
+        else:
+            phase = "universe_budget_refresh"
+            checkpoint = dict(job.checkpoint_state or {})
+            budget_state = checkpoint.get("budget") if isinstance(checkpoint.get("budget"), dict) else {}
+            budget_file = settings.raw_root / "checkpoints" / f"universe-budget-job-{job.id}.json"
+            request_budget = FinMindRequestBudget(
+                UNIVERSE_BUDGET_LIMIT,
+                budget_file,
+                used=int(budget_state.get("used", 0) or 0),
+            )
+            client = FinMindClient(settings, request_budget=request_budget)
+            coroutine = resume_universe_budget_refresh_job(db, client, job, progress_callback=report_progress)
+
+        _heartbeat(status="running", ready=True, last_job_started_at=datetime.now(timezone.utc).isoformat(), current_job_run_id=job.id, job_phase=phase, last_error_code=None)
+        result = asyncio.run(coroutine)
         _heartbeat(
             status="idle",
             ready=True,
@@ -288,67 +309,26 @@ def run_favorite_refresh() -> None:
         )
     except Exception as exc:
         db.rollback()
-        logger.error("favorite refresh failed code=%s", getattr(exc, "code", "UNEXPECTED"))
+        logger.error("durable refresh failed code=%s", getattr(exc, "code", "UNEXPECTED"))
         _heartbeat(status="idle", ready=True, last_job_status="FAILED", last_error_code=getattr(exc, "code", "UNEXPECTED"), current_job_run_id=None)
     finally:
         db.close()
         _provider_work_lock.release()
+
+
+def run_durable_refresh() -> None:
+    """Resume the oldest favorite or fixed-budget job without starvation."""
+    _run_durable_refresh()
+
+
+def run_favorite_refresh() -> None:
+    """Compatibility entry point for a favorite-only manual invocation."""
+    _run_durable_refresh(FAVORITE_REFRESH_DATASET)
 
 
 def run_universe_budget_refresh() -> None:
-    """Resume the oldest fixed-budget universe refresh without overlap."""
-    if not _provider_work_lock.acquire(blocking=False):
-        return
-    db = SessionLocal()
-    try:
-        job = (
-            db.query(JobRun)
-            .filter(
-                JobRun.dataset == UNIVERSE_BUDGET_REFRESH_DATASET,
-                JobRun.status.in_(("QUEUED", "RUNNING", "WAITING_FOR_QUOTA", "WAITING_FOR_PROVIDER")),
-            )
-            .order_by(JobRun.id.asc())
-            .first()
-        )
-        if job is None:
-            return
-        checkpoint = dict(job.checkpoint_state or {})
-        budget_state = checkpoint.get("budget") if isinstance(checkpoint.get("budget"), dict) else {}
-        budget_file = settings.raw_root / "checkpoints" / f"universe-budget-job-{job.id}.json"
-        request_budget = FinMindRequestBudget(
-            UNIVERSE_BUDGET_LIMIT,
-            budget_file,
-            used=int(budget_state.get("used", 0) or 0),
-        )
-
-        def report_progress(phase: str) -> None:
-            _heartbeat(last_job_progress_at=datetime.now(timezone.utc).isoformat(), job_phase=phase, current_job_run_id=job.id)
-
-        _heartbeat(status="running", ready=True, last_job_started_at=datetime.now(timezone.utc).isoformat(), current_job_run_id=job.id, job_phase="universe_budget_refresh", last_error_code=None)
-        result = asyncio.run(
-            resume_universe_budget_refresh_job(
-                db,
-                FinMindClient(settings, request_budget=request_budget),
-                job,
-                progress_callback=report_progress,
-            )
-        )
-        _heartbeat(
-            status="idle",
-            ready=True,
-            last_job_finished_at=datetime.now(timezone.utc).isoformat(),
-            last_job_status=result.get("status"),
-            last_error_code=result.get("error_code"),
-            current_job_run_id=None,
-            job_phase=result.get("phase"),
-        )
-    except Exception as exc:
-        db.rollback()
-        logger.error("universe budget refresh failed code=%s", getattr(exc, "code", "UNEXPECTED"))
-        _heartbeat(status="idle", ready=True, last_job_status="FAILED", last_error_code=getattr(exc, "code", "UNEXPECTED"), current_job_run_id=None)
-    finally:
-        db.close()
-        _provider_work_lock.release()
+    """Compatibility entry point for a universe-only manual invocation."""
+    _run_durable_refresh(UNIVERSE_BUDGET_REFRESH_DATASET)
 
 
 def main() -> None:
@@ -392,8 +372,7 @@ def main() -> None:
         replace_existing=True,
         misfire_grace_time=300,
     )
-    scheduler.add_job(run_favorite_refresh, IntervalTrigger(minutes=1, timezone=settings.timezone), id="favorite-refresh-resume", replace_existing=True, max_instances=1, coalesce=True, misfire_grace_time=60)
-    scheduler.add_job(run_universe_budget_refresh, IntervalTrigger(minutes=1, timezone=settings.timezone), id="universe-budget-refresh-resume", replace_existing=True, max_instances=1, coalesce=True, misfire_grace_time=60)
+    scheduler.add_job(run_durable_refresh, IntervalTrigger(minutes=1, timezone=settings.timezone), id="durable-refresh-resume", replace_existing=True, max_instances=1, coalesce=True, misfire_grace_time=60)
     scheduler.add_listener(_scheduler_listener, EVENT_JOB_SUBMITTED | EVENT_JOB_EXECUTED | EVENT_JOB_ERROR | EVENT_JOB_MISSED)
     _scheduler_runtime = scheduler
     logger.info("worker scheduled timezone=%s", settings.timezone)
