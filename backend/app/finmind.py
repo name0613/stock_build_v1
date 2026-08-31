@@ -42,6 +42,7 @@ GLOBAL_PROVIDER_FAILURE_CODES = frozenset({
     "ACCESS_DENIED",
     "QUOTA_EXHAUSTED",
     "SCHEMA_MISMATCH",
+    "JOB_REQUEST_BUDGET_EXHAUSTED",
 })
 
 
@@ -238,6 +239,67 @@ class SchemaMismatch(FinMindError):
     pass
 
 
+class FinMindRequestBudget:
+    """Durably reserve each real FinMind data HTTP attempt for one job.
+
+    The counter is written before the request leaves the process.  A crash can
+    therefore conservatively count one reserved request that was not sent, but
+    can never make a resumed job exceed its user-authorized limit.
+    """
+
+    def __init__(self, limit: int, checkpoint_file: Path, *, used: int = 0):
+        if limit <= 0:
+            raise ValueError("request budget limit must be positive")
+        self.limit = int(limit)
+        self.checkpoint_file = checkpoint_file
+        self._lock = threading.Lock()
+        self._used = max(0, min(int(used), self.limit))
+        self.checkpoint_file.parent.mkdir(parents=True, exist_ok=True)
+        if self.checkpoint_file.exists():
+            try:
+                state = json.loads(self.checkpoint_file.read_text(encoding="utf-8"))
+                if int(state.get("limit", 0)) == self.limit:
+                    self._used = max(self._used, min(int(state.get("used", 0)), self.limit))
+            except (OSError, TypeError, ValueError, json.JSONDecodeError):
+                pass
+        self._persist()
+
+    @property
+    def used(self) -> int:
+        with self._lock:
+            return self._used
+
+    @property
+    def remaining(self) -> int:
+        return max(0, self.limit - self.used)
+
+    def snapshot(self) -> dict[str, int]:
+        used = self.used
+        return {"limit": self.limit, "used": used, "remaining": max(0, self.limit - used)}
+
+    def reserve(self) -> None:
+        with self._lock:
+            if self._used >= self.limit:
+                raise FinMindError("JOB_REQUEST_BUDGET_EXHAUSTED", "The fixed FinMind job request budget is complete")
+            self._used += 1
+            self._persist_unlocked()
+
+    def _persist(self) -> None:
+        with self._lock:
+            self._persist_unlocked()
+
+    def _persist_unlocked(self) -> None:
+        payload = {
+            "limit": self.limit,
+            "used": self._used,
+            "remaining": max(0, self.limit - self._used),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        temporary = self.checkpoint_file.with_suffix(f"{self.checkpoint_file.suffix}.tmp")
+        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        temporary.replace(self.checkpoint_file)
+
+
 @dataclass(frozen=True)
 class CapabilityResult:
     dataset: str
@@ -310,7 +372,7 @@ class RateLimiter:
 
 
 class FinMindClient:
-    def __init__(self, settings: Settings | None = None):
+    def __init__(self, settings: Settings | None = None, *, request_budget: FinMindRequestBudget | None = None):
         self.settings = settings or get_settings()
         self.store = RawEvidenceStore(self.settings.raw_root)
         self.timeout = httpx.Timeout(30.0, connect=10.0)
@@ -321,6 +383,7 @@ class FinMindClient:
         # two path-specific settings and accidentally exceed the stricter
         # provider-safe limit.
         self._request_interval = 1 / max(self.settings.provider_rate_per_second, 0.1)
+        self.request_budget = request_budget
 
     def _wait_for_http_attempt(self) -> None:
         """Apply one process-wide budget to every physical HTTP attempt."""
@@ -415,6 +478,8 @@ class FinMindClient:
         last_error: FinMindError | None = None
         for attempt in range(self.settings.broker_max_retries + 1):
             try:
+                if self.request_budget is not None:
+                    self.request_budget.reserve()
                 self._wait_for_http_attempt()
                 with httpx.Client(base_url=self.settings.finmind_base_url, timeout=self.timeout, follow_redirects=True) as client:
                     response = client.get(endpoint, params=params)
@@ -480,7 +545,7 @@ class FinMindClient:
                 last_error = FinMindError("TIMEOUT" if isinstance(exc, httpx.TimeoutException) else "NETWORK_ERROR", "FinMind network request failed")
             except FinMindError as exc:
                 last_error = exc
-                if exc.code in {"AUTHENTICATION_FAILED", "ACCESS_DENIED", "QUOTA_EXHAUSTED", "SCHEMA_MISMATCH", "NON_RETRYABLE_4XX"}:
+                if exc.code in {"AUTHENTICATION_FAILED", "ACCESS_DENIED", "QUOTA_EXHAUSTED", "SCHEMA_MISMATCH", "NON_RETRYABLE_4XX", "JOB_REQUEST_BUDGET_EXHAUSTED"}:
                     raise
             if attempt < self.settings.broker_max_retries:
                 delay = last_error.retry_after if last_error and last_error.retry_after is not None else min(30, 2 ** attempt + random.random())

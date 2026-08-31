@@ -24,6 +24,18 @@ class Stock(Base):
     fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class StockRefreshIssue(Base):
+    __tablename__ = "stock_refresh_issues"
+    stock_id: Mapped[str] = mapped_column(ForeignKey("stocks.stock_id"), primary_key=True)
+    no_data_attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    reason_code: Mapped[str] = mapped_column(String(64))
+    first_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    last_job_id: Mapped[int | None] = mapped_column(ForeignKey("job_runs.id"), nullable=True)
+    details: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+
 class InstitutionalDaily(Base):
     __tablename__ = "institutional_daily"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

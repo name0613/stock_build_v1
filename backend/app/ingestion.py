@@ -16,6 +16,7 @@ from .finmind import CAPABILITY_ONLY_DATASETS, GLOBAL_PROVIDER_FAILURE_CODES, Fi
 from .models import (
     AccumulationFeature, AccumulationScore, BrokerDaily, DataSyncStatus, ForeignShareholdingDaily,
     HoldingDistribution, InstitutionalDaily, JobRun, PriceDaily, ScoreVersion, SourceRevision, Stock,
+    StockRefreshIssue,
 )
 from .scoring import FORMULA_HASH, HOLDING_CANONICAL_THRESHOLDS, SCORE_MANIFEST, SCORE_VERSION, calculate_score, holding_schema_state
 
@@ -788,6 +789,8 @@ def calculate_stock_features_and_score(db: Session, stock_id: str, as_of: date |
 
 TARGETED_STOCK_SYNC_DATASET = "targeted_stock_sync_score"
 FAVORITE_REFRESH_DATASET = "favorite_refresh_score"
+UNIVERSE_BUDGET_REFRESH_DATASET = "universe_budget_refresh_score"
+UNIVERSE_BUDGET_LIMIT = 3_500
 FAVORITE_REFRESH_DATASETS = (
     "TaiwanStockInstitutionalInvestorsBuySellWide",
     "TaiwanStockShareholding",
@@ -1056,6 +1059,278 @@ def _favorite_wait(db: Session, job: JobRun, checkpoint: dict[str, Any], status:
     job.checkpoint_state = _jsonable(checkpoint)
     db.commit()
     return favorite_refresh_job_payload(job)
+
+
+def universe_budget_job_payload(job: JobRun) -> dict[str, Any]:
+    """Return the durable 3,500-request universe refresh contract."""
+    checkpoint = job.checkpoint_state if isinstance(job.checkpoint_state, dict) else {}
+    budget = checkpoint.get("budget") if isinstance(checkpoint.get("budget"), dict) else {}
+    queue = [str(value) for value in checkpoint.get("stock_ids", [])]
+    queue_index = min(max(0, int(checkpoint.get("queue_index", 0) or 0)), len(queue))
+    return {
+        "job_id": job.id,
+        "status": job.status,
+        "run_mode": "universe_fixed_budget_refresh_and_score",
+        "target_date": job.requested_end_date,
+        "phase": checkpoint.get("phase", "queued"),
+        "current_stock_id": checkpoint.get("current_stock_id"),
+        "progress": {"completed": queue_index, "total": len(queue)},
+        "budget": {
+            "limit": int(budget.get("limit", UNIVERSE_BUDGET_LIMIT) or UNIVERSE_BUDGET_LIMIT),
+            "used": int(budget.get("used", 0) or 0),
+            "remaining": int(budget.get("remaining", UNIVERSE_BUDGET_LIMIT) or 0),
+        },
+        "next_retry_at": checkpoint.get("next_retry_at"),
+        "skipped_no_data_count": int(checkpoint.get("skipped_no_data_count", 0) or 0),
+        "started_at": job.started_at,
+        "finished_at": job.finished_at,
+        "error_code": job.error_code,
+    }
+
+
+def stock_refresh_issue_payload(issue: StockRefreshIssue | None) -> dict[str, Any] | None:
+    if issue is None:
+        return None
+    return {
+        "status": issue.status,
+        "reason_code": issue.reason_code,
+        "no_data_attempts": issue.no_data_attempts,
+        "last_attempt_at": issue.last_attempt_at,
+        "details": issue.details or {},
+    }
+
+
+def _stock_has_source_data(db: Session, stock_id: str) -> bool:
+    sources = (
+        (InstitutionalDaily, "TaiwanStockInstitutionalInvestorsBuySellWide"),
+        (ForeignShareholdingDaily, "TaiwanStockShareholding"),
+        (HoldingDistribution, "TaiwanStockHoldingSharesPer"),
+        (BrokerDaily, "TaiwanStockTradingDailyReport"),
+        (PriceDaily, "TaiwanStockPrice"),
+    )
+    return any(
+        bool(db.scalar(select(func.count()).select_from(model).where(model.stock_id == stock_id, model.source_dataset == dataset)))
+        for model, dataset in sources
+    )
+
+
+def _record_no_data_attempt(db: Session, stock_id: str, job_id: int, result: dict[str, Any]) -> StockRefreshIssue:
+    now = _now()
+    issue = db.get(StockRefreshIssue, stock_id)
+    attempts = min(2, int(issue.no_data_attempts if issue else 0) + 1)
+    status = "SKIPPED_AFTER_TWO_NO_DATA" if attempts >= 2 else "RETRY_PENDING"
+    details = {
+        "message": "FinMind 連續兩次未回傳此股票的可用資料，已停止自動重試。" if attempts >= 2 else "FinMind 第一次未回傳此股票的可用資料，將再嘗試一次。",
+        "last_fetch_errors": result.get("fetch_errors", []),
+    }
+    if issue is None:
+        issue = StockRefreshIssue(
+            stock_id=stock_id,
+            no_data_attempts=attempts,
+            status=status,
+            reason_code="NO_DATA_AFTER_TWO_FETCHES" if attempts >= 2 else "NO_DATA_FIRST_ATTEMPT",
+            first_attempt_at=now,
+            last_attempt_at=now,
+            last_job_id=job_id,
+            details=details,
+        )
+        db.add(issue)
+    else:
+        issue.no_data_attempts = attempts
+        issue.status = status
+        issue.reason_code = "NO_DATA_AFTER_TWO_FETCHES" if attempts >= 2 else "NO_DATA_FIRST_ATTEMPT"
+        issue.last_attempt_at = now
+        issue.last_job_id = job_id
+        issue.details = details
+    db.commit()
+    return issue
+
+
+def _clear_refresh_issue(db: Session, stock_id: str) -> None:
+    issue = db.get(StockRefreshIssue, stock_id)
+    if issue is not None:
+        db.delete(issue)
+        db.commit()
+
+
+def _budget_wait(db: Session, job: JobRun, checkpoint: dict[str, Any], status: str, error_code: str) -> dict[str, Any]:
+    checkpoint.update({
+        "phase": "waiting_for_quota" if status == "WAITING_FOR_QUOTA" else "waiting_for_provider",
+        "next_retry_at": _favorite_retry_at(),
+    })
+    job.status = status
+    job.error_code = error_code
+    job.checkpoint_state = _jsonable(checkpoint)
+    db.commit()
+    return universe_budget_job_payload(job)
+
+
+async def resume_universe_budget_refresh_job(
+    db: Session,
+    client: FinMindClient,
+    job: JobRun,
+    *,
+    progress_callback: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
+    """Spend exactly the persisted per-click request budget, resuming safely."""
+    checkpoint = dict(job.checkpoint_state or {})
+    request_budget = getattr(client, "request_budget", None)
+    if request_budget is None:
+        _job_finish(db, job, "FAILED", error_code="REQUEST_BUDGET_NOT_CONFIGURED", checkpoint_state={**checkpoint, "phase": "failed"})
+        return universe_budget_job_payload(job)
+
+    def sync_budget() -> dict[str, int]:
+        snapshot = request_budget.snapshot()
+        checkpoint["budget"] = snapshot
+        return snapshot
+
+    next_retry_at = checkpoint.get("next_retry_at")
+    if next_retry_at:
+        try:
+            if datetime.fromisoformat(str(next_retry_at).replace("Z", "+00:00")) > _now():
+                sync_budget()
+                job.checkpoint_state = _jsonable(checkpoint)
+                db.commit()
+                return universe_budget_job_payload(job)
+        except ValueError:
+            pass
+
+    job.status = "RUNNING"
+    job.error_code = None
+    checkpoint.update({"phase": "quota_check", "next_retry_at": None})
+    sync_budget()
+    job.checkpoint_state = _jsonable(checkpoint)
+    db.commit()
+
+    while True:
+        budget = sync_budget()
+        if budget["used"] >= budget["limit"]:
+            _job_finish(
+                db,
+                job,
+                "SUCCESS",
+                stocks_completed=int(checkpoint.get("stocks_completed", 0) or 0),
+                stocks_failed=int(checkpoint.get("skipped_no_data_count", 0) or 0),
+                checkpoint_state=_jsonable({**checkpoint, "phase": "budget_completed", "current_stock_id": None, "next_retry_at": None}),
+            )
+            return universe_budget_job_payload(job)
+
+        stock_ids = [str(value) for value in checkpoint.get("stock_ids", [])]
+        queue_index = int(checkpoint.get("queue_index", 0) or 0)
+        if queue_index >= len(stock_ids):
+            cycle_source = [str(value) for value in checkpoint.get("cycle_stock_ids", [])]
+            skipped = set(db.scalars(select(StockRefreshIssue.stock_id).where(StockRefreshIssue.status == "SKIPPED_AFTER_TWO_NO_DATA")).all())
+            next_cycle = [stock_id for stock_id in cycle_source if stock_id not in skipped]
+            if not next_cycle:
+                _job_finish(db, job, "FAILED", error_code="NO_ELIGIBLE_STOCKS", checkpoint_state=_jsonable({**checkpoint, "phase": "failed"}))
+                return universe_budget_job_payload(job)
+            stock_ids.extend(next_cycle)
+            checkpoint["stock_ids"] = stock_ids
+            checkpoint["cycle"] = int(checkpoint.get("cycle", 1) or 1) + 1
+            job.stocks_attempted = len(stock_ids)
+            job.checkpoint_state = _jsonable(checkpoint)
+            db.commit()
+
+        stock_id = stock_ids[queue_index]
+        issue = db.get(StockRefreshIssue, stock_id)
+        if issue is not None and issue.status == "SKIPPED_AFTER_TWO_NO_DATA":
+            checkpoint["queue_index"] = queue_index + 1
+            checkpoint["skipped_no_data_count"] = int(checkpoint.get("skipped_no_data_count", 0) or 0) + 1
+            continue
+
+        checkpoint.update({"phase": "quota_check", "current_stock_id": stock_id})
+        try:
+            raw_quota = client.provider_quota(source_revision=getattr(client.settings, "source_revision", "runtime"))
+            quota = {
+                "status": "PASS",
+                "remaining": raw_quota.get("provider_reported_remaining"),
+                "limit_per_hour": raw_quota.get("provider_reported_limit_per_hour"),
+                "plan": raw_quota.get("plan"),
+            }
+        except FinMindError as exc:
+            checkpoint["quota"] = {"status": "FAILED", "error_code": exc.code}
+            sync_budget()
+            if exc.code in {"AUTHENTICATION_FAILED", "ACCESS_DENIED", "SCHEMA_MISMATCH"}:
+                _job_finish(db, job, "FAILED", error_code=exc.code, error=str(exc), checkpoint_state=_jsonable({**checkpoint, "phase": "failed"}))
+                return universe_budget_job_payload(job)
+            return _budget_wait(db, job, checkpoint, "WAITING_FOR_QUOTA", exc.code)
+        checkpoint["quota"] = quota
+        reserve = max(0, int(getattr(client.settings, "broker_quota_reserve", 0)))
+        if int(quota.get("remaining") or 0) <= reserve:
+            return _budget_wait(db, job, checkpoint, "WAITING_FOR_QUOTA", "QUOTA_EXHAUSTED")
+
+        candidate_progress = checkpoint.get("current_stock_progress", {})
+        previous = dict(candidate_progress) if isinstance(candidate_progress, dict) and candidate_progress.get("stock_id") == stock_id else {}
+        refreshed = {
+            dataset for dataset, value in dict(previous.get("datasets", {})).items()
+            if isinstance(value, dict) and value.get("refresh_complete") is True
+        }
+        checkpoint["phase"] = "refreshing_stock"
+        checkpoint["current_stock_progress"] = previous
+        job.checkpoint_state = _jsonable(checkpoint)
+        db.commit()
+        if progress_callback:
+            progress_callback(f"universe_budget_refresh:{stock_id}:{budget['used']}/{budget['limit']}")
+
+        result = await fetch_and_score_stock(
+            db,
+            client,
+            stock_id,
+            job.requested_end_date or completed_source_end_date(_now()),
+            progress_callback=progress_callback,
+            force_refresh=True,
+            refreshed_datasets=refreshed,
+        )
+        merged_datasets = {**dict(previous.get("datasets", {})), **dict(result.get("datasets", {}))}
+        checkpoint["current_stock_progress"] = {
+            "stock_id": stock_id,
+            "datasets": merged_datasets,
+            "score": result.get("score"),
+            "readiness": result.get("readiness"),
+            "fetch_errors": result.get("fetch_errors", []),
+            "last_attempt_at": _now().isoformat(),
+        }
+        sync_budget()
+        job.checkpoint_state = _jsonable(checkpoint)
+        db.commit()
+
+        error_codes = {str(item.get("error_code")) for item in result.get("fetch_errors", []) if item.get("error_code")}
+        if "JOB_REQUEST_BUDGET_EXHAUSTED" in error_codes:
+            continue
+        if "QUOTA_EXHAUSTED" in error_codes or any(
+            int(value.get("quota_unselected_pending_count", 0) or 0) > 0
+            for value in merged_datasets.values() if isinstance(value, dict)
+        ):
+            return _budget_wait(db, job, checkpoint, "WAITING_FOR_QUOTA", "QUOTA_EXHAUSTED")
+        fatal_codes = (error_codes & set(GLOBAL_PROVIDER_FAILURE_CODES)) - {"JOB_REQUEST_BUDGET_EXHAUSTED", "QUOTA_EXHAUSTED"}
+        if fatal_codes:
+            code = sorted(fatal_codes)[0]
+            _job_finish(db, job, "FAILED", error_code=code, checkpoint_state=_jsonable({**checkpoint, "phase": "failed"}))
+            return universe_budget_job_payload(job)
+        completed_datasets = {
+            dataset for dataset, value in merged_datasets.items()
+            if dataset in FAVORITE_REFRESH_DATASETS and isinstance(value, dict) and value.get("refresh_complete") is True
+        }
+        if completed_datasets != set(FAVORITE_REFRESH_DATASETS):
+            return _budget_wait(db, job, checkpoint, "WAITING_FOR_PROVIDER", "REFRESH_INCOMPLETE")
+
+        if _stock_has_source_data(db, stock_id):
+            _clear_refresh_issue(db, stock_id)
+        else:
+            issue = _record_no_data_attempt(db, stock_id, job.id, result)
+            if issue.status != "SKIPPED_AFTER_TWO_NO_DATA":
+                stock_ids.append(stock_id)
+                checkpoint["stock_ids"] = stock_ids
+                job.stocks_attempted = len(stock_ids)
+            else:
+                checkpoint["skipped_no_data_count"] = int(checkpoint.get("skipped_no_data_count", 0) or 0) + 1
+
+        checkpoint["queue_index"] = queue_index + 1
+        checkpoint["stocks_completed"] = int(checkpoint.get("stocks_completed", 0) or 0) + 1
+        checkpoint.update({"current_stock_id": None, "current_stock_progress": {}, "phase": "stock_completed", "next_retry_at": None})
+        job.stocks_completed = int(checkpoint["stocks_completed"])
+        job.checkpoint_state = _jsonable(checkpoint)
+        db.commit()
 
 
 async def resume_favorite_refresh_job(

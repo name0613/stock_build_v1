@@ -8,6 +8,7 @@ Inspect:
 - `/api/summary` for universe count and status counts.
 - `/api/finmind/quota` for the sanitized live provider allowance.
 - `/api/favorites/fetch-and-score` for the durable score-ordered favorites refresh queue.
+- `/api/universe/refresh-and-score` for the durable missing-first, oldest-next universe queue with an exact 3,500 FinMind data-request budget per click.
 - Parquet metadata sidecars for source parameters/date/fetch time/hash.
 - `FINMIND_CAPABILITY_EVIDENCE.json` for actual capability probes bound to the full deployed source revision and provider/dataset policy hashes.
 - `BROKER_SOURCE_ISOLATION_EVIDENCE.json` for prohibited-row/revision counts, the database constraint, quarantine counts and authoritative rebuild state.

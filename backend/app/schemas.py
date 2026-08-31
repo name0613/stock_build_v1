@@ -24,6 +24,7 @@ class StockListItem(BaseModel):
     data_latest_source_date: str | None = None
     last_updated_at: Any | None = None
     data_sources: dict[str, Any] = Field(default_factory=dict)
+    refresh_issue: dict[str, Any] | None = None
 
 
 class PaginatedStocks(BaseModel):

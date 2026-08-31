@@ -23,6 +23,7 @@ type FixtureStock = {
   features: Record<string, number>;
   coverage: Record<string, boolean>;
   latest_data: string;
+  refresh_issue?: { status: string; reason_code: string; no_data_attempts: number; details: { message: string } };
 };
 
 const stocks: FixtureStock[] = Array.from({ length: 55 }, (_, index) => {
@@ -42,6 +43,7 @@ const stocks: FixtureStock[] = Array.from({ length: 55 }, (_, index) => {
     features: { ForeignNet5D: 5, ForeignNet20D: 20, InvestmentTrustNet5D: 3, InvestmentTrustNet20D: 12, ForeignShareRatioChange20D: 0.2, LargeHolder400Change4W: 1.5, TopBrokerNetBuy20D: 100, BrokerPersistenceScore: 70 },
     coverage,
     latest_data: "2026-08-20",
+    ...(index === 54 ? { refresh_issue: { status: "SKIPPED_AFTER_TWO_NO_DATA", reason_code: "NO_DATA_AFTER_TWO_FETCHES", no_data_attempts: 2, details: { message: "FinMind 連續兩次未回傳此股票的可用資料，已停止自動重試。" } } } : {}),
   };
 });
 
@@ -89,6 +91,7 @@ function detail(stock: FixtureStock) {
 
 async function installApiFixtures(page: Page) {
   let targetedPolls = 0;
+  let universeBudgetPolls = 0;
   const favorites = new Set<string>();
   await page.route("**/api/**", async (route) => {
     const url = new URL(route.request().url());
@@ -149,6 +152,15 @@ async function installApiFixtures(page: Page) {
       }
       return route.fulfill({ status: 404, json: { detail: "score job not found" } });
     }
+    if (url.pathname === "/api/universe/refresh-and-score") {
+      if (route.request().method() === "POST") {
+        universeBudgetPolls = 0;
+        return route.fulfill({ status: 202, json: { job_id: 88, status: "RUNNING", phase: "refreshing_stock", current_stock_id: "1054", progress: { completed: 0, total: 55 }, budget: { limit: 3500, used: 120, remaining: 3380 }, skipped_no_data_count: 0 } });
+      }
+      universeBudgetPolls += 1;
+      if (universeBudgetPolls === 1) return route.fulfill({ json: { job_id: 88, status: "WAITING_FOR_QUOTA", phase: "waiting_for_quota", current_stock_id: "1054", progress: { completed: 12, total: 55 }, budget: { limit: 3500, used: 2200, remaining: 1300 }, skipped_no_data_count: 0 } });
+      return route.fulfill({ json: { job_id: 88, status: "SUCCESS", phase: "budget_completed", progress: { completed: 25, total: 55 }, budget: { limit: 3500, used: 3500, remaining: 0 }, skipped_no_data_count: 1 } });
+    }
     if (url.pathname === "/api/readiness") {
       return route.fulfill({ json: { stock_id: "1000", ready: false, missing_reasons: ["missing_broker", "missing_price"], source_date: "2026-08-20", coverage: { readiness_reason_codes: ["missing_broker", "missing_price"], RequiredFeatureValidation: { BrokerPersistenceScore: { valid: false, expected_window: 20, cadence: "trading_session", reason: "missing broker session" }, PriceReturn20D: { valid: false, expected_window: 21, cadence: "trading_session", reason: "missing price session" } }, missing_sessions: { broker: ["2026-08-19"], price: ["2026-08-18"] }, holding_missing_weeks: [] } } });
     }
@@ -192,6 +204,23 @@ test("summary count invariant and deterministic ranking contract are exact", asy
   expect(contract.rankings.items.map((item: FixtureStock) => item.score)).toEqual([100, 99, 98, 97, 96, 95, 94, 93, 92, 91]);
   expect(contract.spec.formula_hash).toBe(formulaHash);
   expect(contract.spec.spec.weights).toEqual({ institutional_persistence: 0.35, ownership_accumulation: 0.35, broker_persistence: 0.30 });
+});
+
+test("fixed-budget refresh button is in the control row and reports exact completion", async ({ page }) => {
+  await page.goto("/");
+  const button = page.getByTestId("universe-budget-refresh-button");
+  await expect(button).toBeVisible();
+  await expect(button.locator("xpath=ancestor::*[contains(@class,'control-row')]")).toHaveCount(1);
+  await expect(button).toHaveText("使用 3,500 額度補抓並評分");
+  await button.click();
+  await expect(button).toContainText("120/3,500");
+  await expect(page.getByTestId("universe-budget-refresh-status")).toContainText("已用 3,500 / 3,500", { timeout: 8000 });
+});
+
+test("two-fetch no-data issue is visible in the stock table", async ({ page }) => {
+  await page.goto("/");
+  await page.getByLabel("股票代碼或名稱搜尋").fill("1054");
+  await expect(page.getByTestId("stock-refresh-issue")).toContainText("連續兩次未回傳");
 });
 
 test("holding status is requested once per page load and again after refresh", async ({ page }) => {
