@@ -56,3 +56,23 @@ test("capital-aware detail exposes score decomposition, gates and money chart", 
   await expect(page.getByTestId("capital-aware-detail")).toContainText("確認來源 3 類");
   await expect(page.getByRole("region", { name: "每日成交金額／估算法人淨買金額" })).toBeVisible();
 });
+
+test("detail keeps the latest capital snapshot when readiness target has no v7 row", async ({ page }) => {
+  await page.route("**/api/readiness**", async route => route.fulfill({ json: {
+    stock_id: "2330",
+    ready: false,
+    missing_reasons: ["missing_price"],
+    source_date: "2026-08-21",
+    latest_ready_source_date: "2026-08-20",
+    fallback_available: true,
+    coverage: {},
+    capital_aware_score: { status: "DATA_INSUFFICIENT", score_version: "capital-aware-v7", components: {}, coverage: {} },
+  } }));
+  await page.goto("/");
+  await page.getByTestId("stock-row").click();
+  const panel = page.getByTestId("capital-aware-detail");
+  await expect(panel).toContainText("81.2");
+  await expect(panel).toContainText("88.5");
+  await expect(panel).toContainText("目前評估日尚未產生 v7 快照");
+  await expect(panel).toContainText("資料日 2026-08-20");
+});
