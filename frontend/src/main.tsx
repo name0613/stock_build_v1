@@ -135,12 +135,22 @@ function App() {
       setScoreActionError("評分作業無法啟動；請確認是否已有評分作業執行中。");
     }
   }
+  function updateFavoriteState(stockId: string, isFavorite: boolean) {
+    setItems(current => current.map(item => item.stock_id === stockId ? { ...item, is_favorite: isFavorite } : item));
+    setRanking(current => current ? { ...current, items: current.items.map(item => item.stock_id === stockId ? { ...item, is_favorite: isFavorite } : item) } : current);
+    setDetail(current => current?.stock.stock_id === stockId ? { ...current, stock: { ...current.stock, is_favorite: isFavorite } } : current);
+  }
   async function toggleFavorite(stock: Stock) {
     setFavoriteActionError(null);
+    const previousFavorite = stock.is_favorite === true;
+    const nextFavorite = !previousFavorite;
+    updateFavoriteState(stock.stock_id, nextFavorite);
     try {
-      await fetchJson<{ stock_id: string; is_favorite: boolean }>(`/api/stocks/${encodeURIComponent(stock.stock_id)}/favorite`, undefined, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ favorite: !stock.is_favorite }) });
-      await refreshSnapshot();
+      const updated = await fetchJson<{ stock_id: string; is_favorite: boolean }>(`/api/stocks/${encodeURIComponent(stock.stock_id)}/favorite`, undefined, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ favorite: nextFavorite }) });
+      updateFavoriteState(updated.stock_id, updated.is_favorite);
+      await Promise.all([refreshSnapshot(), loadRanking(rankingKind)]);
     } catch {
+      updateFavoriteState(stock.stock_id, previousFavorite);
       setFavoriteActionError("我的最愛更新失敗，請稍後重試。");
     }
   }
