@@ -39,11 +39,13 @@ test("defaults to high-confidence and switches the three capital-aware tabs", as
   await expect(page.getByRole("button", { name: "高可信建倉" })).toHaveAttribute("aria-selected", "true");
   await expect(page.getByTestId("filtered-total")).toContainText("capital-aware-v7");
   await expect(page.getByTestId("stock-row")).toContainText("81.2");
+  await expect(page.getByTestId("stock-row")).toContainText("半導體");
   await expect(page.getByRole("columnheader", { name: /20D 估算法人淨買金額/ })).toBeVisible();
   await expect(page.getByText("新台幣", { exact: false }).first()).toBeVisible();
   await page.getByRole("button", { name: "大型資金建倉" }).click();
   await expect(page.getByRole("heading", { name: "大型資金建倉榜" })).toBeVisible();
   await expect(page.getByTestId("stock-row")).toContainText("88.5");
+  await expect(page.getByTestId("stock-row")).toContainText("半導體");
   await page.getByRole("button", { name: "隱性建倉" }).click();
   await expect(page.getByRole("heading", { name: "隱性建倉榜" })).toBeVisible();
 });

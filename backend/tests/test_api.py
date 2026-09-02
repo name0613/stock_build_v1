@@ -118,6 +118,8 @@ def test_capital_aware_spec_and_ranking_kind_allowlist_are_public() -> None:
     assert stealth.status_code == large.status_code == confidence.status_code == 200
     assert stealth.json()["score_version"] == "s-only-v6"
     assert large.json()["score_version"] == confidence.json()["score_version"] == "capital-aware-v7"
+    assert all("industry" in item for item in large.json()["items"])
+    assert all("industry" in item for item in confidence.json()["items"])
     assert invalid.status_code == 422
 
 
