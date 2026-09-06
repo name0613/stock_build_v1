@@ -15,7 +15,7 @@ from app.db import SessionLocal
 from app.finmind import FinMindClient, FinMindError, FinMindRequestBudget
 from app.ingestion import FAVORITE_REFRESH_DATASETS, UNIVERSE_BUDGET_REFRESH_DATASET, resume_universe_budget_refresh_job
 from app.main import app as api_app
-from app.models import JobRun, Stock, StockRefreshIssue
+from app.models import JobRun, PriceDaily, Stock, StockRefreshIssue
 from app.worker import _next_durable_refresh_job
 
 
@@ -120,7 +120,7 @@ def test_single_dispatcher_selects_oldest_job_across_both_refresh_types() -> Non
             db.commit()
 
 
-def test_two_complete_empty_fetches_are_persisted_and_skipped(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+def test_five_complete_empty_fetches_are_persisted_and_skipped(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     with SessionLocal() as db:
         db.add(Stock(stock_id="9998", stock_name="空資料測試", market="上市", is_common_stock=True))
         job = JobRun(
@@ -136,7 +136,7 @@ def test_two_complete_empty_fetches_are_persisted_and_skipped(monkeypatch: pytes
                 "stock_ids": ["9998"],
                 "cycle_stock_ids": ["9998"],
                 "queue_index": 0,
-                "budget": {"limit": 2, "used": 0, "remaining": 2},
+                "budget": {"limit": 5, "used": 0, "remaining": 5},
             },
         )
         db.add(job)
@@ -144,7 +144,7 @@ def test_two_complete_empty_fetches_are_persisted_and_skipped(monkeypatch: pytes
         db.refresh(job)
         job_id = job.id
 
-    budget = FinMindRequestBudget(2, tmp_path / "job-budget.json")
+    budget = FinMindRequestBudget(5, tmp_path / "job-budget.json")
 
     class FakeClient:
         settings = SimpleNamespace(source_revision="test", broker_quota_reserve=0)
@@ -173,17 +173,17 @@ def test_two_complete_empty_fetches_are_persisted_and_skipped(monkeypatch: pytes
             result = asyncio.run(resume_universe_budget_refresh_job(db, FakeClient(), db.get(JobRun, job_id)))
             issue = db.get(StockRefreshIssue, "9998")
             assert result["status"] == "SUCCESS"
-            assert result["budget"] == {"limit": 2, "used": 2, "remaining": 0}
-            assert calls == 2
+            assert result["budget"] == {"limit": 5, "used": 5, "remaining": 0}
+            assert calls == 5
             assert issue is not None
-            assert issue.no_data_attempts == 2
-            assert issue.status == "SKIPPED_AFTER_TWO_NO_DATA"
-            assert issue.reason_code == "NO_DATA_AFTER_TWO_FETCHES"
+            assert issue.no_data_attempts == 5
+            assert issue.status == "SKIPPED_AFTER_FIVE_NO_DATA"
+            assert issue.reason_code == "NO_DATA_AFTER_FIVE_FETCHES"
         with TestClient(api_app) as client:
             list_payload = client.get("/api/stocks", params={"search": "9998"}).json()
             detail_payload = client.get("/api/stocks/9998").json()
-        assert list_payload["items"][0]["refresh_issue"]["no_data_attempts"] == 2
-        assert detail_payload["stock"]["refresh_issue"]["status"] == "SKIPPED_AFTER_TWO_NO_DATA"
+        assert list_payload["items"][0]["refresh_issue"]["no_data_attempts"] == 5
+        assert detail_payload["stock"]["refresh_issue"]["status"] == "SKIPPED_AFTER_FIVE_NO_DATA"
     finally:
         with SessionLocal() as db:
             db.query(JobRun).filter(JobRun.id == job_id).delete(synchronize_session=False)
@@ -195,8 +195,8 @@ def test_two_complete_empty_fetches_are_persisted_and_skipped(monkeypatch: pytes
 
 
 @pytest.mark.parametrize("source_codes,source_rows,expected_issue", [
-    (None, 0, "SKIPPED_AFTER_TWO_NO_DATA"),
-    (["PARTIAL_OBSERVATION_COVERAGE"], 60, "SKIPPED_AFTER_TWO_INCOMPLETE"),
+    (None, 0, "SKIPPED_AFTER_FIVE_NO_DATA"),
+    (["PARTIAL_OBSERVATION_COVERAGE"], 60, "SKIPPED_AFTER_FIVE_INCOMPLETE"),
     (["NETWORK_ERROR"], 0, None),
     ([], 0, None),
 ])
@@ -217,7 +217,7 @@ def test_stock_level_missing_responses_do_not_block_queue(monkeypatch: pytest.Mo
                 "stock_ids": [stock_id],
                 "cycle_stock_ids": [stock_id],
                 "queue_index": 0,
-                "budget": {"limit": 2, "used": 0, "remaining": 2},
+                "budget": {"limit": 5, "used": 0, "remaining": 5},
             },
         )
         db.add(job)
@@ -225,7 +225,7 @@ def test_stock_level_missing_responses_do_not_block_queue(monkeypatch: pytest.Mo
         db.refresh(job)
         job_id = job.id
 
-    budget = FinMindRequestBudget(2, tmp_path / "unverified-empty-budget.json")
+    budget = FinMindRequestBudget(5, tmp_path / "unverified-empty-budget.json")
 
     class FakeClient:
         settings = SimpleNamespace(source_revision="test", broker_quota_reserve=0)
@@ -258,9 +258,6 @@ def test_stock_level_missing_responses_do_not_block_queue(monkeypatch: pytest.Mo
         }
 
     monkeypatch.setattr(ingestion_module, "fetch_and_score_stock", fake_fetch)
-    # Historical rows must not hide the fact that both current refresh
-    # attempts returned no data.
-    monkeypatch.setattr(ingestion_module, "_stock_has_source_data", lambda _db, _stock_id: True)
     try:
         with SessionLocal() as db:
             result = asyncio.run(resume_universe_budget_refresh_job(db, FakeClient(), db.get(JobRun, job_id)))
@@ -271,9 +268,9 @@ def test_stock_level_missing_responses_do_not_block_queue(monkeypatch: pytest.Mo
                 assert issue is None
                 return
             assert result["status"] == "SUCCESS"
-            assert result["budget"] == {"limit": 2, "used": 2, "remaining": 0}
+            assert result["budget"] == {"limit": 5, "used": 5, "remaining": 0}
             assert issue is not None
-            assert issue.no_data_attempts == 2
+            assert issue.no_data_attempts == 5
             assert issue.status == expected_issue
         with TestClient(api_app) as api:
             payload = api.get(f"/api/stocks/{stock_id}").json()["stock"]["refresh_issue"]
@@ -348,4 +345,100 @@ def test_budget_quota_wait_and_restart_resume_to_exactly_3500(monkeypatch, tmp_p
     finally:
         with SessionLocal() as db:
             db.query(JobRun).filter(JobRun.id == job_id).delete(synchronize_session=False)
+            db.commit()
+
+
+@pytest.mark.parametrize("historical_rows", [False, True])
+def test_five_empty_attempts_survive_jobs_and_restart(monkeypatch, tmp_path, historical_rows):
+    stock_id = "9996"
+    calls = []
+
+    class FakeClient:
+        settings = SimpleNamespace(source_revision="test", broker_quota_reserve=0)
+
+        def __init__(self, number):
+            self.request_budget = FinMindRequestBudget(1, tmp_path / f"attempt-{number}.json")
+
+        def provider_quota(self, **_kwargs):
+            return {"provider_reported_remaining": 6000}
+
+    async def fake_fetch(_db, client, candidate, _target, **_kwargs):
+        calls.append(candidate)
+        client.request_budget.reserve()
+        return {"datasets": {dataset: {"refresh_complete": True, "records_accepted": 0} for dataset in FAVORITE_REFRESH_DATASETS}, "fetch_errors": []}
+
+    monkeypatch.setattr(ingestion_module, "fetch_and_score_stock", fake_fetch)
+    job_ids = []
+    with SessionLocal() as db:
+        db.add(Stock(stock_id=stock_id, stock_name="累計測試", market="上市", is_common_stock=True))
+        db.commit()
+        if historical_rows:
+            db.add(PriceDaily(stock_id=stock_id, source_date=date(2026, 8, 19), close=10, source_dataset="TaiwanStockPrice", fetched_at=datetime.now(timezone.utc)))
+            db.commit()
+    try:
+        for number in range(1, 7):
+            # New job, session, and budget file model separate button clicks
+            # and a worker restart; the sixth job contains a stale queued ID.
+            with SessionLocal() as db:
+                from app.main import _universe_budget_queue
+                assert (stock_id in _universe_budget_queue(db)[0]) == (number <= 5)
+                job = JobRun(dataset=UNIVERSE_BUDGET_REFRESH_DATASET, status="QUEUED", started_at=datetime.now(timezone.utc), requested_end_date=date(2026, 8, 20), checkpoint_state={"stock_ids": [stock_id], "cycle_stock_ids": [stock_id], "budget": {"limit": 1, "used": 0, "remaining": 1}})
+                db.add(job)
+                db.commit()
+                job_ids.append(job.id)
+                client = FakeClient(number)
+                if number == 6:
+                    def forbidden_quota(**_kwargs):
+                        pytest.fail("Skipped stock must not call the provider")
+                    client.provider_quota = forbidden_quota
+                result = asyncio.run(resume_universe_budget_refresh_job(db, client, job))
+                issue = db.get(StockRefreshIssue, stock_id)
+                assert issue.no_data_attempts == min(number, 5)
+                assert issue.status == ("RETRY_PENDING" if number < 5 else "SKIPPED_AFTER_FIVE_NO_DATA")
+                assert result["budget"]["used"] == (1 if number <= 5 else 0)
+        assert calls == [stock_id] * 5
+    finally:
+        with SessionLocal() as db:
+            db.query(StockRefreshIssue).filter_by(stock_id=stock_id).delete()
+            db.query(JobRun).filter(JobRun.id.in_(job_ids)).delete(synchronize_session=False)
+            db.query(PriceDaily).filter_by(stock_id=stock_id).delete()
+            db.query(Stock).filter_by(stock_id=stock_id).delete()
+            db.commit()
+
+
+def test_legacy_counts_and_success_history_are_preserved():
+    from app.main import _universe_budget_queue
+    stock_id = "9995"
+    now = datetime.now(timezone.utc)
+    with SessionLocal() as db:
+        db.add(Stock(stock_id=stock_id, stock_name="舊紀錄測試", market="上市", is_common_stock=True))
+        db.commit()
+        issue = StockRefreshIssue(stock_id=stock_id, no_data_attempts=2, status="SKIPPED_AFTER_TWO_NO_DATA", reason_code="NO_DATA_AFTER_TWO_FETCHES", first_attempt_at=now, last_attempt_at=now, details={"message": "old policy"})
+        db.add(issue)
+        db.commit()
+        try:
+            assert stock_id in _universe_budget_queue(db)[0]
+            payload = ingestion_module.stock_refresh_issue_payload(issue)
+            assert payload["status"] == "RETRY_PENDING"
+            assert "2/5" in payload["details"]["message"]
+            ingestion_module._mark_refresh_recovered(db, stock_id)
+            db.commit()
+            assert issue.no_data_attempts == 2
+            assert ingestion_module.stock_refresh_issue_payload(issue) is None
+            for expected in (3, 4, 5):
+                ingestion_module._record_no_data_attempt(db, stock_id, None, {"datasets": {}})
+                db.commit()
+                assert issue.no_data_attempts == expected
+            assert stock_id not in _universe_budget_queue(db)[0]
+            ingestion_module._mark_refresh_recovered(db, stock_id)
+            assert issue.no_data_attempts == 5
+            assert issue.status == "SKIPPED_AFTER_FIVE_NO_DATA"
+            # The count, rather than an old status string, controls skipping.
+            issue.status = "RETRY_PENDING"
+            db.commit()
+            assert stock_id not in _universe_budget_queue(db)[0]
+        finally:
+            db.delete(issue)
+            db.flush()
+            db.query(Stock).filter_by(stock_id=stock_id).delete()
             db.commit()

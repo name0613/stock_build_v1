@@ -43,7 +43,7 @@ const stocks: FixtureStock[] = Array.from({ length: 55 }, (_, index) => {
     features: { ForeignNet5D: 5, ForeignNet20D: 20, InvestmentTrustNet5D: 3, InvestmentTrustNet20D: 12, ForeignShareRatioChange20D: 0.2, LargeHolder400Change4W: 1.5, TopBrokerNetBuy20D: 100, BrokerPersistenceScore: 70 },
     coverage,
     latest_data: "2026-08-20",
-    ...(index === 54 ? { refresh_issue: { status: "SKIPPED_AFTER_TWO_NO_DATA", reason_code: "NO_DATA_AFTER_TWO_FETCHES", no_data_attempts: 2, details: { message: "FinMind 連續兩次未回傳此股票的可用資料，已停止自動重試。" } } } : {}),
+    ...(index === 54 ? { refresh_issue: { status: "SKIPPED_AFTER_FIVE_NO_DATA", reason_code: "NO_DATA_AFTER_FIVE_FETCHES", no_data_attempts: 5, details: { message: "FinMind 累計 5/5 次未回傳此股票的可用資料，已永久跳過自動補抓。" } } } : {}),
   };
 });
 
@@ -217,10 +217,10 @@ test("fixed-budget refresh button is in the control row and reports exact comple
   await expect(page.getByTestId("universe-budget-refresh-status")).toContainText("已用 3,500 / 3,500", { timeout: 8000 });
 });
 
-test("two-fetch no-data issue is visible in the stock table", async ({ page }) => {
+test("five-fetch no-data issue is visible in the stock table", async ({ page }) => {
   await page.goto("/");
   await page.getByLabel("股票代碼或名稱搜尋").fill("1054");
-  await expect(page.getByTestId("stock-refresh-issue")).toContainText("連續兩次未回傳");
+  await expect(page.getByTestId("stock-refresh-issue")).toContainText("累計 5/5 次未回傳");
 });
 
 test("holding status is requested once per page load and again after refresh", async ({ page }) => {

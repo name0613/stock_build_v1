@@ -68,7 +68,7 @@ Worker 啟動時在來源發布窗口已開啟後才做完整 catch-up：動態 
 - `POST /api/score/current`：只用目前 PostgreSQL 已寫入的來源資料建立背景評分作業，不呼叫 FinMind；以 `GET /api/score/current?job_id=<id>` 查詢進度與結果。
 - `GET /api/finmind/quota`：即時讀取已驗證帳號的 FinMind 每小時可用額度，只回傳去敏後的 used／remaining／limit／plan。
 - `POST /api/favorites/fetch-and-score`：把按下按鈕當下的「我的最愛」依現有數值評分由高到低固化為持久佇列，逐檔強制重抓五項來源並重評；以同路徑 `GET` 查詢進度。額度不足會進入 `WAITING_FOR_QUOTA`，worker 每分鐘檢查並從未完成股票與資料集自動續跑。
-- `POST /api/universe/refresh-and-score`：每次按鈕固定配置 3,500 次 FinMind 資料 HTTP 請求，先處理無來源資料且無數值評分的股票，再依最舊寫入時間輪替強制刷新並評分；使用量會在每次真正送出請求前持久化，額度恢復後由 worker 自動續跑。連續兩次完整補抓仍無任何來源資料的股票會寫入 `stock_refresh_issues`、停止自動重試並在清單顯示原因。
+- `POST /api/universe/refresh-and-score`：每次按鈕固定配置 3,500 次 FinMind 資料 HTTP 請求，先處理無來源資料且無數值評分的股票，再依最舊寫入時間輪替強制刷新並評分；使用量會在每次真正送出請求前持久化，額度恢復後由 worker 自動續跑。同一股票累計 5 次補抓無資料或仍缺必要來源後，會依 `stock_refresh_issues.no_data_attempts` 永久跳過此按鈕的自動補抓，並在清單顯示原因。次數跨作業、重啟與部署保留，成功抓取不會清除歷史次數；舊版兩次紀錄沿用原次數，未滿 5 次仍可補抓。網路錯誤、額度不足及未完成請求不計次；舊佇列續跑也會先排除已滿 5 次的股票，不消耗資料請求額度。
 - `/api/readiness?stock_id=<代碼>`：單股 side-effect-free 診斷，列出缺少的評分欄位、來源日期與穩定缺失原因；若最新目標日尚未發布但較早資料日已完整，也會回傳 `latest_ready_source_date`。
 - `/api/rankings?kind=large_capital|high_confidence`：v7 大型資金／高可信榜；`kind=top|stealth` 保留 v6 榜單。`/api/score-spec` 同時公開兩個版本、固定門檻與 formula hash。
 - `/api/docs`：API schema。
