@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from .models import AccumulationScore, BrokerDaily, ForeignShareholdingDaily, HoldingDistribution, InstitutionalDaily, JobRun, PriceDaily, Stock
 from .ingestion import UNIVERSE_BUDGET_LIMIT, UNIVERSE_BUDGET_REFRESH_DATASET, skipped_refresh_stock_ids
 from .scoring import SCORE_VERSION
+from .refresh_completion import completion_summary, daily_refresh_completion
 
 ACTIVE_STATUSES = ("QUEUED", "RUNNING", "WAITING_FOR_QUOTA", "WAITING_FOR_PROVIDER")
 _queue_lock = Lock()
@@ -74,22 +75,38 @@ def _queue_unlocked(db: Session, target: date, *, automatic: bool, now: datetime
         db.commit()
         return job, False
     stock_ids, latest_fetch, skipped_count = _universe_budget_queue(db)
-    if not stock_ids:
+    completion = daily_refresh_completion(db, target) if automatic else None
+    if completion is not None:
+        pending = set(completion["pending_stock_ids"])
+        stock_ids = [sid for sid in stock_ids if sid in pending]
+        if completion["all_complete"]:
+            previous = db.scalar(select(JobRun).where(JobRun.dataset == UNIVERSE_BUDGET_REFRESH_DATASET, JobRun.requested_end_date == target, JobRun.checkpoint_state["trigger"].as_string() == "closed_market_hourly").order_by(JobRun.id.desc()).limit(1))
+            if previous is not None:
+                previous.status = "SUCCESS"
+                previous.finished_at = previous.finished_at or datetime.now(timezone.utc)
+                previous.error_code = None
+                previous.checkpoint_state = {**previous.checkpoint_state, "phase": "daily_target_completed", "daily_completion": completion_summary(completion), "next_retry_at": None}
+                db.commit()
+                return previous, False
+    if not stock_ids and not (completion and completion["all_complete"]):
         raise ValueError("NO_ELIGIBLE_STOCKS")
+    done = bool(completion and completion["all_complete"])
     job = JobRun(
         dataset=UNIVERSE_BUDGET_REFRESH_DATASET,
         requested_date=target,
         requested_start_date=target,
         requested_end_date=target,
-        status="QUEUED",
+        status="SUCCESS" if done else "QUEUED",
         started_at=datetime.now(timezone.utc),
+        finished_at=datetime.now(timezone.utc) if done else None,
         stocks_attempted=len(stock_ids),
         checkpoint_state={
             "run_mode": "universe_fixed_budget_refresh_and_score",
             "trigger": "closed_market_hourly" if automatic else "manual",
             "schedule_hour": schedule_hour,
             "target_date": target.isoformat(),
-            "phase": "queued",
+            "phase": "daily_target_completed" if done else "queued",
+            "daily_completion": completion_summary(completion) if completion else None,
             "stock_ids": stock_ids,
             "cycle_stock_ids": stock_ids,
             "ordered_latest_fetch_at": latest_fetch,

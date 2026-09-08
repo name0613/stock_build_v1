@@ -103,6 +103,15 @@ def source_publication_window_open(now: datetime | None = None) -> bool:
     return current.time().replace(tzinfo=None) >= SOURCE_DATA_READY_TIME
 
 
+def closed_market_target_date(now: datetime | None = None) -> date:
+    """Target today's closed session, even while its providers are still publishing."""
+    current = (now or datetime.now(ZoneInfo(MARKET_TIMEZONE))).astimezone(ZoneInfo(MARKET_TIMEZONE))
+    candidate = current.date()
+    if is_trading_session(candidate) and current.time().replace(tzinfo=None) < MARKET_CLOSE_TIME:
+        candidate -= timedelta(days=1)
+    return expected_trading_sessions(candidate, 1)[-1]
+
+
 def expected_trading_sessions(end: date, count: int, holidays: set[date] | None = None) -> list[date]:
     if holidays is None and not CALENDAR_COVERAGE_START <= end <= CALENDAR_COVERAGE_END:
         raise CalendarUnknownError(f"calendar coverage unknown for {end.isoformat()}")

@@ -10,7 +10,8 @@ from sqlalchemy import func, inspect, select, text, tuple_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from .calendar import CALENDAR_HASH, CALENDAR_VERSION, completed_source_end_date, expected_trading_sessions, market_session_state, missing_sessions
+from .calendar import CALENDAR_HASH, CALENDAR_VERSION, closed_market_target_date, completed_source_end_date, expected_trading_sessions, market_session_state, missing_sessions
+from .refresh_completion import completion_summary, daily_refresh_completion
 from .features import build_features
 from .finmind import AUTOMATIC_REFRESH_PAUSED, CAPABILITY_ONLY_DATASETS, GLOBAL_PROVIDER_FAILURE_CODES, FinMindClient, FinMindError, SchemaMismatch
 from .models import (
@@ -1111,6 +1112,7 @@ def universe_budget_job_payload(job: JobRun) -> dict[str, Any]:
         "run_mode": "universe_fixed_budget_refresh_and_score",
         "trigger": checkpoint.get("trigger", "manual"),
         "schedule_hour": checkpoint.get("schedule_hour"),
+        "daily_completion": checkpoint.get("daily_completion"),
         "target_date": job.requested_end_date,
         "phase": checkpoint.get("phase", "queued"),
         "current_stock_id": checkpoint.get("current_stock_id"),
@@ -1220,6 +1222,7 @@ async def resume_universe_budget_refresh_job(
 ) -> dict[str, Any]:
     """Spend exactly the persisted per-click request budget, resuming safely."""
     checkpoint = dict(job.checkpoint_state or {})
+    automatic = checkpoint.get("trigger") == "closed_market_hourly"
     request_budget = getattr(client, "request_budget", None)
     if request_budget is None:
         _job_finish(db, job, "FAILED", error_code="REQUEST_BUDGET_NOT_CONFIGURED", checkpoint_state={**checkpoint, "phase": "failed"})
@@ -1245,6 +1248,36 @@ async def resume_universe_budget_refresh_job(
     if not market_allows_run():
         return pause_for_market()
 
+    def update_target() -> bool:
+        if not automatic:
+            return False
+        target = closed_market_target_date(_now())
+        if job.requested_end_date == target:
+            return False
+        state = daily_refresh_completion(db, target)
+        job.requested_date = job.requested_start_date = job.requested_end_date = target
+        checkpoint.update({"target_date": target.isoformat(), "previous_target_date": checkpoint.get("target_date"), "stock_ids": state["pending_stock_ids"], "cycle_stock_ids": state["pending_stock_ids"], "queue_index": 0, "stocks_completed": 0, "current_stock_id": None, "current_stock_progress": {}, "next_retry_at": None, "phase": "target_date_advanced", "daily_completion": completion_summary(state)})
+        job.stocks_attempted = len(state["pending_stock_ids"])
+        job.stocks_completed = 0
+        job.checkpoint_state = _jsonable(checkpoint)
+        db.commit()
+        return True
+
+    def finish_daily_if_complete() -> bool:
+        if not automatic:
+            return False
+        state = daily_refresh_completion(db, job.requested_end_date)
+        checkpoint["daily_completion"] = completion_summary(state)
+        if not state["all_complete"]:
+            return False
+        sync_budget()
+        _job_finish(db, job, "SUCCESS", stocks_completed=int(checkpoint.get("stocks_completed", 0)), checkpoint_state=_jsonable({**checkpoint, "phase": "daily_target_completed", "current_stock_id": None, "next_retry_at": None}))
+        return True
+
+    update_target()
+    if finish_daily_if_complete():
+        return universe_budget_job_payload(job)
+
     next_retry_at = checkpoint.get("next_retry_at")
     if next_retry_at:
         try:
@@ -1268,8 +1301,12 @@ async def resume_universe_budget_refresh_job(
             await stock_boundary_callback()
         if not market_allows_run():
             return pause_for_market()
+        if update_target() and finish_daily_if_complete():
+            return universe_budget_job_payload(job)
         budget = sync_budget()
         if budget["used"] >= budget["limit"]:
+            if finish_daily_if_complete():
+                return universe_budget_job_payload(job)
             _job_finish(
                 db,
                 job,
@@ -1283,9 +1320,11 @@ async def resume_universe_budget_refresh_job(
         stock_ids = [str(value) for value in checkpoint.get("stock_ids", [])]
         queue_index = int(checkpoint.get("queue_index", 0) or 0)
         if queue_index >= len(stock_ids):
+            if finish_daily_if_complete():
+                return universe_budget_job_payload(job)
             cycle_source = [str(value) for value in checkpoint.get("cycle_stock_ids", [])]
             skipped = skipped_refresh_stock_ids(db)
-            next_cycle = [stock_id for stock_id in cycle_source if stock_id not in skipped]
+            next_cycle = daily_refresh_completion(db, job.requested_end_date)["pending_stock_ids"] if automatic else [stock_id for stock_id in cycle_source if stock_id not in skipped]
             if not next_cycle:
                 _job_finish(db, job, "FAILED", error_code="NO_ELIGIBLE_STOCKS", checkpoint_state=_jsonable({**checkpoint, "phase": "failed"}))
                 return universe_budget_job_payload(job)
@@ -1297,6 +1336,9 @@ async def resume_universe_budget_refresh_job(
             db.commit()
 
         stock_id = stock_ids[queue_index]
+        if automatic and not daily_refresh_completion(db, job.requested_end_date, [stock_id])["pending_stock_ids"]:
+            checkpoint["queue_index"] = queue_index + 1
+            continue
         issue = db.get(StockRefreshIssue, stock_id)
         if issue is not None and issue.no_data_attempts >= REFRESH_NO_DATA_LIMIT:
             checkpoint["queue_index"] = queue_index + 1
@@ -1336,6 +1378,7 @@ async def resume_universe_budget_refresh_job(
         checkpoint["current_stock_progress"] = previous
         job.checkpoint_state = _jsonable(checkpoint)
         db.commit()
+
         if progress_callback:
             progress_callback(f"universe_budget_refresh:{stock_id}:{budget['used']}/{budget['limit']}")
 
@@ -1415,7 +1458,9 @@ async def resume_universe_budget_refresh_job(
 
         if attempt_rows > 0 and not incomplete_stock_attempt:
             _mark_refresh_recovered(db, stock_id)
-        else:
+        elif not (automatic and job.requested_end_date > completed_source_end_date(_now())):
+            # Today's sources may still be publishing after the close. Do
+            # not permanently exclude a stock because of this normal delay.
             issue = _record_no_data_attempt(db, stock_id, job.id, {**result, "datasets": merged_datasets}, partial=incomplete_stock_attempt and attempt_rows > 0)
             if issue.no_data_attempts < REFRESH_NO_DATA_LIMIT:
                 stock_ids.insert(queue_index + 1, stock_id)

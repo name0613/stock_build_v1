@@ -42,7 +42,7 @@ def empty_queue():
 def test_hourly_queue_checks_actual_session(monkeypatch, empty_queue, stamp, allowed):
     session = market_session_state(datetime.fromisoformat(stamp))
     monkeypatch.setattr(worker, "market_session_state", lambda: session)
-    monkeypatch.setattr(worker, "_completed_source_end_date", lambda: date(2026, 8, 20))
+    monkeypatch.setattr(worker, "closed_market_target_date", lambda: date(2026, 8, 20))
     monkeypatch.setattr(worker, "_heartbeat", lambda **_: None)
     worker.run_closed_market_refresh()
     worker.run_closed_market_refresh()
@@ -112,6 +112,7 @@ def test_guard_blocks_after_rate_limit_wait_without_spending_budget(monkeypatch,
 def test_auto_pause_preserves_stock_progress_budget_and_resumes(monkeypatch, tmp_path, empty_queue):
     session = {"state": "CLOSED"}
     monkeypatch.setattr(ingestion, "market_session_state", lambda: session)
+    monkeypatch.setattr(ingestion, "closed_market_target_date", lambda *_: date(2026, 8, 20))
     budget = FinMindRequestBudget(2, tmp_path / "resume.json")
     client = SimpleNamespace(request_budget=budget, settings=SimpleNamespace(broker_quota_reserve=0), provider_quota=lambda **_: {"provider_reported_remaining": 6000})
     calls = []

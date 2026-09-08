@@ -20,7 +20,7 @@ from .db import SessionLocal, init_db
 from .finmind import AUTOMATIC_REFRESH_PAUSED, FinMindClient, FinMindError, FinMindRequestBudget
 from .refresh_queue import queue_universe_budget_refresh
 from .ingestion import FAVORITE_REFRESH_DATASET, UNIVERSE_BUDGET_LIMIT, UNIVERSE_BUDGET_REFRESH_DATASET, catch_up, intraday_sync, resume_favorite_refresh_job, resume_universe_budget_refresh_job, seed_score_version
-from .calendar import MARKET_CLOSE_TIME, MARKET_OPEN_TIME, completed_source_end_date, is_trading_session, market_session_state, source_publication_window_open
+from .calendar import MARKET_CLOSE_TIME, MARKET_OPEN_TIME, closed_market_target_date, completed_source_end_date, is_trading_session, market_session_state, source_publication_window_open
 from .models import JobRun
 from .manual_refresh import MANUAL_STOCK_REFRESH_DATASET, manual_job_due, resume_manual_stock_refresh
 from .worker_health import start_health_server
@@ -278,14 +278,14 @@ def run_closed_market_refresh() -> None:
         return
     with SessionLocal() as db:
         try:
-            job, created = queue_universe_budget_refresh(db, _completed_source_end_date(), automatic=True)
+            job, created = queue_universe_budget_refresh(db, closed_market_target_date(), automatic=True)
         except ValueError as exc:
             if str(exc) != "NO_ELIGIBLE_STOCKS":
                 raise
             _heartbeat(closed_market_refresh_status="NO_ELIGIBLE_STOCKS")
             return
         _heartbeat(
-            closed_market_refresh_status="QUEUED" if created else "EXISTING_JOB_REUSED",
+            closed_market_refresh_status="DAILY_TARGET_COMPLETED" if (job.checkpoint_state or {}).get("phase") == "daily_target_completed" else ("QUEUED" if created else "EXISTING_JOB_REUSED"),
             closed_market_refresh_job_id=job.id,
             closed_market_refresh_checked_at=datetime.now(timezone.utc).isoformat(),
         )

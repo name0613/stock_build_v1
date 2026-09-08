@@ -367,3 +367,20 @@ test("existing manual queue is restored when reopening stock detail", async ({ p
   await expect(page.getByTestId("targeted-fetch-score-button")).toBeDisabled();
   await expect(page.getByTestId("targeted-score-status")).toHaveCount(0);
 });
+
+
+for (const complete of [false, true]) {
+  test(`daily automatic completion distinguishes budget exhaustion from daily completion: ${complete}`, async ({ page }) => {
+    await page.route("**/api/universe/refresh-and-score*", route => route.fulfill({ json: {
+      job_id: 101, status: "SUCCESS", trigger: "closed_market_hourly",
+      phase: complete ? "daily_target_completed" : "budget_completed",
+      budget: { limit: 3500, used: complete ? 24 : 3500, remaining: complete ? 3476 : 0 },
+      daily_completion: { target_date: "2026-09-08", eligible_count: 50, excluded_count: 5, completed_count: complete ? 50 : 40, pending_count: complete ? 0 : 10, all_complete: complete },
+    } }));
+    await page.goto("/");
+    await expect(page.getByTestId("closed-market-refresh-policy")).toContainText(complete ? "當日目標已完成" : "下個整點繼續");
+    await expect(page.getByTestId("daily-refresh-completion")).toContainText("目標資料日 2026-09-08");
+    await expect(page.getByTestId("daily-refresh-completion")).toContainText(complete ? "待完成 0 檔" : "待完成 10 檔");
+    await expect(page.getByTestId("daily-refresh-completion")).toContainText("排除多次抓不到資料 5 檔");
+  });
+}
