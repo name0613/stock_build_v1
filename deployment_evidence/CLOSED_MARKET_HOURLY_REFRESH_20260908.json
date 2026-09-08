@@ -1,0 +1,211 @@
+{
+  "generated_at": "2026-09-08T05:55:44.166451+00:00",
+  "source_revision": "0b4c45f1ac5254ae2fe556df360878548c62f6da",
+  "url": "http://192.168.31.138:18080",
+  "tests": {
+    "backend_passed": 215,
+    "frontend_e2e_passed": 12,
+    "frontend_build": "PASS",
+    "ruff": "PASS",
+    "nas_related_tests_passed": 39,
+    "secret_scan": "PASS"
+  },
+  "services": [
+    {
+      "service": "api",
+      "state": "running",
+      "health": "healthy"
+    },
+    {
+      "service": "frontend",
+      "state": "running",
+      "health": ""
+    },
+    {
+      "service": "nginx",
+      "state": "running",
+      "health": "healthy"
+    },
+    {
+      "service": "postgres",
+      "state": "running",
+      "health": "healthy"
+    },
+    {
+      "service": "worker",
+      "state": "running",
+      "health": "healthy"
+    }
+  ],
+  "metadata": {
+    "api": {
+      "source_revision": "0b4c45f1ac5254ae2fe556df360878548c62f6da",
+      "backend_lock_sha256": "75a0d62812977f2137f3fdbd0082594ba87efef8b0ce8af3c7fbbd0c0a0dfc47",
+      "score_spec_hash": "21df6cf28188f6ef3973e8283cb6f482d9895203e9f023f3dc9c69bec926f99b",
+      "calendar_hash": "245382ea5cb79419654219e8eef2303664a79037765f12e10fdfc86361ef4e5b",
+      "build_timestamp": "2026-09-08T05:51:30.732132+00:00"
+    },
+    "worker": {
+      "source_revision": "0b4c45f1ac5254ae2fe556df360878548c62f6da",
+      "backend_lock_sha256": "75a0d62812977f2137f3fdbd0082594ba87efef8b0ce8af3c7fbbd0c0a0dfc47",
+      "score_spec_hash": "21df6cf28188f6ef3973e8283cb6f482d9895203e9f023f3dc9c69bec926f99b",
+      "calendar_hash": "245382ea5cb79419654219e8eef2303664a79037765f12e10fdfc86361ef4e5b",
+      "build_timestamp": "2026-09-08T05:51:30.732132+00:00"
+    }
+  },
+  "frontend_metadata": {
+    "source_revision": "0b4c45f1ac5254ae2fe556df360878548c62f6da",
+    "frontend_lock_sha256": "36c6571745da922fb5b37d65bf374a7fb146c28aadb7f55850a131399ff6ce0d",
+    "build_timestamp": "2026-09-08T05:51:30.732132+00:00"
+  },
+  "health": {
+    "status": "ok",
+    "service": "api",
+    "database": "ok",
+    "score_version": "s-only-v6",
+    "formula_hash": "21df6cf28188f6ef3973e8283cb6f482d9895203e9f023f3dc9c69bec926f99b",
+    "timezone": "Asia/Taipei"
+  },
+  "worker_health": {
+    "status": "ok",
+    "ready": true,
+    "heartbeat_age_seconds": 1,
+    "scheduler_age_seconds": 10,
+    "progress_age_seconds": 1,
+    "progress_deadline_seconds": 900,
+    "stale": false,
+    "prolonged_job": false,
+    "scheduler_ready": true,
+    "job_progress_active": true,
+    "scheduler_contract_missing": false,
+    "scheduler_execution_overdue": false,
+    "scheduler_event_error": false,
+    "scheduler_job_reasons": [],
+    "heartbeat": {
+      "status": "running",
+      "ready": true,
+      "scheduler_started_at": "2026-09-08T05:53:03.895328+00:00",
+      "last_heartbeat_at": "2026-09-08T05:55:42.838055+00:00",
+      "last_job_started_at": "2026-09-08T05:54:03.902586+00:00",
+      "last_error_code": null,
+      "last_job_finished_at": "2026-09-08T05:53:03.893566+00:00",
+      "last_job_status": "DEFERRED_BEFORE_SOURCE_PUBLICATION",
+      "scheduler_ready": true,
+      "last_scheduler_heartbeat_at": "2026-09-08T05:55:33.875765+00:00",
+      "last_job_progress_at": "2026-09-08T05:55:42.837888+00:00",
+      "job_phase": "TaiwanStockTradingDailyReport:TaiwanStockTradingDailyReport completed=1 failed=0",
+      "next_expected_run_at": "2026-09-08T06:00:00+00:00",
+      "current_job_run_id": 5012,
+      "registered_scheduler_job_ids": [
+        "main-sync",
+        "market-closed-hourly-refresh",
+        "market-open-sync",
+        "retry-sync"
+      ],
+      "scheduler_jobs": {
+        "main-sync": {
+          "next_expected_fire_at": "2026-09-08T13:30:00+00:00",
+          "last_started_fire_at": null,
+          "last_completed_fire_at": null,
+          "last_event": "REGISTERED",
+          "last_event_at": "2026-09-08T05:53:03.895360+00:00",
+          "last_error_code": null
+        },
+        "retry-sync": {
+          "next_expected_fire_at": "2026-09-08T15:00:00+00:00",
+          "last_started_fire_at": null,
+          "last_completed_fire_at": null,
+          "last_event": "REGISTERED",
+          "last_event_at": "2026-09-08T05:53:03.895380+00:00",
+          "last_error_code": null
+        },
+        "market-open-sync": {
+          "next_expected_fire_at": "2026-09-09T01:00:00+00:00",
+          "last_started_fire_at": null,
+          "last_completed_fire_at": null,
+          "last_event": "REGISTERED",
+          "last_event_at": "2026-09-08T05:53:03.895416+00:00",
+          "last_error_code": null
+        },
+        "market-closed-hourly-refresh": {
+          "next_expected_fire_at": "2026-09-08T06:00:00+00:00",
+          "last_started_fire_at": null,
+          "last_completed_fire_at": null,
+          "last_event": "REGISTERED",
+          "last_event_at": "2026-09-08T05:53:03.895430+00:00",
+          "last_error_code": null
+        }
+      },
+      "last_scheduler_event_at": "2026-09-08T05:53:03.895328+00:00",
+      "market_session": {
+        "state": "CLOSED",
+        "monitoring_active": false,
+        "reason": "outside_continuous_trading_hours",
+        "timezone": "Asia/Taipei",
+        "local_date": "2026-09-08",
+        "local_time": "13:55:33",
+        "open_time": "09:00:00",
+        "close_time": "13:30:00",
+        "calendar_version": "tw-exchange-2026-v1",
+        "calendar_hash": "245382ea5cb79419654219e8eef2303664a79037765f12e10fdfc86361ef4e5b"
+      }
+    },
+    "age_seconds": 1,
+    "overdue": false
+  },
+  "job": {
+    "job_id": 5012,
+    "status": "RUNNING",
+    "run_mode": "universe_fixed_budget_refresh_and_score",
+    "trigger": "closed_market_hourly",
+    "schedule_hour": "2026-09-08T05:00:00+00:00",
+    "target_date": "2026-09-07",
+    "phase": "refreshing_stock",
+    "current_stock_id": "6846",
+    "progress": {
+      "completed": 3,
+      "total": 1957
+    },
+    "budget": {
+      "limit": 3500,
+      "used": 72,
+      "remaining": 3428
+    },
+    "next_retry_at": null,
+    "skipped_no_data_count": 194,
+    "started_at": "2026-09-08T05:53:56.697548Z",
+    "finished_at": null,
+    "error_code": null
+  },
+  "progress": {
+    "new_score_rows": 3,
+    "completed_stock_evaluations": 3,
+    "evaluation_statuses": [
+      "DATA_INSUFFICIENT"
+    ],
+    "budget_checkpoint": {
+      "used": 72,
+      "limit": 3500,
+      "remaining": 3428
+    },
+    "sample_scores": [
+      {
+        "stock_id": "6844",
+        "status": "DATA_INSUFFICIENT",
+        "score": null
+      },
+      {
+        "stock_id": "6844",
+        "status": "DATA_INSUFFICIENT",
+        "score": null
+      },
+      {
+        "stock_id": "6844",
+        "status": "DATA_INSUFFICIENT",
+        "score": null
+      }
+    ]
+  },
+  "acceptance_note": "An automatic job was explicitly queued through the shared scheduler queue helper during CLOSED for deployment validation. The normal worker minute dispatcher picked it up without any manual fetch API request. PostgreSQL duplicate enqueue returned the same job. Hourly cron is registered; the next scheduled fire is recorded in worker health. Full 3500-request run remains in progress.",
+  "secrets_included": false
+}
