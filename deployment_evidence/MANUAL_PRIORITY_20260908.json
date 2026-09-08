@@ -1,0 +1,1127 @@
+{
+  "source_revision": "9d4d47fb2c52875977d32cf3928232dcd0bcf653",
+  "url": "http://192.168.31.138:18080",
+  "queued_http_status": 202,
+  "batch_before": {
+    "job_id": 5453,
+    "status": "RUNNING",
+    "run_mode": "universe_fixed_budget_refresh_and_score",
+    "trigger": "closed_market_hourly",
+    "schedule_hour": "2026-09-08T12:00:00+00:00",
+    "target_date": "2026-09-07",
+    "phase": "refreshing_stock",
+    "current_stock_id": "1321",
+    "progress": {
+      "completed": 97,
+      "total": 1910
+    },
+    "budget": {
+      "limit": 3500,
+      "used": 2346,
+      "remaining": 1154
+    },
+    "next_retry_at": null,
+    "skipped_no_data_count": 335,
+    "started_at": "2026-09-08T12:00:01.746730Z",
+    "finished_at": null,
+    "error_code": null
+  },
+  "queued": {
+    "job_id": 5553,
+    "stock_id": "2408",
+    "status": "QUEUED",
+    "run_mode": "targeted_fetch_and_score",
+    "target_date": "2026-09-08",
+    "evaluated_source_date": null,
+    "fallback_applied": false,
+    "fallback_reason": null,
+    "phase": "queued",
+    "progress": {
+      "completed": 0,
+      "total": 5
+    },
+    "started_at": "2026-09-08T13:05:07.182759Z",
+    "finished_at": null,
+    "datasets": {},
+    "pre_readiness": null,
+    "readiness": null,
+    "score": null,
+    "fetch_errors": [],
+    "quota": null,
+    "error_code": null,
+    "next_retry_at": null
+  },
+  "duplicate": {
+    "http_status": 202,
+    "job_id": 5553
+  },
+  "queued_ui": "已排隊：目前股票處理完成後，將優先補抓此股票並評分。",
+  "result": {
+    "job_id": 5553,
+    "stock_id": "2408",
+    "status": "SUCCESS",
+    "run_mode": "targeted_fetch_and_score",
+    "target_date": "2026-09-08",
+    "evaluated_source_date": "2026-09-07",
+    "fallback_applied": true,
+    "fallback_reason": "TARGET_DATE_SOURCE_INCOMPLETE",
+    "phase": "completed",
+    "progress": {
+      "total": 5,
+      "completed": 5
+    },
+    "started_at": "2026-09-08T13:05:07.182759Z",
+    "finished_at": "2026-09-08T13:06:37.562450Z",
+    "datasets": {
+      "TaiwanStockPrice": {
+        "rows": 1,
+        "failed": 0,
+        "no_data": 0,
+        "success": 1,
+        "per_stock": {
+          "2408": {
+            "rows": 232,
+            "attempt": 1,
+            "request_end": "2026-09-08",
+            "retry_count": 6,
+            "empty_reason": null,
+            "covered_dates": [
+              "2026-08-11",
+              "2026-08-12",
+              "2026-08-13",
+              "2026-08-14",
+              "2026-08-17",
+              "2026-08-18",
+              "2026-08-19",
+              "2026-08-20",
+              "2026-08-21",
+              "2026-08-24",
+              "2026-08-25",
+              "2026-08-26",
+              "2026-08-27",
+              "2026-08-28",
+              "2026-08-31",
+              "2026-09-01",
+              "2026-09-02",
+              "2026-09-03",
+              "2026-09-04",
+              "2026-09-07",
+              "2026-09-08"
+            ],
+            "request_start": "2026-09-08",
+            "classification": "COMPLETE_WITH_ROWS_AND_PROVIDER_MISSING",
+            "last_source_date": "2026-09-08",
+            "unresolved_dates": [],
+            "first_source_date": "2026-06-29",
+            "observation_cadence": "trading_session",
+            "pagination_complete": null,
+            "verified_record_dates": [
+              "2026-06-29",
+              "2026-06-30",
+              "2026-07-01",
+              "2026-07-02",
+              "2026-07-03",
+              "2026-07-06",
+              "2026-07-07",
+              "2026-07-08",
+              "2026-07-09",
+              "2026-07-13",
+              "2026-07-14",
+              "2026-07-15",
+              "2026-07-16",
+              "2026-07-17",
+              "2026-07-20",
+              "2026-07-21",
+              "2026-07-22",
+              "2026-07-23",
+              "2026-07-24",
+              "2026-07-27",
+              "2026-07-28",
+              "2026-07-29",
+              "2026-07-30",
+              "2026-07-31",
+              "2026-08-03",
+              "2026-08-04",
+              "2026-08-05",
+              "2026-08-06",
+              "2026-08-07",
+              "2026-08-10",
+              "2026-08-11",
+              "2026-08-12",
+              "2026-08-13",
+              "2026-08-14",
+              "2026-08-17",
+              "2026-08-18",
+              "2026-08-19",
+              "2026-08-20",
+              "2026-08-21",
+              "2026-08-24",
+              "2026-08-25",
+              "2026-08-26",
+              "2026-08-27",
+              "2026-08-28",
+              "2026-08-31",
+              "2026-09-01",
+              "2026-09-02",
+              "2026-09-03",
+              "2026-09-04",
+              "2026-09-07",
+              "2026-09-08"
+            ],
+            "verified_missing_dates": [
+              "2026-07-10"
+            ],
+            "verified_no_data_dates": [
+              "2026-07-10"
+            ],
+            "missing_value_semantics": "missing source rows remain unavailable to scoring and are never imputed as zero",
+            "expected_observation_count": 21,
+            "verified_observation_count": 21,
+            "provider_missing_is_not_zero": true,
+            "provider_missing_contract_version": "finmind-successful-filtered-empty-data-v1"
+          }
+        },
+        "requested": 1,
+        "fatal_code": null,
+        "failure_codes": [],
+        "newly_fetched": 1,
+        "rows_accepted": 1,
+        "rows_received": 1,
+        "rows_rejected": 0,
+        "universe_hash": "b23fb21c958172ae9e27d15b40bc540586987750dc4f9d32bdaf9269fe89fc8a",
+        "rows_versioned": 1,
+        "usable_success": 1,
+        "reused_complete": 0,
+        "checkpoint_state": "resumed",
+        "permanent_failed": 0,
+        "records_accepted": 1,
+        "refresh_complete": true,
+        "selection_policy": "no_data_then_oldest_updated_stock_cycle_v1",
+        "partial_responses": 0,
+        "physical_requests": 1,
+        "publication_probe": null,
+        "publication_state": null,
+        "retryable_pending": 0,
+        "requested_end_date": "2026-09-08",
+        "skipped_checkpoint": 0,
+        "observation_cadence": "trading_session",
+        "observations_reused": 1,
+        "requested_start_date": "2026-08-11",
+        "reused_valid_no_data": 0,
+        "previous_global_fatal": null,
+        "verified_observations": 21,
+        "force_refresh_requested": false,
+        "publication_target_date": null,
+        "unresolved_observations": 0,
+        "checkpoint_manifest_hash": "92d43cebce5d7a9b34d108475ed489ae18876fb673e1b7b4601c85e777d43f4c",
+        "fair_cursor_end_stock_id": "2408",
+        "fair_cursor_start_stock_id": "1321",
+        "publication_probe_requests": 0,
+        "publication_check_performed": false,
+        "publication_wait_invalidated": false,
+        "checkpoint_content_hash_after": "1bfa7c9787815392fbc5b83d4ae6461b85f85f3d399ffd704c1d29cf6293178c",
+        "provider_missing_observations": 0,
+        "checkpoint_content_hash_before": "e19ac00907a8688dddab6b9f7566ad90ca863df10a4202443b2316f7bb8e9afb",
+        "missing_values_imputed_as_zero": 0,
+        "expected_observations_per_stock": 21,
+        "retry_provider_missing_requested": true,
+        "provider_missing_observations_reused": 1
+      },
+      "TaiwanStockShareholding": {
+        "rows": 0,
+        "failed": 0,
+        "no_data": 0,
+        "success": 1,
+        "per_stock": {
+          "2408": {
+            "rows": 252,
+            "attempt": 1,
+            "request_end": "2026-09-08",
+            "retry_count": 9,
+            "empty_reason": "TaiwanStockShareholding:no_provider_observation",
+            "covered_dates": [
+              "2026-08-11",
+              "2026-08-12",
+              "2026-08-13",
+              "2026-08-14",
+              "2026-08-17",
+              "2026-08-18",
+              "2026-08-19",
+              "2026-08-20",
+              "2026-08-21",
+              "2026-08-24",
+              "2026-08-25",
+              "2026-08-26",
+              "2026-08-27",
+              "2026-08-28",
+              "2026-08-31",
+              "2026-09-01",
+              "2026-09-02",
+              "2026-09-03",
+              "2026-09-04",
+              "2026-09-07",
+              "2026-09-08"
+            ],
+            "request_start": "2026-09-08",
+            "classification": "COMPLETE_WITH_ROWS_AND_PROVIDER_MISSING",
+            "last_source_date": "2026-09-07",
+            "unresolved_dates": [],
+            "first_source_date": "2026-06-24",
+            "observation_cadence": "trading_session",
+            "pagination_complete": null,
+            "verified_record_dates": [
+              "2026-06-24",
+              "2026-06-25",
+              "2026-06-26",
+              "2026-06-29",
+              "2026-06-30",
+              "2026-07-01",
+              "2026-07-02",
+              "2026-07-03",
+              "2026-07-06",
+              "2026-07-07",
+              "2026-07-08",
+              "2026-07-09",
+              "2026-07-13",
+              "2026-07-14",
+              "2026-07-15",
+              "2026-07-16",
+              "2026-07-17",
+              "2026-07-20",
+              "2026-07-21",
+              "2026-07-22",
+              "2026-07-23",
+              "2026-07-24",
+              "2026-07-27",
+              "2026-07-28",
+              "2026-07-29",
+              "2026-07-30",
+              "2026-07-31",
+              "2026-08-03",
+              "2026-08-04",
+              "2026-08-05",
+              "2026-08-06",
+              "2026-08-07",
+              "2026-08-10",
+              "2026-08-11",
+              "2026-08-12",
+              "2026-08-13",
+              "2026-08-14",
+              "2026-08-17",
+              "2026-08-18",
+              "2026-08-19",
+              "2026-08-20",
+              "2026-08-21",
+              "2026-08-24",
+              "2026-08-25",
+              "2026-08-26",
+              "2026-08-27",
+              "2026-08-28",
+              "2026-08-31",
+              "2026-09-01",
+              "2026-09-02",
+              "2026-09-03",
+              "2026-09-04",
+              "2026-09-07"
+            ],
+            "verified_missing_dates": [
+              "2026-07-10",
+              "2026-09-08"
+            ],
+            "verified_no_data_dates": [
+              "2026-07-10",
+              "2026-09-08"
+            ],
+            "missing_value_semantics": "missing source rows remain unavailable to scoring and are never imputed as zero",
+            "expected_observation_count": 21,
+            "verified_observation_count": 21,
+            "provider_missing_is_not_zero": true,
+            "provider_missing_contract_version": "finmind-successful-filtered-empty-data-v1"
+          }
+        },
+        "requested": 1,
+        "fatal_code": null,
+        "failure_codes": [],
+        "newly_fetched": 1,
+        "rows_accepted": 0,
+        "rows_received": 0,
+        "rows_rejected": 0,
+        "universe_hash": "b23fb21c958172ae9e27d15b40bc540586987750dc4f9d32bdaf9269fe89fc8a",
+        "rows_versioned": 0,
+        "usable_success": 1,
+        "reused_complete": 0,
+        "checkpoint_state": "resumed",
+        "permanent_failed": 0,
+        "records_accepted": 0,
+        "refresh_complete": true,
+        "selection_policy": "no_data_then_oldest_updated_stock_cycle_v1",
+        "partial_responses": 0,
+        "physical_requests": 1,
+        "publication_probe": null,
+        "publication_state": null,
+        "retryable_pending": 0,
+        "requested_end_date": "2026-09-08",
+        "skipped_checkpoint": 0,
+        "observation_cadence": "trading_session",
+        "observations_reused": 1,
+        "requested_start_date": "2026-08-11",
+        "reused_valid_no_data": 0,
+        "previous_global_fatal": null,
+        "verified_observations": 21,
+        "force_refresh_requested": false,
+        "publication_target_date": null,
+        "unresolved_observations": 0,
+        "checkpoint_manifest_hash": "78642063b0316fed982e3e5afb48f7f81670aa2be920ae0b790d806ec42ad6f0",
+        "fair_cursor_end_stock_id": "2408",
+        "fair_cursor_start_stock_id": "1321",
+        "publication_probe_requests": 0,
+        "publication_check_performed": false,
+        "publication_wait_invalidated": false,
+        "checkpoint_content_hash_after": "122f1aac5ae6ff80a1f5a27b886b2c86daf27f5f67fffb7e8f94528577f915d3",
+        "provider_missing_observations": 1,
+        "checkpoint_content_hash_before": "335089735f5633e92f9327968ac7adc8f8b7329f3c23faec715d7fe318a6096e",
+        "missing_values_imputed_as_zero": 0,
+        "expected_observations_per_stock": 21,
+        "retry_provider_missing_requested": true,
+        "provider_missing_observations_reused": 1
+      },
+      "TaiwanStockHoldingSharesPer": {
+        "reason": "stock readiness already satisfied before fetch",
+        "status": "REUSED_LOCAL",
+        "physical_requests": 0
+      },
+      "TaiwanStockTradingDailyReport": {
+        "rows": 401916,
+        "failed": 0,
+        "retries": 0,
+        "success": 20,
+        "requested": 1,
+        "fatal_code": null,
+        "quota_limit": 6000,
+        "usable_quota": 3476,
+        "failure_codes": [],
+        "newly_fetched": 20,
+        "quota_reserve": 300,
+        "rows_received": 401916,
+        "stocks_failed": 0,
+        "universe_hash": "b23fb21c958172ae9e27d15b40bc540586987750dc4f9d32bdaf9269fe89fc8a",
+        "requested_keys": 20,
+        "retry_deferred": 0,
+        "rows_versioned": 817,
+        "quota_remaining": 3776,
+        "reused_complete": 0,
+        "checkpoint_state": "resumed",
+        "permanent_failed": 0,
+        "records_accepted": 16311,
+        "refresh_complete": true,
+        "retryable_failed": 0,
+        "selection_policy": "no_data_then_oldest_updated_stock_cycle_v1",
+        "session_set_hash": "f0f599b3c8b5c689ea9373036132b20da1dd068f5a0b86cfc95bfc4f0a325093",
+        "stocks_completed": 1,
+        "physical_requests": 20,
+        "retryable_pending": 0,
+        "quota_probe_status": "PASS",
+        "requested_end_date": "2026-09-08",
+        "skipped_checkpoint": 0,
+        "observations_reused": 0,
+        "requested_start_date": "2026-08-12",
+        "reused_valid_no_data": 0,
+        "deferred_pending_count": 0,
+        "retry_legacy_completed": 19,
+        "selected_pending_count": 20,
+        "contract_validated_rows": 401916,
+        "force_refresh_requested": false,
+        "checkpoint_manifest_hash": "7b769f1068fac06daa3ba67299a2b165b41b9f93ca312c022f38cfeedf25d902",
+        "retry_deferred_requested": true,
+        "remaining_pending_after_run": 0,
+        "quota_selected_pending_count": 20,
+        "remaining_pending_before_run": 20,
+        "quota_estimated_cost_per_item": 5,
+        "quota_unselected_pending_count": 0
+      },
+      "TaiwanStockInstitutionalInvestorsBuySellWide": {
+        "rows": 1,
+        "failed": 0,
+        "no_data": 0,
+        "success": 1,
+        "per_stock": {
+          "2408": {
+            "rows": 249,
+            "attempt": 1,
+            "request_end": "2026-09-08",
+            "retry_count": 15,
+            "empty_reason": null,
+            "covered_dates": [
+              "2026-08-12",
+              "2026-08-13",
+              "2026-08-14",
+              "2026-08-17",
+              "2026-08-18",
+              "2026-08-19",
+              "2026-08-20",
+              "2026-08-21",
+              "2026-08-24",
+              "2026-08-25",
+              "2026-08-26",
+              "2026-08-27",
+              "2026-08-28",
+              "2026-08-31",
+              "2026-09-01",
+              "2026-09-02",
+              "2026-09-03",
+              "2026-09-04",
+              "2026-09-07",
+              "2026-09-08"
+            ],
+            "request_start": "2026-09-08",
+            "classification": "COMPLETE_WITH_ROWS_AND_PROVIDER_MISSING",
+            "last_source_date": "2026-09-08",
+            "unresolved_dates": [],
+            "first_source_date": "2026-06-24",
+            "observation_cadence": "trading_session",
+            "pagination_complete": null,
+            "verified_record_dates": [
+              "2026-06-24",
+              "2026-06-25",
+              "2026-06-26",
+              "2026-06-29",
+              "2026-06-30",
+              "2026-07-01",
+              "2026-07-02",
+              "2026-07-03",
+              "2026-07-06",
+              "2026-07-07",
+              "2026-07-08",
+              "2026-07-09",
+              "2026-07-13",
+              "2026-07-14",
+              "2026-07-15",
+              "2026-07-16",
+              "2026-07-17",
+              "2026-07-20",
+              "2026-07-21",
+              "2026-07-22",
+              "2026-07-23",
+              "2026-07-24",
+              "2026-07-27",
+              "2026-07-28",
+              "2026-07-29",
+              "2026-07-30",
+              "2026-07-31",
+              "2026-08-03",
+              "2026-08-04",
+              "2026-08-05",
+              "2026-08-06",
+              "2026-08-07",
+              "2026-08-10",
+              "2026-08-11",
+              "2026-08-12",
+              "2026-08-13",
+              "2026-08-14",
+              "2026-08-17",
+              "2026-08-18",
+              "2026-08-19",
+              "2026-08-20",
+              "2026-08-21",
+              "2026-08-24",
+              "2026-08-25",
+              "2026-08-26",
+              "2026-08-27",
+              "2026-08-28",
+              "2026-08-31",
+              "2026-09-01",
+              "2026-09-02",
+              "2026-09-03",
+              "2026-09-04",
+              "2026-09-07",
+              "2026-09-08"
+            ],
+            "verified_missing_dates": [
+              "2026-07-10"
+            ],
+            "verified_no_data_dates": [
+              "2026-07-10"
+            ],
+            "missing_value_semantics": "missing source rows remain unavailable to scoring and are never imputed as zero",
+            "expected_observation_count": 20,
+            "verified_observation_count": 20,
+            "provider_missing_is_not_zero": true,
+            "provider_missing_contract_version": "finmind-successful-filtered-empty-data-v1"
+          }
+        },
+        "requested": 1,
+        "fatal_code": null,
+        "failure_codes": [],
+        "newly_fetched": 1,
+        "rows_accepted": 1,
+        "rows_received": 1,
+        "rows_rejected": 0,
+        "universe_hash": "b23fb21c958172ae9e27d15b40bc540586987750dc4f9d32bdaf9269fe89fc8a",
+        "rows_versioned": 1,
+        "usable_success": 1,
+        "reused_complete": 0,
+        "checkpoint_state": "resumed",
+        "permanent_failed": 0,
+        "records_accepted": 1,
+        "refresh_complete": true,
+        "selection_policy": "no_data_then_oldest_updated_stock_cycle_v1",
+        "partial_responses": 0,
+        "physical_requests": 1,
+        "publication_probe": null,
+        "publication_state": null,
+        "retryable_pending": 0,
+        "requested_end_date": "2026-09-08",
+        "skipped_checkpoint": 0,
+        "observation_cadence": "trading_session",
+        "observations_reused": 19,
+        "requested_start_date": "2026-08-12",
+        "reused_valid_no_data": 0,
+        "previous_global_fatal": null,
+        "verified_observations": 20,
+        "force_refresh_requested": false,
+        "publication_target_date": null,
+        "unresolved_observations": 0,
+        "checkpoint_manifest_hash": "9f10eaf90635ad9875c0bea439a969e7d17173053a7770ba748518329e6e9b88",
+        "fair_cursor_end_stock_id": "2408",
+        "fair_cursor_start_stock_id": "1321",
+        "publication_probe_requests": 0,
+        "publication_check_performed": false,
+        "publication_wait_invalidated": false,
+        "checkpoint_content_hash_after": "925d986080af911d64ea9e2f0b0f133d906f92e1453d3353bff87df15c838a41",
+        "provider_missing_observations": 0,
+        "checkpoint_content_hash_before": "a5b38e0247823b5920ef38ddc281da344e600d3d9ad39d28b9aa94c3698271ed",
+        "missing_values_imputed_as_zero": 0,
+        "expected_observations_per_stock": 20,
+        "retry_provider_missing_requested": true,
+        "provider_missing_observations_reused": 1
+      }
+    },
+    "pre_readiness": {
+      "ready": false,
+      "coverage": {
+        "missing_reasons": [
+          "InstitutionalNet20D: missing institutional session or null net",
+          "InstitutionalPositiveDayRatio20D: missing institutional session or null net",
+          "InstitutionalNetSlope20D: missing institutional session or null net",
+          "InstitutionalOneDaySpikeRatio20D: missing institutional session or null net",
+          "ForeignShareRatioChange20D: missing foreign holding session or ratio",
+          "BrokerPersistenceScore: missing broker session, invalid row, or unproven observed-row contract",
+          "PriceReturn20D: missing price session or close"
+        ],
+        "calendar_version": "tw-exchange-2026-v1",
+        "missing_sessions": {
+          "price": [
+            "2026-09-08"
+          ],
+          "broker": [
+            "2026-09-08"
+          ],
+          "institutional": [
+            "2026-09-08"
+          ],
+          "foreign_holding": [
+            "2026-09-08"
+          ]
+        },
+        "PriceDataAvailable": false,
+        "BrokerDataAvailable": false,
+        "holding_missing_weeks": [
+          8
+        ],
+        "readiness_reason_codes": [
+          "missing_institutional",
+          "missing_foreign_holding",
+          "missing_broker",
+          "missing_price"
+        ],
+        "RequiredFeatureValidation": {
+          "PriceReturn20D": {
+            "valid": false,
+            "reason": "missing price session or close",
+            "cadence": "trading_session",
+            "present": true,
+            "expected_window": 21
+          },
+          "InstitutionalNet20D": {
+            "valid": false,
+            "reason": "missing institutional session or null net",
+            "cadence": "trading_session",
+            "present": true,
+            "expected_window": 20
+          },
+          "BrokerPersistenceScore": {
+            "valid": false,
+            "reason": "missing broker session, invalid row, or unproven observed-row contract",
+            "cadence": "trading_session",
+            "present": true,
+            "expected_window": 20
+          },
+          "LargeHolder400Change4W": {
+            "valid": true,
+            "reason": "4-week holding observation",
+            "cadence": "weekly_publication",
+            "present": true,
+            "expected_window": 4
+          },
+          "InstitutionalNetSlope20D": {
+            "valid": false,
+            "reason": "missing institutional session or null net",
+            "cadence": "trading_session",
+            "present": true,
+            "expected_window": 20
+          },
+          "ForeignShareRatioChange20D": {
+            "valid": false,
+            "reason": "missing foreign holding session or ratio",
+            "cadence": "trading_session",
+            "present": true,
+            "expected_window": 21
+          },
+          "InstitutionalOneDaySpikeRatio20D": {
+            "valid": false,
+            "reason": "missing institutional session or null net",
+            "cadence": "trading_session",
+            "present": true,
+            "expected_window": 20
+          },
+          "InstitutionalPositiveDayRatio20D": {
+            "valid": false,
+            "reason": "missing institutional session or null net",
+            "cadence": "trading_session",
+            "present": true,
+            "expected_window": 20
+          }
+        },
+        "InstitutionalDataAvailable": false,
+        "ForeignHoldingDataAvailable": false,
+        "HoldingDistributionAvailable": true
+      },
+      "stock_id": "2408",
+      "source_date": "2026-09-08",
+      "missing_reasons": [
+        "missing_institutional",
+        "missing_foreign_holding",
+        "missing_broker",
+        "missing_price"
+      ],
+      "knowledge_cutoff": "2026-09-08T13:05:30.111414+00:00"
+    },
+    "readiness": {
+      "ready": true,
+      "coverage": {
+        "missing_reasons": [],
+        "calendar_version": "tw-exchange-2026-v1",
+        "missing_sessions": {
+          "price": [],
+          "broker": [],
+          "institutional": [],
+          "foreign_holding": []
+        },
+        "PriceDataAvailable": true,
+        "BrokerDataAvailable": true,
+        "holding_missing_weeks": [
+          8
+        ],
+        "readiness_reason_codes": [],
+        "RequiredFeatureValidation": {
+          "PriceReturn20D": {
+            "valid": true,
+            "reason": "21 trading sessions required for a 20-session return",
+            "cadence": "trading_session",
+            "present": true,
+            "expected_window": 21
+          },
+          "InstitutionalNet20D": {
+            "valid": true,
+            "reason": "20 trading sessions with complete institutional net",
+            "cadence": "trading_session",
+            "present": true,
+            "expected_window": 20
+          },
+          "BrokerPersistenceScore": {
+            "valid": true,
+            "reason": "20 sessions of schema-valid observed broker rows; omitted branches remain unknown",
+            "cadence": "trading_session",
+            "present": true,
+            "expected_window": 20
+          },
+          "LargeHolder400Change4W": {
+            "valid": true,
+            "reason": "4-week holding observation",
+            "cadence": "weekly_publication",
+            "present": true,
+            "expected_window": 4
+          },
+          "InstitutionalNetSlope20D": {
+            "valid": true,
+            "reason": "20 trading sessions",
+            "cadence": "trading_session",
+            "present": true,
+            "expected_window": 20
+          },
+          "ForeignShareRatioChange20D": {
+            "valid": true,
+            "reason": "21 trading sessions required for a 20-session change",
+            "cadence": "trading_session",
+            "present": true,
+            "expected_window": 21
+          },
+          "InstitutionalOneDaySpikeRatio20D": {
+            "valid": true,
+            "reason": "20 trading sessions",
+            "cadence": "trading_session",
+            "present": true,
+            "expected_window": 20
+          },
+          "InstitutionalPositiveDayRatio20D": {
+            "valid": true,
+            "reason": "20 trading sessions",
+            "cadence": "trading_session",
+            "present": true,
+            "expected_window": 20
+          }
+        },
+        "InstitutionalDataAvailable": true,
+        "ForeignHoldingDataAvailable": true,
+        "HoldingDistributionAvailable": true
+      },
+      "stock_id": "2408",
+      "source_date": "2026-09-07",
+      "missing_reasons": [],
+      "knowledge_cutoff": "2026-09-08T13:06:33.890417+00:00"
+    },
+    "score": {
+      "score": 56.18,
+      "status": "WATCH",
+      "coverage": {
+        "missing_reasons": [],
+        "calendar_version": "tw-exchange-2026-v1",
+        "missing_sessions": {
+          "price": [],
+          "broker": [],
+          "institutional": [],
+          "foreign_holding": []
+        },
+        "PriceDataAvailable": true,
+        "BrokerDataAvailable": true,
+        "holding_missing_weeks": [
+          8
+        ],
+        "readiness_reason_codes": [],
+        "RequiredFeatureValidation": {
+          "PriceReturn20D": {
+            "valid": true,
+            "reason": "21 trading sessions required for a 20-session return",
+            "cadence": "trading_session",
+            "present": true,
+            "expected_window": 21
+          },
+          "InstitutionalNet20D": {
+            "valid": true,
+            "reason": "20 trading sessions with complete institutional net",
+            "cadence": "trading_session",
+            "present": true,
+            "expected_window": 20
+          },
+          "BrokerPersistenceScore": {
+            "valid": true,
+            "reason": "20 sessions of schema-valid observed broker rows; omitted branches remain unknown",
+            "cadence": "trading_session",
+            "present": true,
+            "expected_window": 20
+          },
+          "LargeHolder400Change4W": {
+            "valid": true,
+            "reason": "4-week holding observation",
+            "cadence": "weekly_publication",
+            "present": true,
+            "expected_window": 4
+          },
+          "InstitutionalNetSlope20D": {
+            "valid": true,
+            "reason": "20 trading sessions",
+            "cadence": "trading_session",
+            "present": true,
+            "expected_window": 20
+          },
+          "ForeignShareRatioChange20D": {
+            "valid": true,
+            "reason": "21 trading sessions required for a 20-session change",
+            "cadence": "trading_session",
+            "present": true,
+            "expected_window": 21
+          },
+          "InstitutionalOneDaySpikeRatio20D": {
+            "valid": true,
+            "reason": "20 trading sessions",
+            "cadence": "trading_session",
+            "present": true,
+            "expected_window": 20
+          },
+          "InstitutionalPositiveDayRatio20D": {
+            "valid": true,
+            "reason": "20 trading sessions",
+            "cadence": "trading_session",
+            "present": true,
+            "expected_window": 20
+          }
+        },
+        "InstitutionalDataAvailable": true,
+        "ForeignHoldingDataAvailable": true,
+        "HoldingDistributionAvailable": true
+      },
+      "components": {
+        "BrokerPersistence": 85.49,
+        "LowProfileModifier": 3.51,
+        "OwnershipAccumulation": 52.36,
+        "InstitutionalPersistence": 24.85
+      },
+      "explanation": [
+        {
+          "label": "法人持續性",
+          "value": 24.85,
+          "detail": "20 日正值比例 55%；單日集中度 14.9%"
+        },
+        {
+          "label": "持股結構累積",
+          "value": 52.36,
+          "detail": "外資持股比例 20D 變化 1.04；400 張級距 4W 變化 0.14"
+        },
+        {
+          "label": "分點持續性",
+          "value": 85.49,
+          "detail": "已驗證正買超事件 Persistence 85.49；缺漏分點保持 unknown、不補零"
+        },
+        {
+          "label": "低調修正",
+          "value": 3.51,
+          "detail": "價格影響僅作 -10 至 +10 modifier；若 unavailable 則明確不套用"
+        }
+      ],
+      "source_date": "2026-09-07",
+      "formula_hash": "21df6cf28188f6ef3973e8283cb6f482d9895203e9f023f3dc9c69bec926f99b",
+      "calculated_at": "2026-09-08T13:06:37.475907+00:00",
+      "score_version": "s-only-v6",
+      "knowledge_cutoff": "2026-09-08T13:06:33.890417+00:00"
+    },
+    "fetch_errors": [],
+    "quota": {
+      "plan": "Sponsor",
+      "status": "PASS",
+      "remaining": 3769,
+      "limit_per_hour": 6000
+    },
+    "error_code": null,
+    "next_retry_at": null
+  },
+  "result_ui": "最近一次結果：完成 · Score 56.2（資料日 2026-09-07，採最近完整資料） · 資料完整",
+  "generated_at": "2026-09-08T13:07:32.343480+00:00",
+  "ordering": {
+    "manual": {
+      "id": 5553,
+      "status": "SUCCESS",
+      "stock_id": "2408",
+      "queued_or_started_at": "2026-09-08T13:05:07.182759+00:00",
+      "finished_at": "2026-09-08T13:06:37.562450+00:00",
+      "worker_started_at": "2026-09-08T13:05:29.931671+00:00"
+    },
+    "previous_batch_stock": {
+      "id": 5552,
+      "status": "SUCCESS",
+      "stock_id": "1321",
+      "queued_or_started_at": "2026-09-08T13:04:58.302886+00:00",
+      "finished_at": "2026-09-08T13:05:29.897592+00:00",
+      "worker_started_at": null
+    },
+    "next_batch_stock": {
+      "id": 5554,
+      "status": "SUCCESS",
+      "stock_id": "1321",
+      "queued_or_started_at": "2026-09-08T13:06:37.750328+00:00",
+      "finished_at": "2026-09-08T13:07:04.854916+00:00",
+      "worker_started_at": null
+    },
+    "overlapping_batch_stock_jobs": 0,
+    "handoff_delay_ms": 34.079,
+    "ordering_verified": true
+  },
+  "tests": {
+    "backend_passed": 222,
+    "frontend_e2e_passed": 13,
+    "nas_related_tests_passed": 47,
+    "frontend_build": "PASS",
+    "ruff": "PASS",
+    "secret_scan": "PASS"
+  },
+  "services": [
+    {
+      "service": "api",
+      "state": "running",
+      "health": "healthy"
+    },
+    {
+      "service": "frontend",
+      "state": "running",
+      "health": ""
+    },
+    {
+      "service": "nginx",
+      "state": "running",
+      "health": "healthy"
+    },
+    {
+      "service": "postgres",
+      "state": "running",
+      "health": "healthy"
+    },
+    {
+      "service": "worker",
+      "state": "running",
+      "health": "healthy"
+    }
+  ],
+  "metadata": {
+    "api": {
+      "source_revision": "9d4d47fb2c52875977d32cf3928232dcd0bcf653",
+      "backend_lock_sha256": "75a0d62812977f2137f3fdbd0082594ba87efef8b0ce8af3c7fbbd0c0a0dfc47",
+      "score_spec_hash": "21df6cf28188f6ef3973e8283cb6f482d9895203e9f023f3dc9c69bec926f99b",
+      "calendar_hash": "245382ea5cb79419654219e8eef2303664a79037765f12e10fdfc86361ef4e5b",
+      "build_timestamp": "2026-09-08T13:01:48.825655+00:00"
+    },
+    "worker": {
+      "source_revision": "9d4d47fb2c52875977d32cf3928232dcd0bcf653",
+      "backend_lock_sha256": "75a0d62812977f2137f3fdbd0082594ba87efef8b0ce8af3c7fbbd0c0a0dfc47",
+      "score_spec_hash": "21df6cf28188f6ef3973e8283cb6f482d9895203e9f023f3dc9c69bec926f99b",
+      "calendar_hash": "245382ea5cb79419654219e8eef2303664a79037765f12e10fdfc86361ef4e5b",
+      "build_timestamp": "2026-09-08T13:01:48.825655+00:00"
+    }
+  },
+  "frontend_metadata": {
+    "source_revision": "9d4d47fb2c52875977d32cf3928232dcd0bcf653",
+    "frontend_lock_sha256": "36c6571745da922fb5b37d65bf374a7fb146c28aadb7f55850a131399ff6ce0d",
+    "build_timestamp": "2026-09-08T13:01:48.825655+00:00"
+  },
+  "health": {
+    "status": "ok",
+    "service": "api",
+    "database": "ok",
+    "score_version": "s-only-v6",
+    "formula_hash": "21df6cf28188f6ef3973e8283cb6f482d9895203e9f023f3dc9c69bec926f99b",
+    "timezone": "Asia/Taipei"
+  },
+  "worker_health": {
+    "status": "ok",
+    "ready": true,
+    "heartbeat_age_seconds": 1,
+    "scheduler_age_seconds": 2,
+    "progress_age_seconds": 1,
+    "progress_deadline_seconds": 900,
+    "stale": false,
+    "prolonged_job": false,
+    "scheduler_ready": true,
+    "job_progress_active": true,
+    "scheduler_contract_missing": false,
+    "scheduler_execution_overdue": false,
+    "scheduler_event_error": false,
+    "scheduler_job_reasons": [],
+    "heartbeat": {
+      "status": "running",
+      "ready": true,
+      "scheduler_started_at": "2026-09-08T13:03:30.010713+00:00",
+      "last_heartbeat_at": "2026-09-08T13:07:30.841856+00:00",
+      "last_job_started_at": "2026-09-08T13:04:30.020097+00:00",
+      "last_error_code": null,
+      "last_job_finished_at": "2026-09-08T13:03:30.008824+00:00",
+      "last_job_status": "DEFERRED_DURABLE_REFRESH_PENDING",
+      "scheduler_ready": true,
+      "last_scheduler_heartbeat_at": "2026-09-08T13:07:29.958927+00:00",
+      "last_job_progress_at": "2026-09-08T13:07:30.841698+00:00",
+      "job_phase": "TaiwanStockTradingDailyReport:TaiwanStockTradingDailyReport completed=1 failed=0",
+      "next_expected_run_at": "2026-09-08T13:30:00+00:00",
+      "current_job_run_id": 5453,
+      "registered_scheduler_job_ids": [
+        "main-sync",
+        "market-closed-hourly-refresh",
+        "market-open-sync",
+        "retry-sync"
+      ],
+      "scheduler_jobs": {
+        "main-sync": {
+          "next_expected_fire_at": "2026-09-08T13:30:00+00:00",
+          "last_started_fire_at": null,
+          "last_completed_fire_at": null,
+          "last_event": "REGISTERED",
+          "last_event_at": "2026-09-08T13:03:30.010746+00:00",
+          "last_error_code": null
+        },
+        "retry-sync": {
+          "next_expected_fire_at": "2026-09-08T15:00:00+00:00",
+          "last_started_fire_at": null,
+          "last_completed_fire_at": null,
+          "last_event": "REGISTERED",
+          "last_event_at": "2026-09-08T13:03:30.010766+00:00",
+          "last_error_code": null
+        },
+        "market-open-sync": {
+          "next_expected_fire_at": "2026-09-09T01:00:00+00:00",
+          "last_started_fire_at": null,
+          "last_completed_fire_at": null,
+          "last_event": "REGISTERED",
+          "last_event_at": "2026-09-08T13:03:30.010805+00:00",
+          "last_error_code": null
+        },
+        "market-closed-hourly-refresh": {
+          "next_expected_fire_at": "2026-09-08T14:00:00+00:00",
+          "last_started_fire_at": null,
+          "last_completed_fire_at": null,
+          "last_event": "REGISTERED",
+          "last_event_at": "2026-09-08T13:03:30.010819+00:00",
+          "last_error_code": null
+        }
+      },
+      "last_scheduler_event_at": "2026-09-08T13:03:30.010713+00:00",
+      "market_session": {
+        "state": "CLOSED",
+        "monitoring_active": false,
+        "reason": "outside_continuous_trading_hours",
+        "timezone": "Asia/Taipei",
+        "local_date": "2026-09-08",
+        "local_time": "21:07:29",
+        "open_time": "09:00:00",
+        "close_time": "13:30:00",
+        "calendar_version": "tw-exchange-2026-v1",
+        "calendar_hash": "245382ea5cb79419654219e8eef2303664a79037765f12e10fdfc86361ef4e5b"
+      },
+      "closed_market_refresh_status": "EXISTING_JOB_REUSED",
+      "closed_market_refresh_job_id": 5453,
+      "closed_market_refresh_checked_at": "2026-09-08T13:00:00.035308+00:00"
+    },
+    "age_seconds": 1,
+    "overdue": false
+  },
+  "batch_after": {
+    "job_id": 5453,
+    "status": "RUNNING",
+    "run_mode": "universe_fixed_budget_refresh_and_score",
+    "trigger": "closed_market_hourly",
+    "schedule_hour": "2026-09-08T12:00:00+00:00",
+    "target_date": "2026-09-07",
+    "phase": "refreshing_stock",
+    "current_stock_id": "1323",
+    "progress": {
+      "completed": 99,
+      "total": 1911
+    },
+    "budget": {
+      "limit": 3500,
+      "used": 2394,
+      "remaining": 1106
+    },
+    "next_retry_at": null,
+    "skipped_no_data_count": 336,
+    "started_at": "2026-09-08T12:00:01.746730Z",
+    "finished_at": null,
+    "error_code": null
+  },
+  "secrets_included": false
+}
