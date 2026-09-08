@@ -278,7 +278,7 @@ def test_stock_level_missing_responses_do_not_block_queue(monkeypatch: pytest.Mo
             if source_rows:
                 assert "保留取得的資料" in payload["details"]["message"]
         with SessionLocal() as db:
-            from app.main import _universe_budget_queue
+            from app.refresh_queue import _universe_budget_queue
             assert stock_id not in _universe_budget_queue(db)[0]
     finally:
         with SessionLocal() as db:
@@ -380,7 +380,7 @@ def test_five_empty_attempts_survive_jobs_and_restart(monkeypatch, tmp_path, his
             # New job, session, and budget file model separate button clicks
             # and a worker restart; the sixth job contains a stale queued ID.
             with SessionLocal() as db:
-                from app.main import _universe_budget_queue
+                from app.refresh_queue import _universe_budget_queue
                 assert (stock_id in _universe_budget_queue(db)[0]) == (number <= 5)
                 job = JobRun(dataset=UNIVERSE_BUDGET_REFRESH_DATASET, status="QUEUED", started_at=datetime.now(timezone.utc), requested_end_date=date(2026, 8, 20), checkpoint_state={"stock_ids": [stock_id], "cycle_stock_ids": [stock_id], "budget": {"limit": 1, "used": 0, "remaining": 1}})
                 db.add(job)
@@ -407,7 +407,7 @@ def test_five_empty_attempts_survive_jobs_and_restart(monkeypatch, tmp_path, his
 
 
 def test_legacy_counts_and_success_history_are_preserved():
-    from app.main import _universe_budget_queue
+    from app.refresh_queue import _universe_budget_queue
     stock_id = "9995"
     now = datetime.now(timezone.utc)
     with SessionLocal() as db:

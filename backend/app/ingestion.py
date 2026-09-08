@@ -10,9 +10,9 @@ from sqlalchemy import func, inspect, select, text, tuple_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from .calendar import CALENDAR_HASH, CALENDAR_VERSION, completed_source_end_date, expected_trading_sessions, missing_sessions
+from .calendar import CALENDAR_HASH, CALENDAR_VERSION, completed_source_end_date, expected_trading_sessions, market_session_state, missing_sessions
 from .features import build_features
-from .finmind import CAPABILITY_ONLY_DATASETS, GLOBAL_PROVIDER_FAILURE_CODES, FinMindClient, FinMindError, SchemaMismatch
+from .finmind import AUTOMATIC_REFRESH_PAUSED, CAPABILITY_ONLY_DATASETS, GLOBAL_PROVIDER_FAILURE_CODES, FinMindClient, FinMindError, SchemaMismatch
 from .models import (
     AccumulationFeature, AccumulationScore, BrokerDaily, CapitalAwareScore, DataSyncStatus, ForeignShareholdingDaily,
     HoldingDistribution, InstitutionalDaily, JobRun, PriceDaily, ScoreVersion, SourceRevision, Stock,
@@ -1002,13 +1002,13 @@ async def fetch_and_score_stock(
             fatal = metrics.get("fatal_code") if isinstance(metrics, dict) else None
             if fatal:
                 fetch_errors.append({"dataset": dataset, "error_code": str(fatal)})
-                if fatal in GLOBAL_PROVIDER_FAILURE_CODES:
+                if fatal in (GLOBAL_PROVIDER_FAILURE_CODES | {AUTOMATIC_REFRESH_PAUSED}):
                     checkpoint("provider_blocked", datasets=datasets, fetch_errors=fetch_errors, quota=quota, progress={"completed": completed, "total": len(plan)})
                     break
         except FinMindError as exc:
             datasets[dataset] = {"status": "FAILED", "error_code": exc.code, "records_accepted": accepted, "rows_versioned": versioned}
             fetch_errors.append({"dataset": dataset, "error_code": exc.code})
-            if exc.code in GLOBAL_PROVIDER_FAILURE_CODES:
+            if exc.code in (GLOBAL_PROVIDER_FAILURE_CODES | {AUTOMATIC_REFRESH_PAUSED}):
                 checkpoint("provider_blocked", datasets=datasets, fetch_errors=fetch_errors, quota=quota, progress={"completed": completed, "total": len(plan)})
                 break
         except Exception as exc:
@@ -1017,6 +1017,16 @@ async def fetch_and_score_stock(
             fetch_errors.append({"dataset": dataset, "error_code": code})
         checkpoint(f"fetched:{dataset}", datasets=datasets, fetch_errors=fetch_errors, quota=quota, progress={"completed": completed, "total": len(plan)})
 
+    guard = getattr(client, "request_guard", None)
+    if guard is not None:
+        try:
+            guard()
+        except FinMindError as exc:
+            fetch_errors.append({"dataset": "market_session", "error_code": exc.code})
+    if any(item.get("error_code") == AUTOMATIC_REFRESH_PAUSED for item in fetch_errors):
+        result = {"datasets": datasets, "fetch_errors": fetch_errors, "score": None, "readiness": None}
+        _job_finish(db, score_job, "PARTIAL", error_code=AUTOMATIC_REFRESH_PAUSED, checkpoint_state=_jsonable({**result, "phase": "waiting_for_market_close"}))
+        return result
     checkpoint("scoring", datasets=datasets, fetch_errors=fetch_errors, quota=quota, progress={"completed": len(plan), "total": len(plan)})
     evaluation_cutoff = _now()
     target_evaluation = _evaluate_stock_inputs(db, stock_id, target, evaluation_cutoff)
@@ -1099,6 +1109,8 @@ def universe_budget_job_payload(job: JobRun) -> dict[str, Any]:
         "job_id": job.id,
         "status": job.status,
         "run_mode": "universe_fixed_budget_refresh_and_score",
+        "trigger": checkpoint.get("trigger", "manual"),
+        "schedule_hour": checkpoint.get("schedule_hour"),
         "target_date": job.requested_end_date,
         "phase": checkpoint.get("phase", "queued"),
         "current_stock_id": checkpoint.get("current_stock_id"),
@@ -1217,6 +1229,21 @@ async def resume_universe_budget_refresh_job(
         checkpoint["budget"] = snapshot
         return snapshot
 
+    def pause_for_market() -> dict[str, Any]:
+        sync_budget()
+        checkpoint.update({"phase": "waiting_for_market_close", "next_retry_at": None})
+        job.status = "QUEUED"
+        job.error_code = AUTOMATIC_REFRESH_PAUSED
+        job.checkpoint_state = _jsonable(checkpoint)
+        db.commit()
+        return universe_budget_job_payload(job)
+
+    def market_allows_run() -> bool:
+        return checkpoint.get("trigger") != "closed_market_hourly" or market_session_state().get("state") == "CLOSED"
+
+    if not market_allows_run():
+        return pause_for_market()
+
     next_retry_at = checkpoint.get("next_retry_at")
     if next_retry_at:
         try:
@@ -1236,6 +1263,8 @@ async def resume_universe_budget_refresh_job(
     db.commit()
 
     while True:
+        if not market_allows_run():
+            return pause_for_market()
         budget = sync_budget()
         if budget["used"] >= budget["limit"]:
             _job_finish(
@@ -1283,6 +1312,8 @@ async def resume_universe_budget_refresh_job(
         except FinMindError as exc:
             checkpoint["quota"] = {"status": "FAILED", "error_code": exc.code}
             sync_budget()
+            if exc.code == AUTOMATIC_REFRESH_PAUSED:
+                return pause_for_market()
             if exc.code in {"AUTHENTICATION_FAILED", "ACCESS_DENIED", "SCHEMA_MISMATCH"}:
                 _job_finish(db, job, "FAILED", error_code=exc.code, error=str(exc), checkpoint_state=_jsonable({**checkpoint, "phase": "failed"}))
                 return universe_budget_job_payload(job)
@@ -1333,6 +1364,8 @@ async def resume_universe_budget_refresh_job(
         db.commit()
 
         error_codes = {str(item.get("error_code")) for item in result.get("fetch_errors", []) if item.get("error_code")}
+        if AUTOMATIC_REFRESH_PAUSED in error_codes:
+            return pause_for_market()
         if "JOB_REQUEST_BUDGET_EXHAUSTED" in error_codes:
             continue
         if "QUOTA_EXHAUSTED" in error_codes or any(

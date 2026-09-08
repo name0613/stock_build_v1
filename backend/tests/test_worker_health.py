@@ -19,9 +19,9 @@ def _payload(now: datetime) -> dict[str, object]:
             "last_event_at": stamp,
             "last_error_code": None,
         }
-        for job_id in ("main-sync", "retry-sync", "market-open-sync")
+        for job_id in ("main-sync", "retry-sync", "market-open-sync", "market-closed-hourly-refresh")
     }
-    return {"status": "idle", "ready": True, "scheduler_ready": True, "last_heartbeat_at": stamp, "last_scheduler_heartbeat_at": stamp, "scheduler_started_at": stamp, "next_expected_run_at": (now + timedelta(hours=1)).isoformat(), "registered_scheduler_job_ids": ["main-sync", "retry-sync", "market-open-sync"], "scheduler_jobs": job_state}
+    return {"status": "idle", "ready": True, "scheduler_ready": True, "last_heartbeat_at": stamp, "last_scheduler_heartbeat_at": stamp, "scheduler_started_at": stamp, "next_expected_run_at": (now + timedelta(hours=1)).isoformat(), "registered_scheduler_job_ids": list(job_state), "scheduler_jobs": job_state}
 
 
 def test_health_requires_scheduler_contract_not_only_pulse() -> None:

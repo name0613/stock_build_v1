@@ -29,3 +29,12 @@ Trading_money, estimated institutional net value, ratio, confirmation count
 and gate reasons. `/api/summary` reports v7 scorable, data-insufficient and
 gate-excluded counts. A v7 score is only regenerated from persisted source
 rows by the same PIT scoring job; missing formal Trading_money is not filled.
+
+
+## 休市每小時自動補抓與評分
+
+Worker 以 Asia/Taipei 時區在每小時整點檢查交易日曆，只有 CLOSED 才建立自動作業（週末及日曆內的休市日也會執行）；OPEN 或 UNKNOWN 不建立、不續跑自動作業。與手動「使用 3,500 額度補抓並評分」共用缺資料優先佇列、逐檔刷新與評分、3,500 次資料請求上限及額度等待機制。既有未完成作業優先續跑，不另開一輪，同一整點時段重複觸發也不重建。
+
+每分鐘 dispatcher 領取佇列及重試；自動作業每次 HTTP 請求（含 quota probe、重試）及評分前重新確認休市，跨入開市時停止新請求並保存進度與預算，已送出的請求可完成並保存資料。開盤暫停不累計股票的無資料失敗次數；手動作業保留原有行為。每輪目標來源日遵守 completed_source_end_date：21:00 前使用最近已完成來源日。既有夜間同步及開市輕量同步保持原排程，與本功能共用 worker provider lock。
+
+重啟後從下一整點建立新輪次，未完成自動作業仍受休市限制並由 dispatcher 接續。健康檢查註冊 market-closed-hourly-refresh，API 回傳 trigger / schedule_hour / phase / budget；前端會自動發現排程作業並顯示進度。

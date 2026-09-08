@@ -37,6 +37,7 @@ PROVIDER_EMPTY_RANGE_CONTRACT_VERSION = "finmind-successful-filtered-empty-data-
 HOLDING_PUBLICATION_WAIT_STATE = "WAITING_FOR_PROVIDER_PUBLICATION"
 HOLDING_PUBLICATION_PARTIAL_STATE = "HOLDING_PUBLICATION_PARTIAL"
 HOLDING_PUBLICATION_CANARY_STOCK_ID = "2330"
+AUTOMATIC_REFRESH_PAUSED = "AUTOMATIC_REFRESH_MARKET_NOT_CLOSED"
 GLOBAL_PROVIDER_FAILURE_CODES = frozenset({
     "AUTHENTICATION_FAILED",
     "ACCESS_DENIED",
@@ -372,7 +373,7 @@ class RateLimiter:
 
 
 class FinMindClient:
-    def __init__(self, settings: Settings | None = None, *, request_budget: FinMindRequestBudget | None = None):
+    def __init__(self, settings: Settings | None = None, *, request_budget: FinMindRequestBudget | None = None, request_guard: Callable[[], None] | None = None):
         self.settings = settings or get_settings()
         self.store = RawEvidenceStore(self.settings.raw_root)
         self.timeout = httpx.Timeout(30.0, connect=10.0)
@@ -384,6 +385,7 @@ class FinMindClient:
         # provider-safe limit.
         self._request_interval = 1 / max(self.settings.provider_rate_per_second, 0.1)
         self.request_budget = request_budget
+        self.request_guard = request_guard
 
     def _wait_for_http_attempt(self) -> None:
         """Apply one process-wide budget to every physical HTTP attempt."""
@@ -392,6 +394,8 @@ class FinMindClient:
             delay = self._next_request_at - now
             if delay > 0:
                 time.sleep(delay)
+            if self.request_guard is not None:
+                self.request_guard()
             self._next_request_at = time.monotonic() + self._request_interval
 
     def _request_spec(self, dataset: str, data_id: str | None, start_date: str | None, end_date: str | None, securities_trader_id: str | None = None) -> tuple[str, dict[str, str]]:
@@ -478,9 +482,9 @@ class FinMindClient:
         last_error: FinMindError | None = None
         for attempt in range(self.settings.broker_max_retries + 1):
             try:
+                self._wait_for_http_attempt()
                 if self.request_budget is not None:
                     self.request_budget.reserve()
-                self._wait_for_http_attempt()
                 with httpx.Client(base_url=self.settings.finmind_base_url, timeout=self.timeout, follow_redirects=True) as client:
                     response = client.get(endpoint, params=params)
                 if response.status_code == 401:
@@ -545,7 +549,7 @@ class FinMindClient:
                 last_error = FinMindError("TIMEOUT" if isinstance(exc, httpx.TimeoutException) else "NETWORK_ERROR", "FinMind network request failed")
             except FinMindError as exc:
                 last_error = exc
-                if exc.code in {"AUTHENTICATION_FAILED", "ACCESS_DENIED", "QUOTA_EXHAUSTED", "SCHEMA_MISMATCH", "NON_RETRYABLE_4XX", "JOB_REQUEST_BUDGET_EXHAUSTED"}:
+                if exc.code in {"AUTHENTICATION_FAILED", "ACCESS_DENIED", "QUOTA_EXHAUSTED", "SCHEMA_MISMATCH", "NON_RETRYABLE_4XX", "JOB_REQUEST_BUDGET_EXHAUSTED", AUTOMATIC_REFRESH_PAUSED}:
                     raise
             if attempt < self.settings.broker_max_retries:
                 delay = last_error.retry_after if last_error and last_error.retry_after is not None else min(30, 2 ** attempt + random.random())
@@ -836,7 +840,7 @@ class FinMindClient:
                 except FinMindError as exc:
                     async with checkpoint_lock:
                         permanent = exc.code in {"NON_RETRYABLE_4XX", "SCHEMA_MISMATCH", "STOCK_SCHEMA_MISMATCH"}
-                        global_fatal = exc.code in GLOBAL_PROVIDER_FAILURE_CODES and not permanent
+                        global_fatal = exc.code in (GLOBAL_PROVIDER_FAILURE_CODES | {AUTOMATIC_REFRESH_PAUSED}) and not permanent
                         retryable = not (global_fatal or permanent)
                         failed_by_key = {item.get("key"): item for item in checkpoint.setdefault("failed", [])}
                         previous = failed_by_key.get(checkpoint_key, {})
@@ -1265,7 +1269,7 @@ class FinMindClient:
                 try:
                     records, meta = await asyncio.to_thread(self.fetch, dataset, stock_id, request_start, request_end)
                 except FinMindError as exc:
-                    global_fatal = exc.code in GLOBAL_PROVIDER_FAILURE_CODES
+                    global_fatal = exc.code in (GLOBAL_PROVIDER_FAILURE_CODES | {AUTOMATIC_REFRESH_PAUSED})
                     classification = "global_fatal" if global_fatal else ("permanent_failed" if exc.code == "NON_RETRYABLE_4XX" else "retryable_failed")
                     await mark_failure(stock_id, exc.code, classification, global_fatal=global_fatal)
                     if progress_callback:

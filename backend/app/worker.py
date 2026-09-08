@@ -17,7 +17,8 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 from .config import get_settings
 from .db import SessionLocal, init_db
-from .finmind import FinMindClient, FinMindRequestBudget
+from .finmind import AUTOMATIC_REFRESH_PAUSED, FinMindClient, FinMindError, FinMindRequestBudget
+from .refresh_queue import queue_universe_budget_refresh
 from .ingestion import FAVORITE_REFRESH_DATASET, UNIVERSE_BUDGET_LIMIT, UNIVERSE_BUDGET_REFRESH_DATASET, catch_up, intraday_sync, resume_favorite_refresh_job, resume_universe_budget_refresh_job, seed_score_version
 from .calendar import MARKET_CLOSE_TIME, MARKET_OPEN_TIME, completed_source_end_date, is_trading_session, market_session_state, source_publication_window_open
 from .models import JobRun
@@ -27,7 +28,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 logger = logging.getLogger(__name__)
 settings = get_settings()
 OPEN_MARKET_SYNC_JOB_ID = "market-open-sync"
-SCHEDULE_CONTRACT = {"main-sync": (21, 30), "retry-sync": (23, 0), OPEN_MARKET_SYNC_JOB_ID: (9, 0)}
+CLOSED_MARKET_REFRESH_JOB_ID = "market-closed-hourly-refresh"
+SCHEDULE_CONTRACT = {"main-sync": (21, 30), "retry-sync": (23, 0), OPEN_MARKET_SYNC_JOB_ID: (9, 0), CLOSED_MARKET_REFRESH_JOB_ID: (0, 0)}
 _heartbeat_lock = Lock()
 _scheduler_state_lock = Lock()
 _provider_work_lock = Lock()
@@ -94,6 +96,8 @@ def _next_job_fire_at(job_id: str, now: datetime | None = None) -> str:
         return _next_open_market_fire_at(now)
     current = now or datetime.now(timezone.utc)
     local = current.astimezone(ZoneInfo(settings.timezone))
+    if job_id == CLOSED_MARKET_REFRESH_JOB_ID:
+        return (local.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)).astimezone(timezone.utc).isoformat()
     hour, minute = SCHEDULE_CONTRACT[job_id]
     for day_offset in range(0, 8):
         day = local + timedelta(days=day_offset)
@@ -256,14 +260,45 @@ def run_intraday_sync() -> None:
 REFRESH_ACTIVE_STATUSES = ("QUEUED", "RUNNING", "WAITING_FOR_QUOTA", "WAITING_FOR_PROVIDER")
 
 
+def _require_closed_market() -> None:
+    if market_session_state().get("state") != "CLOSED":
+        raise FinMindError(AUTOMATIC_REFRESH_PAUSED, "automatic refresh waits for a confirmed closed market")
+
+
+def run_closed_market_refresh() -> None:
+    """Queue at most one shared-budget job per hour; the minute dispatcher runs it."""
+    session = market_session_state()
+    if session.get("state") != "CLOSED":
+        _heartbeat(market_session=session, closed_market_refresh_status="SKIPPED_MARKET_NOT_CLOSED")
+        return
+    with SessionLocal() as db:
+        try:
+            job, created = queue_universe_budget_refresh(db, _completed_source_end_date(), automatic=True)
+        except ValueError as exc:
+            if str(exc) != "NO_ELIGIBLE_STOCKS":
+                raise
+            _heartbeat(closed_market_refresh_status="NO_ELIGIBLE_STOCKS")
+            return
+        _heartbeat(
+            closed_market_refresh_status="QUEUED" if created else "EXISTING_JOB_REUSED",
+            closed_market_refresh_job_id=job.id,
+            closed_market_refresh_checked_at=datetime.now(timezone.utc).isoformat(),
+        )
+
+
 def _next_durable_refresh_job(db: object, dataset: str | None = None) -> JobRun | None:
     datasets = (dataset,) if dataset else (FAVORITE_REFRESH_DATASET, UNIVERSE_BUDGET_REFRESH_DATASET)
-    return (
+    jobs = (
         db.query(JobRun)
         .filter(JobRun.dataset.in_(datasets), JobRun.status.in_(REFRESH_ACTIVE_STATUSES))
         .order_by(JobRun.id.asc())
-        .first()
+        .all()
     )
+    for job in jobs:
+        if (job.checkpoint_state or {}).get("trigger") == "closed_market_hourly" and market_session_state().get("state") != "CLOSED":
+            continue
+        return job
+    return None
 
 
 def _run_durable_refresh(dataset: str | None = None) -> None:
@@ -293,7 +328,8 @@ def _run_durable_refresh(dataset: str | None = None) -> None:
                 budget_file,
                 used=int(budget_state.get("used", 0) or 0),
             )
-            client = FinMindClient(settings, request_budget=request_budget)
+            guard = _require_closed_market if checkpoint.get("trigger") == "closed_market_hourly" else None
+            client = FinMindClient(settings, request_budget=request_budget, request_guard=guard)
             coroutine = resume_universe_budget_refresh_job(db, client, job, progress_callback=report_progress)
 
         _heartbeat(status="running", ready=True, last_job_started_at=datetime.now(timezone.utc).isoformat(), current_job_run_id=job.id, job_phase=phase, last_error_code=None)
@@ -373,6 +409,7 @@ def main() -> None:
         misfire_grace_time=300,
     )
     scheduler.add_job(run_durable_refresh, IntervalTrigger(minutes=1, timezone=settings.timezone), id="durable-refresh-resume", replace_existing=True, max_instances=1, coalesce=True, misfire_grace_time=60)
+    scheduler.add_job(run_closed_market_refresh, CronTrigger(minute=0, timezone=settings.timezone), id=CLOSED_MARKET_REFRESH_JOB_ID, replace_existing=True, max_instances=1, coalesce=True, misfire_grace_time=300)
     scheduler.add_listener(_scheduler_listener, EVENT_JOB_SUBMITTED | EVENT_JOB_EXECUTED | EVENT_JOB_ERROR | EVENT_JOB_MISSED)
     _scheduler_runtime = scheduler
     logger.info("worker scheduled timezone=%s", settings.timezone)
