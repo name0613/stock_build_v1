@@ -331,3 +331,24 @@ test("favorite star toggles and the status filter shows only favorites", async (
   await page.getByRole("button", { name: "移除我的最愛" }).click();
   await expect(page.getByText("尚無可呈現資料。請先完成 FinMind 同步；系統不會以 0 偽造缺失資料。")).toBeVisible();
 });
+
+
+test("favorite batch finishes with visible source gaps and re-enables refresh", async ({ page }) => {
+  let started = false;
+  let polls = 0;
+  await page.route("**/api/favorites/fetch-and-score**", async route => {
+    if (route.request().method() === "POST") { started = true; polls = 0; }
+    if (!started) return route.fulfill({ status: 404, json: { detail: "not started" } });
+    const done = route.request().method() !== "POST" && ++polls >= 2;
+    return route.fulfill({ json: { job_id: 4824, status: done ? "PARTIAL" : "RUNNING", current_stock_id: done ? null : "2892", progress: { completed: done ? 73 : 1, total: 73 }, partial_stock_ids: ["3147"], partial_stock_count: 1 } });
+  });
+  await page.goto("/");
+  const button = page.getByTestId("favorite-refresh-button");
+  await button.click();
+  await expect(button).toContainText("1/73");
+  await expect(button).toBeDisabled();
+  await expect(page.getByTestId("favorite-refresh-partial-status")).toContainText("來源缺漏 1 檔：3147");
+  await expect(page.getByTestId("favorite-refresh-status")).toContainText("已處理 73/73", { timeout: 10000 });
+  await expect(page.getByTestId("favorite-refresh-status")).toContainText("部分完成");
+  await expect(button).toBeEnabled();
+});

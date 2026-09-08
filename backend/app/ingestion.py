@@ -1054,6 +1054,7 @@ def favorite_refresh_job_payload(job: JobRun) -> dict[str, Any]:
     checkpoint = job.checkpoint_state if isinstance(job.checkpoint_state, dict) else {}
     stock_ids = [str(value) for value in checkpoint.get("stock_ids", [])]
     completed = [str(value) for value in checkpoint.get("completed_stock_ids", [])]
+    partial_stock_ids = [stock_id for stock_id in completed if checkpoint.get("stock_progress", {}).get(stock_id, {}).get("refresh_status") == "PARTIAL"]
     return {
         "job_id": job.id,
         "status": job.status,
@@ -1063,6 +1064,8 @@ def favorite_refresh_job_payload(job: JobRun) -> dict[str, Any]:
         "current_stock_id": checkpoint.get("current_stock_id"),
         "ordered_stock_ids": stock_ids,
         "completed_stock_ids": completed,
+        "partial_stock_ids": partial_stock_ids,
+        "partial_stock_count": len(partial_stock_ids),
         "progress": {"completed": len(completed), "total": len(stock_ids)},
         "next_retry_at": checkpoint.get("next_retry_at"),
         "quota": checkpoint.get("quota"),
@@ -1393,6 +1396,32 @@ async def resume_universe_budget_refresh_job(
         db.commit()
 
 
+def _proven_stock_refresh_gaps(datasets: dict[str, Any], error_codes: set[str]) -> dict[str, Any] | None:
+    """Only successful provider responses with known stock coverage gaps qualify.
+
+    Refresh completeness covers the entire download window, which can exceed
+    the scoring window (e.g. 8-week holdings versus required 4-week holdings).
+    Keep these gaps explicit without blocking the rest of a favorite batch.
+    Unattempted datasets, transport failures and unknown errors still retry.
+    """
+    if error_codes or not set(datasets) >= set(FAVORITE_REFRESH_DATASETS):
+        return None
+    gaps = {}
+    for dataset in FAVORITE_REFRESH_DATASETS:
+        value = datasets[dataset]
+        if not isinstance(value, dict) or value.get("fatal_code") or value.get("error_code"):
+            return None
+        if value.get("refresh_complete") is True:
+            continue
+        codes = value.get("failure_codes") or []
+        if not codes or not set(codes) <= {"EMPTY_RESPONSE_UNVERIFIED", "PARTIAL_OBSERVATION_COVERAGE"}:
+            return None
+        if int(value.get("quota_unselected_pending_count", 0) or 0) > 0:
+            return None
+        gaps[dataset] = value
+    return gaps or None
+
+
 async def resume_favorite_refresh_job(
     db: Session,
     client: FinMindClient,
@@ -1406,6 +1435,8 @@ async def resume_favorite_refresh_job(
     in the score order captured when the user pressed the button. Completed
     datasets and stocks are never repeated after a restart or quota reset.
     """
+    if job.status in {"SUCCESS", "PARTIAL", "FAILED"}:
+        return favorite_refresh_job_payload(job)
     checkpoint = dict(job.checkpoint_state or {})
     stock_ids = [str(value) for value in checkpoint.get("stock_ids", [])]
     completed_stock_ids = [str(value) for value in checkpoint.get("completed_stock_ids", [])]
@@ -1472,7 +1503,12 @@ async def resume_favorite_refresh_job(
             force_refresh=True,
             refreshed_datasets=refreshed,
         )
-        merged_datasets = {**dict(previous.get("datasets", {})), **dict(result.get("datasets", {}))}
+        merged_datasets = dict(previous.get("datasets", {}))
+        for dataset, value in dict(result.get("datasets", {})).items():
+            # A checkpoint reuse marker has no counts or provenance. Preserve
+            # the completed observation across quota waits and worker restarts.
+            if not (isinstance(value, dict) and value.get("status") == "REUSED_REFRESH_CHECKPOINT" and dataset in merged_datasets):
+                merged_datasets[dataset] = value
         current = {
             "datasets": merged_datasets,
             "score": result.get("score"),
@@ -1501,7 +1537,18 @@ async def resume_favorite_refresh_job(
             _job_finish(db, job, "FAILED", stocks_completed=len(completed_stock_ids), stocks_failed=1, error_code=code, checkpoint_state=_jsonable({**checkpoint, "phase": "failed"}))
             return favorite_refresh_job_payload(job)
         if completed_datasets != set(FAVORITE_REFRESH_DATASETS):
+            gaps = _proven_stock_refresh_gaps(merged_datasets, error_codes)
+            if gaps is None:
+                return _favorite_wait(db, job, checkpoint, "WAITING_FOR_PROVIDER", "REFRESH_INCOMPLETE")
+            current.update({
+                "refresh_status": "PARTIAL",
+                "incomplete_datasets": list(gaps),
+                "message": "已保留取得的資料與評分；部分來源仍缺漏，本次不再反覆補抓，繼續處理下一檔。",
+            })
+        elif error_codes:
             return _favorite_wait(db, job, checkpoint, "WAITING_FOR_PROVIDER", "REFRESH_INCOMPLETE")
+        else:
+            current["refresh_status"] = "SUCCESS"
 
         completed_stock_ids.append(stock_id)
         completed_set.add(stock_id)
@@ -1510,11 +1557,13 @@ async def resume_favorite_refresh_job(
         job.checkpoint_state = _jsonable(checkpoint)
         db.commit()
 
+    partial_count = sum(stock_progress.get(stock_id, {}).get("refresh_status") == "PARTIAL" for stock_id in completed_stock_ids)
     _job_finish(
         db,
         job,
-        "SUCCESS",
+        "PARTIAL" if partial_count else "SUCCESS",
         stocks_completed=len(completed_stock_ids),
+        stocks_failed=partial_count,
         checkpoint_state=_jsonable({**checkpoint, "phase": "completed", "current_stock_id": None, "next_retry_at": None}),
     )
     return favorite_refresh_job_payload(job)
