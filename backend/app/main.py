@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 import json
 import re
@@ -18,13 +17,14 @@ from .config import get_settings
 from .db import SessionLocal, get_db, init_db
 from .finmind import GLOBAL_PROVIDER_FAILURE_CODES
 from .features import build_features, holding_distribution_features
-from .ingestion import FAVORITE_REFRESH_DATASET, TARGETED_STOCK_SYNC_DATASET, UNIVERSE_BUDGET_REFRESH_DATASET, authoritative_expected_latest_source_date, authoritative_source_state_hash, evaluate_stock_readiness, evaluate_universe_readiness, favorite_refresh_job_payload, fetch_and_score_stock, latest_ready_stock_evaluation, score_existing_data, score_snapshot_state, seed_score_version, stock_refresh_issue_payload, universe_budget_job_payload
+from .ingestion import FAVORITE_REFRESH_DATASET, TARGETED_STOCK_SYNC_DATASET, UNIVERSE_BUDGET_REFRESH_DATASET, authoritative_expected_latest_source_date, authoritative_source_state_hash, evaluate_stock_readiness, evaluate_universe_readiness, favorite_refresh_job_payload, latest_ready_stock_evaluation, score_existing_data, score_snapshot_state, seed_score_version, stock_refresh_issue_payload, universe_budget_job_payload
 from .refresh_queue import PARTIAL_SOURCE_SPECS, queue_universe_budget_refresh
 from .models import AccumulationFeature, AccumulationScore, BrokerDaily, CapitalAwareScore, DataSyncStatus, ForeignShareholdingDaily, HoldingDistribution, InstitutionalDaily, JobRun, PriceDaily, Stock, StockRefreshIssue
 from .schemas import PaginatedStocks, StockListItem
 from .calendar import CALENDAR_HASH, CALENDAR_VERSION
 from .scoring import CAPITAL_AWARE_FORMULA_HASH, CAPITAL_AWARE_SCORE_MANIFEST, CAPITAL_AWARE_SCORE_VERSION, FORMULA_HASH, SCORE_MANIFEST, SCORE_VERSION
 from .worker_health import evaluate_health
+from .manual_refresh import MANUAL_STOCK_REFRESH_DATASET, manual_stock_job_payload as _targeted_score_job_payload, queue_manual_stock_refresh
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -47,7 +47,6 @@ HOLDING_DISTRIBUTION_DATASET = "TaiwanStockHoldingSharesPer"
 FAVORITE_REFRESH_ACTIVE_STATUSES = ("QUEUED", "RUNNING", "WAITING_FOR_QUOTA", "WAITING_FOR_PROVIDER")
 
 _MANUAL_SCORE_LOCK = Lock()
-_TARGETED_SCORE_LOCK = Lock()
 
 
 @app.on_event("startup")
@@ -239,67 +238,6 @@ def _run_manual_score(job_id: int, target: date) -> None:
     finally:
         db.close()
         _MANUAL_SCORE_LOCK.release()
-
-
-def _targeted_score_job_payload(job: JobRun) -> dict[str, Any]:
-    checkpoint = job.checkpoint_state if isinstance(job.checkpoint_state, dict) else {}
-    return {
-        "job_id": job.id,
-        "stock_id": checkpoint.get("stock_id"),
-        "status": job.status,
-        "run_mode": checkpoint.get("run_mode", "targeted_fetch_and_score"),
-        "target_date": job.requested_end_date,
-        "evaluated_source_date": checkpoint.get("evaluated_source_date"),
-        "fallback_applied": bool(checkpoint.get("fallback_applied", False)),
-        "fallback_reason": checkpoint.get("fallback_reason"),
-        "phase": checkpoint.get("phase"),
-        "progress": checkpoint.get("progress", {"completed": 0, "total": 5}),
-        "started_at": job.started_at,
-        "finished_at": job.finished_at,
-        "datasets": checkpoint.get("datasets", {}),
-        "pre_readiness": checkpoint.get("pre_readiness"),
-        "readiness": checkpoint.get("readiness"),
-        "score": checkpoint.get("score"),
-        "fetch_errors": checkpoint.get("fetch_errors", []),
-        "quota": checkpoint.get("quota"),
-        "error_code": job.error_code,
-    }
-
-
-def _mark_targeted_score_failed(job_id: int, exc: Exception) -> None:
-    db = SessionLocal()
-    try:
-        job = db.get(JobRun, job_id)
-        if job is None or job.status != "RUNNING":
-            return
-        job.status = "FAILED"
-        job.finished_at = datetime.now(timezone.utc)
-        job.error_code = getattr(exc, "code", "TARGETED_SCORE_FAILED")
-        job.error = str(exc)[:500]
-        checkpoint = job.checkpoint_state if isinstance(job.checkpoint_state, dict) else {}
-        job.checkpoint_state = {**checkpoint, "phase": "failed"}
-        db.commit()
-    finally:
-        db.close()
-
-
-def _run_targeted_fetch_and_score(job_id: int, stock_id: str, target: date) -> None:
-    if not _TARGETED_SCORE_LOCK.acquire(blocking=False):
-        _mark_targeted_score_failed(job_id, RuntimeError("another targeted stock job is already running"))
-        return
-    db = SessionLocal()
-    try:
-        job = db.get(JobRun, job_id)
-        if job is None or job.status != "RUNNING":
-            return
-        from .finmind import FinMindClient
-        asyncio.run(fetch_and_score_stock(db, FinMindClient(settings), stock_id, target, job=job))
-    except Exception as exc:
-        db.rollback()
-        _mark_targeted_score_failed(job_id, exc)
-    finally:
-        db.close()
-        _TARGETED_SCORE_LOCK.release()
 
 
 @app.post("/api/score/current", status_code=202)
@@ -542,35 +480,12 @@ def rankings(kind: str = Query("top"), limit: int = Query(50, ge=1, le=200), db:
 
 
 @app.post("/api/stocks/{stock_id}/fetch-and-score", status_code=202)
-def start_targeted_fetch_and_score(stock_id: str, background_tasks: BackgroundTasks, source_date: date | None = Query(None), db: Session = Depends(get_db)) -> dict[str, Any]:
-    """Queue a single-stock missing-data fetch followed by immediate scoring."""
+def start_targeted_fetch_and_score(stock_id: str, source_date: date | None = Query(None), db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Persist an idempotent priority request; the worker owns all provider work."""
     stock = db.get(Stock, stock_id)
     if stock is None or not stock.is_common_stock:
         raise HTTPException(status_code=404, detail="stock not found")
-    running = db.scalar(
-        select(JobRun)
-        .where(JobRun.dataset == TARGETED_STOCK_SYNC_DATASET, JobRun.status == "RUNNING")
-        .order_by(JobRun.id.desc())
-        .limit(1)
-    )
-    if running is not None:
-        running_stock_id = (running.checkpoint_state or {}).get("stock_id") if isinstance(running.checkpoint_state, dict) else None
-        raise HTTPException(status_code=409, detail={"code": "TARGETED_SCORE_JOB_ALREADY_RUNNING", "job_id": running.id, "stock_id": running_stock_id})
-    target = _current_data_date(db, source_date)
-    job = JobRun(
-        dataset=TARGETED_STOCK_SYNC_DATASET,
-        requested_date=target,
-        requested_start_date=target,
-        requested_end_date=target,
-        status="RUNNING",
-        started_at=datetime.now(timezone.utc),
-        stocks_attempted=1,
-        checkpoint_state={"run_mode": "targeted_fetch_and_score", "stock_id": stock_id, "target_date": target.isoformat(), "phase": "queued", "progress": {"completed": 0, "total": 5}, "datasets": {}, "fetch_errors": []},
-    )
-    db.add(job)
-    db.commit()
-    db.refresh(job)
-    background_tasks.add_task(_run_targeted_fetch_and_score, job.id, stock_id, target)
+    job = queue_manual_stock_refresh(db, stock_id, _current_data_date(db, source_date))
     return _targeted_score_job_payload(job)
 
 
@@ -583,8 +498,8 @@ def targeted_fetch_and_score_status(stock_id: str, job_id: int | None = Query(No
     if job_id is not None:
         job = db.get(JobRun, job_id)
     else:
-        job = db.scalar(select(JobRun).where(JobRun.dataset == TARGETED_STOCK_SYNC_DATASET).order_by(JobRun.id.desc()).limit(1))
-    if job is None or job.dataset != TARGETED_STOCK_SYNC_DATASET or (job.checkpoint_state or {}).get("stock_id") != stock_id:
+        job = db.scalar(select(JobRun).where(JobRun.dataset == MANUAL_STOCK_REFRESH_DATASET, JobRun.checkpoint_state["stock_id"].as_string() == stock_id).order_by(JobRun.id.desc()).limit(1))
+    if job is None or job.dataset not in {MANUAL_STOCK_REFRESH_DATASET, TARGETED_STOCK_SYNC_DATASET} or (job.checkpoint_state or {}).get("stock_id") != stock_id:
         raise HTTPException(status_code=404, detail="targeted stock job not found")
     return _targeted_score_job_payload(job)
 

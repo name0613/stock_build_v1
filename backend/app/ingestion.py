@@ -4,7 +4,7 @@ from datetime import date, datetime, timedelta, timezone
 import hashlib
 import json
 import uuid
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable
 
 from sqlalchemy import func, inspect, select, text, tuple_
 from sqlalchemy.exc import IntegrityError
@@ -1216,6 +1216,7 @@ async def resume_universe_budget_refresh_job(
     job: JobRun,
     *,
     progress_callback: Callable[[str], None] | None = None,
+    stock_boundary_callback: Callable[[], Awaitable[None]] | None = None,
 ) -> dict[str, Any]:
     """Spend exactly the persisted per-click request budget, resuming safely."""
     checkpoint = dict(job.checkpoint_state or {})
@@ -1263,6 +1264,8 @@ async def resume_universe_budget_refresh_job(
     db.commit()
 
     while True:
+        if stock_boundary_callback:
+            await stock_boundary_callback()
         if not market_allows_run():
             return pause_for_market()
         budget = sync_budget()
@@ -1461,6 +1464,7 @@ async def resume_favorite_refresh_job(
     job: JobRun,
     *,
     progress_callback: Callable[[str], None] | None = None,
+    stock_boundary_callback: Callable[[], Awaitable[None]] | None = None,
 ) -> dict[str, Any]:
     """Resume one ordered favorites refresh until complete or provider-blocked.
 
@@ -1493,6 +1497,8 @@ async def resume_favorite_refresh_job(
     for stock_id in stock_ids:
         if stock_id in completed_set:
             continue
+        if stock_boundary_callback:
+            await stock_boundary_callback()
         checkpoint.update({"phase": "quota_check", "current_stock_id": stock_id})
         try:
             raw_quota = client.provider_quota(source_revision=getattr(client.settings, "source_revision", "runtime"))

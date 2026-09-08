@@ -39,7 +39,7 @@ docker compose up -d
 docker compose ps
 ```
 
-預設 Web port 是 `18080`；若 NAS 該 port 已占用，以 `WEB_PORT` 指定已驗證未使用的 LAN port。PostgreSQL 僅在 internal network；API 為了執行單股 FinMind 補抓而同時使用 internal 與 public egress bridge，但不發布 API port，LAN 只看到 nginx。
+預設 Web port 是 `18080`；若 NAS 該 port 已占用，以 `WEB_PORT` 指定已驗證未使用的 LAN port。PostgreSQL 僅在 internal network；API 為了查詢 FinMind 額度而同時使用 internal 與 public egress bridge，但不發布 API port，LAN 只看到 nginx。
 
 ## NAS deployment
 
@@ -87,3 +87,10 @@ Worker 以 Asia/Taipei 時區在每小時整點檢查交易日曆，只有 CLOSE
 每分鐘 dispatcher 領取佇列及重試；自動作業每次 HTTP 請求（含 quota probe、重試）及評分前重新確認休市，跨入開市時停止新請求並保存進度與預算，已送出的請求可完成並保存資料。開盤暫停不累計股票的無資料失敗次數；手動作業保留原有行為。每輪目標來源日遵守 completed_source_end_date：21:00 前使用最近已完成來源日。既有夜間同步及開市輕量同步保持原排程，與本功能共用 worker provider lock。
 
 重啟後從下一整點建立新輪次，未完成自動作業仍受休市限制並由 dispatcher 接續。健康檢查註冊 market-closed-hourly-refresh，API 回傳 trigger / schedule_hour / phase / budget；前端會自動發現排程作業並顯示進度。
+
+
+## 手動單股優先佇列
+
+單股補抓 POST 現在回傳 202 / QUEUED，同檔未完成請求會回傳原作業，不因全市場批次的單股子作業回傳 409。手動請求使用 manual_stock_refresh_score 持久化，由 worker 共享 provider lock 執行，API 不再啟動背景抓取。3500 與我的最愛批次在兩檔股票之間優先處理手動 FIFO 佇列，再接回原批次；已完成的股票、資料集及 3500 額度進度保留。夜間與盤中同步也在開始及結束時讓手動佇列先行。
+
+手動單股不受自動作業的開市暫停限制，但同樣遵守供應商剩餘額度與保留額度；不足或暫時失敗會保存來源進度，五分鐘後自動重試。worker 重啟會將中斷手動請求恢復 QUEUED。前端顯示已排隊／補抓中／等待額度並持續輪詢，重新進入個股頁也會恢復追蹤該股的手動作業。

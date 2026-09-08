@@ -22,6 +22,7 @@ from .refresh_queue import queue_universe_budget_refresh
 from .ingestion import FAVORITE_REFRESH_DATASET, UNIVERSE_BUDGET_LIMIT, UNIVERSE_BUDGET_REFRESH_DATASET, catch_up, intraday_sync, resume_favorite_refresh_job, resume_universe_budget_refresh_job, seed_score_version
 from .calendar import MARKET_CLOSE_TIME, MARKET_OPEN_TIME, completed_source_end_date, is_trading_session, market_session_state, source_publication_window_open
 from .models import JobRun
+from .manual_refresh import MANUAL_STOCK_REFRESH_DATASET, manual_job_due, resume_manual_stock_refresh
 from .worker_health import start_health_server
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -160,7 +161,7 @@ def _scheduler_listener(event: Any) -> None:
 
 def _reconcile_interrupted_jobs(db: object) -> None:
     for job in db.query(JobRun).filter(JobRun.status == "RUNNING").all():
-        if job.dataset in {FAVORITE_REFRESH_DATASET, UNIVERSE_BUDGET_REFRESH_DATASET}:
+        if job.dataset in {FAVORITE_REFRESH_DATASET, UNIVERSE_BUDGET_REFRESH_DATASET, MANUAL_STOCK_REFRESH_DATASET}:
             checkpoint = dict(job.checkpoint_state or {})
             checkpoint["phase"] = "queued_after_worker_restart"
             checkpoint["next_retry_at"] = None
@@ -202,7 +203,9 @@ def run_catch_up() -> None:
             running = db.query(JobRun).filter(JobRun.status == "RUNNING").order_by(JobRun.id.desc()).first()
             _heartbeat(last_job_progress_at=datetime.now(timezone.utc).isoformat(), job_phase=phase, current_job_run_id=running.id if running else None)
 
+        asyncio.run(_drain_manual_refresh_jobs())
         result = asyncio.run(catch_up(db, FinMindClient(settings), end_date=_completed_source_end_date(), progress_callback=report_progress))
+        asyncio.run(_drain_manual_refresh_jobs())
         logger.info("catch-up completed status=%s datasets=%s", result.get("status"), result.get("datasets"))
         finished = datetime.now(timezone.utc).isoformat()
         _heartbeat(status="idle", ready=True, scheduler_ready=bool(_scheduler_runtime and _scheduler_runtime.running), market_session=market_session_state(), last_job_finished_at=finished, last_job_status=result.get("status"), last_error_code=result.get("fatal_code"), current_job_run_id=None)
@@ -244,7 +247,9 @@ def run_intraday_sync() -> None:
             running = db.query(JobRun).filter(JobRun.status == "RUNNING").order_by(JobRun.id.desc()).first()
             _heartbeat(last_job_progress_at=datetime.now(timezone.utc).isoformat(), job_phase=phase, current_job_run_id=running.id if running else None)
 
+        asyncio.run(_drain_manual_refresh_jobs())
         result = asyncio.run(intraday_sync(db, FinMindClient(settings), end_date=datetime.now(ZoneInfo(settings.timezone)).date(), progress_callback=report_progress))
+        asyncio.run(_drain_manual_refresh_jobs())
         logger.info("intraday sync completed status=%s datasets=%s", result.get("status"), result.get("datasets"))
         finished = datetime.now(timezone.utc).isoformat()
         _heartbeat(status="idle", ready=True, scheduler_ready=bool(_scheduler_runtime and _scheduler_runtime.running), market_session=market_session_state(), last_job_finished_at=finished, last_job_status=result.get("status"), last_error_code=result.get("fatal_code"), current_job_run_id=None)
@@ -287,18 +292,47 @@ def run_closed_market_refresh() -> None:
 
 
 def _next_durable_refresh_job(db: object, dataset: str | None = None) -> JobRun | None:
-    datasets = (dataset,) if dataset else (FAVORITE_REFRESH_DATASET, UNIVERSE_BUDGET_REFRESH_DATASET)
+    datasets = (dataset,) if dataset else (MANUAL_STOCK_REFRESH_DATASET, FAVORITE_REFRESH_DATASET, UNIVERSE_BUDGET_REFRESH_DATASET)
     jobs = (
         db.query(JobRun)
         .filter(JobRun.dataset.in_(datasets), JobRun.status.in_(REFRESH_ACTIVE_STATUSES))
         .order_by(JobRun.id.asc())
         .all()
     )
+    jobs.sort(key=lambda job: (job.dataset != MANUAL_STOCK_REFRESH_DATASET, job.id))
     for job in jobs:
+        if job.dataset == MANUAL_STOCK_REFRESH_DATASET and not manual_job_due(job):
+            continue
         if (job.checkpoint_state or {}).get("trigger") == "closed_market_hourly" and market_session_state().get("state") != "CLOSED":
             continue
         return job
     return None
+
+
+async def _execute_manual_refresh(db: object, job: JobRun) -> dict[str, Any]:
+    def report(phase: str) -> None:
+        _heartbeat(status="running", last_job_progress_at=datetime.now(timezone.utc).isoformat(), current_job_run_id=job.id, job_phase=phase)
+
+    job_id = job.id
+    try:
+        return await resume_manual_stock_refresh(db, FinMindClient(settings), job, progress_callback=report)
+    except Exception as exc:
+        db.rollback()
+        job = db.get(JobRun, job_id)
+        job.status = "FAILED"
+        job.finished_at = datetime.now(timezone.utc)
+        job.error_code = getattr(exc, "code", "TARGETED_SCORE_FAILED")
+        job.checkpoint_state = {**(job.checkpoint_state or {}), "phase": "failed"}
+        db.commit()
+        logger.error("manual refresh failed job_id=%s code=%s", job_id, job.error_code)
+        return {"status": "FAILED", "error_code": job.error_code, "phase": "failed"}
+
+
+async def _drain_manual_refresh_jobs() -> None:
+    """Called at stock boundaries while the caller still owns provider_work_lock."""
+    with SessionLocal() as db:
+        while (job := _next_durable_refresh_job(db, MANUAL_STOCK_REFRESH_DATASET)) is not None:
+            await _execute_manual_refresh(db, job)
 
 
 def _run_durable_refresh(dataset: str | None = None) -> None:
@@ -314,10 +348,17 @@ def _run_durable_refresh(dataset: str | None = None) -> None:
         def report_progress(phase: str) -> None:
             _heartbeat(last_job_progress_at=datetime.now(timezone.utc).isoformat(), job_phase=phase, current_job_run_id=job.id)
 
-        if job.dataset == FAVORITE_REFRESH_DATASET:
+        async def stock_boundary() -> None:
+            await _drain_manual_refresh_jobs()
+            report_progress("resuming_batch_after_priority_check")
+
+        if job.dataset == MANUAL_STOCK_REFRESH_DATASET:
+            phase = "manual_stock_refresh"
+            coroutine = _execute_manual_refresh(db, job)
+        elif job.dataset == FAVORITE_REFRESH_DATASET:
             phase = "favorite_refresh"
             client = FinMindClient(settings)
-            coroutine = resume_favorite_refresh_job(db, client, job, progress_callback=report_progress)
+            coroutine = resume_favorite_refresh_job(db, client, job, progress_callback=report_progress, stock_boundary_callback=stock_boundary)
         else:
             phase = "universe_budget_refresh"
             checkpoint = dict(job.checkpoint_state or {})
@@ -330,10 +371,15 @@ def _run_durable_refresh(dataset: str | None = None) -> None:
             )
             guard = _require_closed_market if checkpoint.get("trigger") == "closed_market_hourly" else None
             client = FinMindClient(settings, request_budget=request_budget, request_guard=guard)
-            coroutine = resume_universe_budget_refresh_job(db, client, job, progress_callback=report_progress)
+            coroutine = resume_universe_budget_refresh_job(db, client, job, progress_callback=report_progress, stock_boundary_callback=stock_boundary)
 
         _heartbeat(status="running", ready=True, last_job_started_at=datetime.now(timezone.utc).isoformat(), current_job_run_id=job.id, job_phase=phase, last_error_code=None)
-        result = asyncio.run(coroutine)
+        async def execute() -> dict[str, Any]:
+            result = await coroutine
+            await _drain_manual_refresh_jobs()
+            return result
+
+        result = asyncio.run(execute())
         _heartbeat(
             status="idle",
             ready=True,
@@ -376,8 +422,9 @@ def main() -> None:
     db = SessionLocal()
     _reconcile_interrupted_jobs(db)
     seed_score_version(db)
+    durable_pending = db.query(JobRun).filter(JobRun.dataset.in_([MANUAL_STOCK_REFRESH_DATASET, FAVORITE_REFRESH_DATASET, UNIVERSE_BUDGET_REFRESH_DATASET]), JobRun.status.in_(REFRESH_ACTIVE_STATUSES)).first() is not None
     db.close()
-    if _startup_catch_up_allowed():
+    if _startup_catch_up_allowed() and not durable_pending:
         run_catch_up()
     else:
         _heartbeat(
@@ -385,7 +432,7 @@ def main() -> None:
             ready=True,
             scheduler_ready=False,
             market_session=market_session_state(),
-            last_job_status="DEFERRED_BEFORE_SOURCE_PUBLICATION",
+            last_job_status="DEFERRED_DURABLE_REFRESH_PENDING" if durable_pending else "DEFERRED_BEFORE_SOURCE_PUBLICATION",
             last_error_code=None,
             last_job_started_at=None,
             last_job_progress_at=None,

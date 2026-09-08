@@ -90,7 +90,7 @@ function detail(stock: FixtureStock) {
 }
 
 async function installApiFixtures(page: Page) {
-  let targetedPolls = 0;
+  let targetedPolls = -1;
   let universeBudgetPolls = 0;
   const favorites = new Set<string>();
   await page.route("**/api/**", async (route) => {
@@ -168,10 +168,11 @@ async function installApiFixtures(page: Page) {
     if (targetedMatch) {
       if (route.request().method() === "POST") {
         targetedPolls = 0;
-        return route.fulfill({ status: 202, json: { job_id: 77, stock_id: targetedMatch[1], status: "RUNNING", run_mode: "targeted_fetch_and_score", target_date: "2026-08-20", phase: "queued", progress: { completed: 0, total: 5 }, datasets: {} } });
+        return route.fulfill({ status: 202, json: { job_id: 77, stock_id: targetedMatch[1], status: "QUEUED", run_mode: "targeted_fetch_and_score", target_date: "2026-08-20", phase: "queued", progress: { completed: 0, total: 5 }, datasets: {} } });
       }
+      if (targetedPolls < 0) return route.fulfill({ status: 404, json: { detail: "no manual job" } });
       targetedPolls += 1;
-      return route.fulfill({ json: { job_id: 77, stock_id: targetedMatch[1], status: targetedPolls < 1 ? "RUNNING" : "SUCCESS", run_mode: "targeted_fetch_and_score", target_date: "2026-08-20", phase: "completed", progress: { completed: 5, total: 5 }, score: { score: 87.5, status: "STRONG_ACCUMULATION" }, readiness: { stock_id: targetedMatch[1], ready: true, missing_reasons: [] }, datasets: {}, fetch_errors: [] } });
+      return route.fulfill({ json: { job_id: 77, stock_id: targetedMatch[1], status: targetedPolls < 2 ? "RUNNING" : "SUCCESS", run_mode: "targeted_fetch_and_score", target_date: "2026-08-20", phase: "completed", progress: { completed: 5, total: 5 }, score: { score: 87.5, status: "STRONG_ACCUMULATION" }, readiness: { stock_id: targetedMatch[1], ready: true, missing_reasons: [] }, datasets: {}, fetch_errors: [] } });
     }
     const match = url.pathname.match(/^\/api\/stocks\/(\d+)$/);
     if (match) {
@@ -313,7 +314,11 @@ test("single-stock remediation fetches missing sources and reports the immediate
   await page.getByTestId("stock-row").first().click();
   await expect(page.getByTestId("targeted-fetch-score-button")).toBeVisible();
   await page.getByTestId("targeted-fetch-score-button").click();
-  await expect(page.getByTestId("targeted-score-status")).toContainText("完成", { timeout: 5000 });
+  await expect(page.getByTestId("targeted-fetch-score-button")).toHaveText("已排隊");
+  await expect(page.getByTestId("targeted-fetch-score-button")).toBeDisabled();
+  await expect(page.getByTestId("targeted-score-progress")).toContainText("將優先補抓");
+  await expect(page.getByTestId("targeted-score-status")).toHaveCount(0);
+  await expect(page.getByTestId("targeted-score-status")).toContainText("完成", { timeout: 8000 });
   await expect(page.getByTestId("targeted-score-status")).toContainText("Score 87.5");
 });
 
@@ -351,4 +356,14 @@ test("favorite batch finishes with visible source gaps and re-enables refresh", 
   await expect(page.getByTestId("favorite-refresh-status")).toContainText("已處理 73/73", { timeout: 10000 });
   await expect(page.getByTestId("favorite-refresh-status")).toContainText("部分完成");
   await expect(button).toBeEnabled();
+});
+
+
+test("existing manual queue is restored when reopening stock detail", async ({ page }) => {
+  await page.route("**/api/stocks/1000/fetch-and-score*", route => route.fulfill({ json: { job_id: 99, stock_id: "1000", status: "QUEUED", phase: "queued", progress: { completed: 0, total: 5 } } }));
+  await page.goto("/");
+  await page.getByTestId("stock-row").first().click();
+  await expect(page.getByTestId("targeted-fetch-score-button")).toHaveText("已排隊");
+  await expect(page.getByTestId("targeted-fetch-score-button")).toBeDisabled();
+  await expect(page.getByTestId("targeted-score-status")).toHaveCount(0);
 });
