@@ -28,3 +28,39 @@ capital signal. Repeat these checks after each service restart.
 ## Port selection
 
 Default is `18080`. Preflight lists current listeners. If occupied, set `WEB_PORT` to a verified unused port and record only the final URL, never credentials.
+
+## Recover a refused connection after NAS reboot
+
+Check both the container and the published LAN port. A healthy in-container
+`/health` does not prove that Docker has published port 18080.
+
+```sh
+cd /volume1/docker/tw-accumulation-evidence
+docker compose ps -a
+docker inspect tw-accumulation-evidence-nginx-1 --format '{{json .State}} {{json .NetworkSettings.Ports}} {{json .NetworkSettings.Networks}}'
+sudo ss -lntp | grep ':18080'
+```
+
+On 2026-09-10 at 20:46 Asia/Taipei, Docker failed to restore nginx after
+reboot with `failed to bind host port 0.0.0.0:18080/tcp: address already in use`.
+At diagnosis on 2026-09-11, nothing listened on that port. Starting the old
+container returned healthy, but it retained only the internal network and
+`8080/tcp` had no published binding. Recreating only nginx restored both
+Compose networks and the 18080 mapping:
+
+```sh
+docker compose up -d --no-deps --force-recreate nginx
+docker compose ps nginx
+curl --noproxy '*' -fsS --max-time 15 http://127.0.0.1:18080/health
+```
+
+Use this recovery when the original port is free and the network/port mapping
+is missing. If a process still owns 18080, identify it before changing anything;
+do not stop an unrelated service. Verify `/`, `/health`, `/api/summary`, and
+`/api/worker-health` from a LAN client, then confirm the browser loads actual
+stock data. Keep `restart: unless-stopped`; do not restart Docker, rebuild the
+application, or remove database volumes for this proxy-only failure.
+
+The historical port owner could not be established from the available logs.
+Recovery was verified without another NAS reboot, so it does not establish
+that the original startup port conflict cannot recur.
