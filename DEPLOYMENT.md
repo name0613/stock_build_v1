@@ -64,3 +64,23 @@ application, or remove database volumes for this proxy-only failure.
 The historical port owner could not be established from the available logs.
 Recovery was verified without another NAS reboot, so it does not establish
 that the original startup port conflict cannot recur.
+
+## Blank dashboard or missing summary
+
+Check browser console errors, the actual JS/CSS responses, and `/api/summary`
+separately from `/health`. On 2026-09-13 all containers were running and the
+static assets returned 200, but `/api/summary` repeatedly returned 504 after
+the proxy's 30-second timeout. PostgreSQL showed the summary loading every
+historical `AccumulationScore`, including large JSON provenance fields, for
+over a minute. The query now ranks only scalar status columns and returns
+one latest numeric score per stock; the common-stock count excludes other
+security types. Existing version, knowledge-cutoff and date ordering remain
+in effect, and missing scores remain `DATA_INSUFFICIENT`.
+
+The browser check reproduced missing summary data, but did not reproduce the
+user's completely blank page. Do not equate an API timeout with a confirmed
+React crash. The HTML now contains a visible startup message and a React
+error boundary offers reload on render failures. A failed JS download retains
+the startup message; a failed summary request retains the dashboard and its
+API error message. Verify actual stock rows and summary counts after deploy,
+and use the browser console if a particular browser still shows a blank page.
