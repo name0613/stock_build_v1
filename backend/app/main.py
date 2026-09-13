@@ -727,16 +727,25 @@ def _current_score_readiness(db: Session, provider_state: dict[str, Any], sync: 
 
 def _canonical_statuses(db: Session, latest: date | None = None) -> tuple[int, dict[str, str]]:
     stock_ids = list(db.scalars(select(Stock.stock_id).where(Stock.is_common_stock.is_(True))).all())
-    query = select(AccumulationScore).where(AccumulationScore.score_version == SCORE_VERSION, AccumulationScore.knowledge_cutoff.is_not(None), AccumulationScore.score.is_not(None))
+    # Rank narrow scalar columns in SQL. Loading every historical ORM score
+    # also transfers its large input_source_hashes/JSON provenance, which can
+    # make the dashboard summary exceed the proxy timeout as history grows.
+    query = select(
+        AccumulationScore.stock_id,
+        AccumulationScore.status,
+        func.row_number().over(
+            partition_by=AccumulationScore.stock_id,
+            order_by=(AccumulationScore.source_date.desc(), AccumulationScore.calculated_at.desc(), AccumulationScore.id.desc()),
+        ).label("score_rank"),
+    ).where(AccumulationScore.score_version == SCORE_VERSION, AccumulationScore.knowledge_cutoff.is_not(None), AccumulationScore.score.is_not(None))
     if latest is not None:
         query = query.where(AccumulationScore.source_date == latest)
-    scores = db.scalars(query.order_by(AccumulationScore.stock_id, AccumulationScore.source_date.desc(), AccumulationScore.calculated_at.desc(), AccumulationScore.id.desc())).all()
+    ranked = query.subquery("summary_statuses")
+    scores = db.execute(select(ranked.c.stock_id, ranked.c.status).where(ranked.c.score_rank == 1)).all()
     statuses = {stock_id: "DATA_INSUFFICIENT" for stock_id in stock_ids}
-    seen: set[str] = set()
     for score in scores:
-        if score.stock_id not in seen:
+        if score.stock_id in statuses:
             statuses[score.stock_id] = score.status
-            seen.add(score.stock_id)
     return len(stock_ids), statuses
 
 

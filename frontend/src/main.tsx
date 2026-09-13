@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Component, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./styles.css";
 
@@ -498,5 +498,14 @@ function formatDate(value?: string) { return value ? new Date(value).toLocaleStr
 function scoreClass(status: string) { return ({ STRONG_ACCUMULATION: "strong", ACCUMULATION: "accumulation", WATCH: "watch", DATA_INSUFFICIENT: "insufficient", HIGH_CONFIDENCE_ACCUMULATION: "strong", LARGE_CAPITAL_ACCUMULATION: "accumulation", CAPITAL_TOO_SMALL: "insufficient", LIQUIDITY_TOO_LOW: "insufficient" } as Record<string, string>)[status] || "neutral"; }
 async function fetchJson<T>(url: string, signal?: AbortSignal, init?: RequestInit): Promise<T> { const response = await fetch(url, { ...init, signal }); if (!response.ok) throw new Error(`HTTP ${response.status}`); return response.json() as Promise<T>; }
 
-createRoot(document.getElementById("root")!).render(<App />);
+class DashboardErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+  static getDerivedStateFromError() { return { failed: true }; }
+  render() {
+    if (this.state.failed) return <main className="app-shell" role="alert"><section className="panel"><h1>畫面暫時無法顯示</h1><p>載入資料時發生錯誤，請重新載入頁面。背景資料更新仍由 NAS 執行。</p><button className="primary-button" onClick={() => window.location.reload()}>重新載入</button></section></main>;
+    return this.props.children;
+  }
+}
+
+createRoot(document.getElementById("root")!).render(<DashboardErrorBoundary><App /></DashboardErrorBoundary>);
 export default App;
