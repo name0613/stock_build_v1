@@ -1,6 +1,7 @@
 import { Component, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./styles.css";
+import { RefreshExclusions } from "./RefreshExclusions";
 
 type ProviderState = { status?: string; reason_code?: string; score_ready?: boolean; score_blocked?: boolean; score_blocking_reason?: string; blocking_sources?: { dataset?: string; reason_code?: string; retryable_pending?: number }[] };
 type Summary = { stock_count: number; strong_count: number; accumulation_count: number; watch_count: number; data_insufficient_count: number; no_strong_evidence_count?: number; status_invariant?: boolean; score_version?: string; formula_hash?: string; capital_aware_score_version?: string; capital_aware_formula_hash?: string; latest_score_date?: string; last_data_update?: string; score_ready?: boolean; provider_state?: ProviderState; score_metrics?: { universe_stock_count?: number; evaluated_stock_count?: number; ready_stock_count?: number; not_ready_stock_count?: number; score_rows_processed?: number; score_rows_data_insufficient?: number; score_rows_failed?: number; missing_reason_counts?: Record<string, number>; accounting_invariant?: boolean }; capital_ranking_metrics?: Record<string, { scorable?: number; data_insufficient?: number; gate_excluded?: number; eligible?: number }>; sync_status: SyncStatus[] };
@@ -44,6 +45,22 @@ const TARGETED_ACTIVE = new Set(["QUEUED", "RUNNING", "WAITING_FOR_QUOTA", "WAIT
 const UNIVERSE_BUDGET_ACTIVE = new Set(["QUEUED", "RUNNING", "WAITING_FOR_QUOTA", "WAITING_FOR_PROVIDER"]);
 
 function App() {
+  const [showExclusions, setShowExclusions] = useState(window.location.hash === "#refresh-exclusions");
+  const [exclusionCount, setExclusionCount] = useState<number | null>(null);
+  function navigateExclusions(show: boolean) {
+    window.location.hash = show ? "refresh-exclusions" : "";
+    setShowExclusions(show);
+  }
+  async function loadExclusionCount() {
+    try { setExclusionCount((await fetchJson<{ total: number }>("/api/refresh-exclusions?page_size=1")).total); } catch { /* Page offers retry. */ }
+  }
+  useEffect(() => {
+    const navigate = () => setShowExclusions(window.location.hash === "#refresh-exclusions");
+    window.addEventListener("hashchange", navigate);
+    void loadExclusionCount();
+    const timer = window.setInterval(() => void loadExclusionCount(), 30000);
+    return () => { window.removeEventListener("hashchange", navigate); window.clearInterval(timer); };
+  }, []);
   const [summary, setSummary] = useState<Summary | null>(null);
   const [items, setItems] = useState<Stock[]>([]);
   const [total, setTotal] = useState(0);
@@ -296,11 +313,12 @@ function App() {
   }, [capitalRankingActive, favoriteOnly, market, minScore, ranking, search, status]);
   const displayedItems: RankingItem[] = rankingFiltered || filtered as RankingItem[];
   const displayedTotal = rankingFiltered ? rankingFiltered.length : total;
+  if (showExclusions) return <RefreshExclusions onBack={() => navigateExclusions(false)} onCount={setExclusionCount} onChanged={() => { void refreshSnapshot(); void loadRanking(rankingKind); void loadExclusionCount(); void loadUniverseBudgetJob(); }} />;
   if (detail && selected) return <DetailPage detail={detail} onBack={() => { setSelected(null); setDetail(null); }} onRefresh={() => loadDetail(selected)} />;
   return <div className="app-shell">
     <header className="topbar"><div><p className="eyebrow">TAIWAN STOCK MARKET · S-ONLY EVIDENCE</p><h1>低調持續建倉監控</h1><p className="subtitle">把連續、分散、可追溯的籌碼集中證據放在同一張桌上。</p></div><div className="header-meta"><span className="live-dot" /> Asia/Taipei<br /><small>Score version {summary?.score_version || "—"}</small></div></header>
     <main>
-      <section className="panel ranking-tabs" aria-label="建倉榜單切換" data-testid="ranking-tabs"><button type="button" className={rankingKind === "stealth" ? "active" : ""} aria-selected={rankingKind === "stealth"} onClick={() => setRankingKind("stealth")}>隱性建倉</button><button type="button" className={rankingKind === "large_capital" ? "active" : ""} aria-selected={rankingKind === "large_capital"} onClick={() => setRankingKind("large_capital")}>大型資金建倉</button><button type="button" className={rankingKind === "high_confidence" ? "active" : ""} aria-selected={rankingKind === "high_confidence"} onClick={() => setRankingKind("high_confidence")}>高可信建倉</button><span className="tab-note">首頁預設高可信；切換榜單不改寫 s-only-v6 歷史分數。</span></section>
+      <section className="panel ranking-tabs" aria-label="建倉榜單切換" data-testid="ranking-tabs"><button type="button" className={rankingKind === "stealth" ? "active" : ""} aria-selected={rankingKind === "stealth"} onClick={() => setRankingKind("stealth")}>隱性建倉</button><button type="button" className={rankingKind === "large_capital" ? "active" : ""} aria-selected={rankingKind === "large_capital"} onClick={() => setRankingKind("large_capital")}>大型資金建倉</button><button type="button" className={rankingKind === "high_confidence" ? "active" : ""} aria-selected={rankingKind === "high_confidence"} onClick={() => setRankingKind("high_confidence")}>高可信建倉</button><button type="button" data-testid="refresh-exclusions-button" onClick={() => navigateExclusions(true)}>排除股票{exclusionCount == null ? "" : `（${exclusionCount}）`}</button><span className="tab-note">首頁預設高可信；切換榜單不改寫 s-only-v6 歷史分數。</span></section>
       <div className="notice"><strong>僅呈現證據</strong>　這裡顯示法人／大型資金持續性證據，不代表單一投資人、主力、買進建議或報酬保證。缺資料會標示為資料不足。</div>
        {summary?.provider_state?.score_blocked && <div className="error-banner" data-testid="score-blocking-reason"><strong>全市場來源同步尚未完整</strong>　已具備可追溯資料的個股評分仍會顯示；尚未通過個股資料合約者維持資料不足。</div>}
       <section className="summary-grid"><Metric title="股票總數" value={summary?.stock_count ?? "—"} accent="blue" /><Metric title={statusLabel.STRONG_ACCUMULATION} value={summary?.strong_count ?? "—"} accent="green" /><Metric title={statusLabel.ACCUMULATION} value={summary?.accumulation_count ?? "—"} accent="amber" /><Metric title={statusLabel.WATCH} value={summary?.watch_count ?? "—"} accent="purple" /><Metric title={statusLabel.DATA_INSUFFICIENT} value={summary?.data_insufficient_count ?? "—"} accent="red" /></section>

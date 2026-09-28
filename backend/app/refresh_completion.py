@@ -5,6 +5,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .models import AccumulationScore, BrokerDaily, ForeignShareholdingDaily, HoldingDistribution, InstitutionalDaily, PriceDaily, Stock, StockRefreshIssue
+from .refresh_policy import exclusion_predicate
 from .scoring import FORMULA_HASH, SCORE_VERSION
 
 
@@ -16,7 +17,7 @@ def daily_refresh_completion(db: Session, target: date, stock_ids: list[str] | N
     if stock_ids is not None:
         universe = universe.where(Stock.stock_id.in_(stock_ids))
     all_ids = set(db.scalars(universe).all())
-    skipped = set(db.scalars(select(StockRefreshIssue.stock_id).where(StockRefreshIssue.no_data_attempts >= 5)).all()) & all_ids
+    skipped = set(db.scalars(select(StockRefreshIssue.stock_id).where(exclusion_predicate())).all()) & all_ids
     eligible = all_ids - skipped
     ranked = select(
         AccumulationScore.stock_id, AccumulationScore.score, AccumulationScore.status,

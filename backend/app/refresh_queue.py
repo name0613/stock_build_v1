@@ -71,6 +71,10 @@ def _queue_unlocked(db: Session, target: date, *, automatic: bool, now: datetime
     if automatic:
         criteria = or_(criteria, JobRun.checkpoint_state["schedule_hour"].as_string() == schedule_hour)
     job = db.scalar(select(JobRun).where(JobRun.dataset == UNIVERSE_BUDGET_REFRESH_DATASET, criteria).order_by(JobRun.id.desc()).limit(1))
+    if job is not None and automatic and job.status not in ACTIVE_STATUSES and (job.checkpoint_state or {}).get("phase") == "daily_target_completed":
+        # A restored stock can invalidate a completed target even in the same hour.
+        if not daily_refresh_completion(db, target)["all_complete"]:
+            job = None
     if job is not None:
         db.commit()
         return job, False
@@ -81,11 +85,9 @@ def _queue_unlocked(db: Session, target: date, *, automatic: bool, now: datetime
         stock_ids = [sid for sid in stock_ids if sid in pending]
         if completion["all_complete"]:
             previous = db.scalar(select(JobRun).where(JobRun.dataset == UNIVERSE_BUDGET_REFRESH_DATASET, JobRun.requested_end_date == target, JobRun.checkpoint_state["trigger"].as_string() == "closed_market_hourly").order_by(JobRun.id.desc()).limit(1))
-            if previous is not None:
-                previous.status = "SUCCESS"
-                previous.finished_at = previous.finished_at or datetime.now(timezone.utc)
-                previous.error_code = None
-                previous.checkpoint_state = {**previous.checkpoint_state, "phase": "daily_target_completed", "daily_completion": completion_summary(completion), "next_retry_at": None}
+            if previous is not None and (previous.checkpoint_state or {}).get("phase") == "daily_target_completed":
+                # Keep the historical exclusion/completion snapshot intact.
+                # The exclusion endpoint reports live completion separately.
                 db.commit()
                 return previous, False
     if not stock_ids and not (completion and completion["all_complete"]):

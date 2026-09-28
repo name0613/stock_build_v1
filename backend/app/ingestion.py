@@ -11,6 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .calendar import CALENDAR_HASH, CALENDAR_VERSION, closed_market_target_date, completed_source_end_date, expected_trading_sessions, market_session_state, missing_sessions
+from .refresh_policy import REFRESH_NO_DATA_LIMIT, exclusion_predicate
 from .refresh_completion import completion_summary, daily_refresh_completion
 from .features import build_features
 from .finmind import AUTOMATIC_REFRESH_PAUSED, CAPABILITY_ONLY_DATASETS, GLOBAL_PROVIDER_FAILURE_CODES, FinMindClient, FinMindError, SchemaMismatch
@@ -816,7 +817,6 @@ TARGETED_STOCK_SYNC_DATASET = "targeted_stock_sync_score"
 FAVORITE_REFRESH_DATASET = "favorite_refresh_score"
 UNIVERSE_BUDGET_REFRESH_DATASET = "universe_budget_refresh_score"
 UNIVERSE_BUDGET_LIMIT = 3_500
-REFRESH_NO_DATA_LIMIT = 5
 FAVORITE_REFRESH_DATASETS = (
     "TaiwanStockInstitutionalInvestorsBuySellWide",
     "TaiwanStockShareholding",
@@ -876,6 +876,8 @@ async def fetch_and_score_stock(
     progress_callback: Callable[[str], None] | None = None,
     force_refresh: bool = False,
     refreshed_datasets: set[str] | None = None,
+    defer_finish: bool = False,
+    reuse_broker_observations: bool = False,
 ) -> dict[str, Any]:
     """Fetch one stock's missing scoring inputs, then score it immediately.
 
@@ -981,6 +983,13 @@ async def fetch_and_score_stock(
 
             if method == "broker":
                 broker_kwargs: dict[str, Any] = {"record_sink": sink, "progress_callback": provider_progress, "retry_deferred": True}
+                if reuse_broker_observations:
+                    from .scoring import BROKER_ROW_CONTRACT_VERSION
+                    observed = db.scalars(select(BrokerDaily.source_date).where(
+                        BrokerDaily.stock_id == stock_id, BrokerDaily.source_date.between(start, end),
+                        BrokerDaily.source_dataset == dataset, BrokerDaily.provider_row_validated.is_(True),
+                        BrokerDaily.provider_row_contract_version == BROKER_ROW_CONTRACT_VERSION)).all()
+                    broker_kwargs["reusable_observations"] = {f"{stock_id}:{day.isoformat()}" for day in observed}
                 if force_refresh:
                     broker_kwargs["force_refresh"] = True
                 metrics = await client.fetch_broker_stocks([stock_id], start.isoformat(), end.isoformat(), **broker_kwargs)
@@ -1026,7 +1035,10 @@ async def fetch_and_score_stock(
             fetch_errors.append({"dataset": "market_session", "error_code": exc.code})
     if any(item.get("error_code") == AUTOMATIC_REFRESH_PAUSED for item in fetch_errors):
         result = {"datasets": datasets, "fetch_errors": fetch_errors, "score": None, "readiness": None}
-        _job_finish(db, score_job, "PARTIAL", error_code=AUTOMATIC_REFRESH_PAUSED, checkpoint_state=_jsonable({**result, "phase": "waiting_for_market_close"}))
+        if defer_finish:
+            checkpoint("waiting_for_market_close", **result)
+        else:
+            _job_finish(db, score_job, "PARTIAL", error_code=AUTOMATIC_REFRESH_PAUSED, checkpoint_state=_jsonable({**result, "phase": "waiting_for_market_close"}))
         return result
     checkpoint("scoring", datasets=datasets, fetch_errors=fetch_errors, quota=quota, progress={"completed": len(plan), "total": len(plan)})
     evaluation_cutoff = _now()
@@ -1052,10 +1064,14 @@ async def fetch_and_score_stock(
         "score": {"score": score.score, "status": score.status, "score_version": score.score_version, "formula_hash": score.formula_hash, "coverage": score.coverage, "components": score.components, "explanation": score.explanation, "source_date": score.source_date.isoformat() if score.source_date else None, "knowledge_cutoff": score.knowledge_cutoff.isoformat() if score.knowledge_cutoff else None, "calculated_at": score.calculated_at.isoformat() if score.calculated_at else None},
         "pre_readiness": pre_readiness,
         "readiness": readiness,
+        "target_readiness": _targeted_readiness_payload(target_evaluation),
         "datasets": datasets,
         "fetch_errors": fetch_errors,
         "quota": quota,
     }
+    if defer_finish:
+        checkpoint("ready_to_finalize", **_jsonable(result), progress={"completed": len(plan), "total": len(plan)})
+        return result
     _job_finish(db, score_job, status, records=sum(int(item.get("records_accepted", 0)) for item in datasets.values()), stocks_completed=1 if final_evaluation["ready"] else 0, stocks_failed=0, error_code=(fetch_errors[0]["error_code"] if fetch_errors else None), checkpoint_state=_jsonable({"run_mode": "targeted_fetch_and_score", **result, "phase": "completed", "progress": {"completed": len(plan), "total": len(plan)}}))
     return result
 
@@ -1157,12 +1173,12 @@ def _refresh_issue_state(attempts: int, *, partial: bool) -> tuple[str, str, str
 
 
 def skipped_refresh_stock_ids(db: Session) -> set[str]:
-    return set(db.scalars(select(StockRefreshIssue.stock_id).where(StockRefreshIssue.no_data_attempts >= REFRESH_NO_DATA_LIMIT)).all())
+    return set(db.scalars(select(StockRefreshIssue.stock_id).where(exclusion_predicate())).all())
 
 
 def _record_no_data_attempt(db: Session, stock_id: str, job_id: int | None, result: dict[str, Any], *, partial: bool = False) -> StockRefreshIssue:
     now = _now()
-    issue = db.get(StockRefreshIssue, stock_id)
+    issue = db.get(StockRefreshIssue, stock_id, populate_existing=True)
     attempts = min(REFRESH_NO_DATA_LIMIT, int(issue.no_data_attempts if issue else 0) + 1)
     status, reason, message = _refresh_issue_state(attempts, partial=partial)
     details = {
@@ -1183,6 +1199,8 @@ def _record_no_data_attempt(db: Session, stock_id: str, job_id: int | None, resu
         )
         db.add(issue)
     else:
+        if issue.no_data_attempts == 0:
+            issue.first_attempt_at = now
         issue.no_data_attempts = attempts
         issue.status = status
         issue.reason_code = reason
@@ -1195,7 +1213,7 @@ def _record_no_data_attempt(db: Session, stock_id: str, job_id: int | None, resu
 
 
 def _mark_refresh_recovered(db: Session, stock_id: str) -> None:
-    issue = db.get(StockRefreshIssue, stock_id)
+    issue = db.get(StockRefreshIssue, stock_id, populate_existing=True)
     if issue is not None and issue.no_data_attempts < REFRESH_NO_DATA_LIMIT:
         issue.status = "RECOVERED"
 
@@ -1299,6 +1317,7 @@ async def resume_universe_budget_refresh_job(
     while True:
         if stock_boundary_callback:
             await stock_boundary_callback()
+            db.expire_all()
         if not market_allows_run():
             return pause_for_market()
         if update_target() and finish_daily_if_complete():
@@ -1323,6 +1342,11 @@ async def resume_universe_budget_refresh_job(
             if finish_daily_if_complete():
                 return universe_budget_job_payload(job)
             cycle_source = [str(value) for value in checkpoint.get("cycle_stock_ids", [])]
+            from .models import RefreshExclusionRecovery
+            restored = db.scalars(select(RefreshExclusionRecovery.stock_id).join(Stock).where(
+                RefreshExclusionRecovery.released_at >= job.started_at, Stock.is_common_stock.is_(True))).all()
+            pending_restored = daily_refresh_completion(db, job.requested_end_date, list(restored))["pending_stock_ids"] if restored else []
+            cycle_source = list(dict.fromkeys([*cycle_source, *pending_restored]))
             skipped = skipped_refresh_stock_ids(db)
             next_cycle = daily_refresh_completion(db, job.requested_end_date)["pending_stock_ids"] if automatic else [stock_id for stock_id in cycle_source if stock_id not in skipped]
             if not next_cycle:
@@ -1339,7 +1363,7 @@ async def resume_universe_budget_refresh_job(
         if automatic and not daily_refresh_completion(db, job.requested_end_date, [stock_id])["pending_stock_ids"]:
             checkpoint["queue_index"] = queue_index + 1
             continue
-        issue = db.get(StockRefreshIssue, stock_id)
+        issue = db.get(StockRefreshIssue, stock_id, populate_existing=True)
         if issue is not None and issue.no_data_attempts >= REFRESH_NO_DATA_LIMIT:
             checkpoint["queue_index"] = queue_index + 1
             checkpoint["skipped_no_data_count"] = int(checkpoint.get("skipped_no_data_count", 0) or 0) + 1
@@ -2361,6 +2385,18 @@ def _job_start(db: Session, dataset: str, start: date, end: date, stocks_attempt
 
 
 def _job_finish(db: Session, job: JobRun, status: str, *, records: int = 0, retry_count: int = 0, stocks_completed: int = 0, stocks_failed: int = 0, error_code: str | None = None, error: str | None = None, checkpoint_state: dict[str, Any] | None = None) -> None:
+    if job.dataset == "manual_stock_refresh_score":
+        from .refresh_exclusions import manual_transaction, release_exclusion
+        with manual_transaction(db):
+            state = {**(job.checkpoint_state or {}), **(checkpoint_state or {})}
+            _set_job_finished(job, status, records=records, retry_count=retry_count, stocks_completed=stocks_completed, stocks_failed=stocks_failed, error_code=error_code, error=error, checkpoint_state=state)
+            release_exclusion(db, job)
+        return
+    _set_job_finished(job, status, records=records, retry_count=retry_count, stocks_completed=stocks_completed, stocks_failed=stocks_failed, error_code=error_code, error=error, checkpoint_state=checkpoint_state)
+    db.commit()
+
+
+def _set_job_finished(job: JobRun, status: str, *, records: int, retry_count: int, stocks_completed: int, stocks_failed: int, error_code: str | None, error: str | None, checkpoint_state: dict[str, Any] | None) -> None:
     finished = _now()
     job.status = status
     job.finished_at = finished
@@ -2373,4 +2409,3 @@ def _job_finish(db: Session, job: JobRun, status: str, *, records: int = 0, retr
     job.error_code = error_code
     job.error = error[:500] if error else None
     job.checkpoint_state = checkpoint_state or {}
-    db.commit()

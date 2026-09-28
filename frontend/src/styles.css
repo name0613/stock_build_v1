@@ -55,3 +55,12 @@ footer { color: #667696; font-size: .72rem; padding: 8px 0; text-align: center; 
  .capital-warning { color: #f0bd69; border-top: 1px solid #283d67; padding-top: 10px; margin-bottom: 0; }
  .capital-chart { margin-top: 13px; }
  @media (max-width: 700px) { .tab-note { width: 100%; margin-left: 0; } .capital-metric-grid { grid-template-columns: 1fr; } }
+
+.exclusion-page .exclusion-table { min-width: 1150px; }
+.exclusion-table td { vertical-align: top; white-space: normal; }
+.exclusion-table .primary-button { min-width: 175px; white-space: normal; }
+.recovery-status { display: flex; flex-direction: column; gap: 6px; min-width: 180px; line-height: 1.6; }
+.recovery-results { padding: 20px; margin-top: 20px; }
+.recovery-results article { padding: 16px 0; border-top: 1px solid #304a80; }
+.exclusion-page .pagination { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; padding: 18px; }
+@media (max-width: 600px) { .exclusion-page .topbar { flex-wrap: wrap; } .exclusion-page h1 { font-size: 24px; } }

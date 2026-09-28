@@ -319,11 +319,9 @@ async def _execute_manual_refresh(db: object, job: JobRun) -> dict[str, Any]:
     except Exception as exc:
         db.rollback()
         job = db.get(JobRun, job_id)
-        job.status = "FAILED"
-        job.finished_at = datetime.now(timezone.utc)
-        job.error_code = getattr(exc, "code", "TARGETED_SCORE_FAILED")
-        job.checkpoint_state = {**(job.checkpoint_state or {}), "phase": "failed"}
-        db.commit()
+        from .ingestion import _job_finish
+        _job_finish(db, job, "FAILED", error_code=getattr(exc, "code", "TARGETED_SCORE_FAILED"),
+                    checkpoint_state={**(job.checkpoint_state or {}), "phase": "failed"})
         logger.error("manual refresh failed job_id=%s code=%s", job_id, job.error_code)
         return {"status": "FAILED", "error_code": job.error_code, "phase": "failed"}
 

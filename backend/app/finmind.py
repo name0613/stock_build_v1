@@ -683,7 +683,7 @@ class FinMindClient:
         dates = [str(row.get("date") or row.get("Date") or row.get("source_date")) for row in records if row.get("date") or row.get("Date") or row.get("source_date")]
         return max(dates) if dates else None
 
-    async def fetch_broker_stocks(self, stock_ids: list[str], start_date: str, end_date: str, dataset: str = "TaiwanStockTradingDailyReport", *, record_sink: Callable[[list[dict[str, Any]]], int] | None = None, progress_callback: Callable[[str], None] | None = None, retry_deferred: bool = False, force_refresh: bool = False) -> dict[str, Any]:
+    async def fetch_broker_stocks(self, stock_ids: list[str], start_date: str, end_date: str, dataset: str = "TaiwanStockTradingDailyReport", *, record_sink: Callable[[list[dict[str, Any]]], int] | None = None, progress_callback: Callable[[str], None] | None = None, retry_deferred: bool = False, force_refresh: bool = False, reusable_observations: set[str] | None = None) -> dict[str, Any]:
         """Bounded async Sponsor-compatible path with checkpoint/resume semantics.
 
         ``retry_deferred`` is reserved for an explicit targeted remediation.
@@ -727,7 +727,15 @@ class FinMindClient:
             # distinguish an empty response from a row-bearing response; in
             # that explicit mode, replay every non-permanent completed key.
             completed = set()
+        if reusable_observations is not None and not force_refresh:
+            completed = set(reusable_observations) & requested_keys
+            checkpoint["failed"] = [item for item in checkpoint.get("failed", []) if item.get("key") not in completed]
+            provider_missing -= completed
         permanent_failed = set(checkpoint.get("permanent_failed", [])) & requested_keys
+        if reusable_observations is not None:
+            # Explicit manual retry may retry old permanent gap markers too.
+            checkpoint["permanent_failed"] = sorted(set(checkpoint.get("permanent_failed", [])) - requested_keys)
+            permanent_failed = set()
         failed_by_key = {
             str(item.get("key")): item
             for item in checkpoint.get("failed", [])
@@ -1132,7 +1140,7 @@ class FinMindClient:
         # request to detect a newly published target.  A partial state is
         # never throttled: it must keep resuming the authoritative per-stock
         # checkpoint until every stock passes the 15-bucket contract.
-        if publication_target and publication_wait and publication_wait.get("target_date") == publication_target and not force_refresh:
+        if publication_target and publication_wait and publication_wait.get("target_date") == publication_target and not force_refresh and not retry_provider_missing:
             if publication_wait_state == HOLDING_PUBLICATION_WAIT_STATE and not publication_recheck_due:
                 canary_stock_id = HOLDING_PUBLICATION_CANARY_STOCK_ID if HOLDING_PUBLICATION_CANARY_STOCK_ID in stock_ids else (stock_ids[0] if stock_ids else None)
                 if canary_stock_id and self.settings.finmind_api_token:

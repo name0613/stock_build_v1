@@ -479,6 +479,26 @@ def rankings(kind: str = Query("top"), limit: int = Query(50, ge=1, le=200), db:
     return {"source_date": source_date, "kind": kind, "score_version": CAPITAL_AWARE_SCORE_VERSION, "formula_hash": CAPITAL_AWARE_FORMULA_HASH, "provider_state": provider_state, "items": items}
 
 
+@app.get("/api/refresh-exclusions")
+def refresh_exclusions(search: str = Query("", max_length=128), market: str = "", page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=200), db: Session = Depends(get_db)) -> dict[str, Any]:
+    from .refresh_exclusions import list_exclusions
+    from .refresh_completion import daily_refresh_completion, completion_summary
+    result = list_exclusions(db, search=search, market=market, page=page, page_size=page_size)
+    result["daily_completion"] = completion_summary(daily_refresh_completion(db, _current_data_date(db, None)))
+    return result
+
+
+@app.post("/api/refresh-exclusions/{stock_id}/recover", status_code=202)
+def recover_refresh_exclusion(stock_id: str, source_date: date | None = Query(None), db: Session = Depends(get_db)) -> dict[str, Any]:
+    if db.get(Stock, stock_id) is None:
+        raise HTTPException(status_code=404, detail="stock not found")
+    try:
+        job = queue_manual_stock_refresh(db, stock_id, _current_data_date(db, source_date), recover_exclusion=True)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return _targeted_score_job_payload(job, db)
+
+
 @app.post("/api/stocks/{stock_id}/fetch-and-score", status_code=202)
 def start_targeted_fetch_and_score(stock_id: str, source_date: date | None = Query(None), db: Session = Depends(get_db)) -> dict[str, Any]:
     """Persist an idempotent priority request; the worker owns all provider work."""
@@ -486,14 +506,14 @@ def start_targeted_fetch_and_score(stock_id: str, source_date: date | None = Que
     if stock is None or not stock.is_common_stock:
         raise HTTPException(status_code=404, detail="stock not found")
     job = queue_manual_stock_refresh(db, stock_id, _current_data_date(db, source_date))
-    return _targeted_score_job_payload(job)
+    return _targeted_score_job_payload(job, db)
 
 
 @app.get("/api/stocks/{stock_id}/fetch-and-score")
 def targeted_fetch_and_score_status(stock_id: str, job_id: int | None = Query(None, ge=1), db: Session = Depends(get_db)) -> dict[str, Any]:
     """Return the latest or requested targeted single-stock job."""
     stock = db.get(Stock, stock_id)
-    if stock is None or not stock.is_common_stock:
+    if stock is None:
         raise HTTPException(status_code=404, detail="stock not found")
     if job_id is not None:
         job = db.get(JobRun, job_id)
@@ -501,7 +521,7 @@ def targeted_fetch_and_score_status(stock_id: str, job_id: int | None = Query(No
         job = db.scalar(select(JobRun).where(JobRun.dataset == MANUAL_STOCK_REFRESH_DATASET, JobRun.checkpoint_state["stock_id"].as_string() == stock_id).order_by(JobRun.id.desc()).limit(1))
     if job is None or job.dataset not in {MANUAL_STOCK_REFRESH_DATASET, TARGETED_STOCK_SYNC_DATASET} or (job.checkpoint_state or {}).get("stock_id") != stock_id:
         raise HTTPException(status_code=404, detail="targeted stock job not found")
-    return _targeted_score_job_payload(job)
+    return _targeted_score_job_payload(job, db)
 
 
 @app.get("/api/stocks/{stock_id}")

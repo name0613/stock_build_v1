@@ -36,6 +36,17 @@ class StockRefreshIssue(Base):
     details: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 
+class RefreshExclusionRecovery(Base):
+    """Durable intent/audit, independent of replaceable job checkpoints."""
+    __tablename__ = "refresh_exclusion_recoveries"
+    job_id: Mapped[int] = mapped_column(ForeignKey("job_runs.id"), primary_key=True)
+    stock_id: Mapped[str] = mapped_column(ForeignKey("stocks.stock_id"), index=True)
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    previous_issue: Mapped[dict[str, Any]] = mapped_column(JSON)
+    released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    result: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+
 class InstitutionalDaily(Base):
     __tablename__ = "institutional_daily"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
