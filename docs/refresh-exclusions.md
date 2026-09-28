@@ -37,4 +37,23 @@ npx playwright test --config playwright.local.config.ts --workers=2 --reporter=l
 `test_refresh_exclusions.py` 覆蓋分頁與舊 status、API 無下載、作業合併／並發、等待與重啟、實際個股評分持久化、資料不足／回退／失敗、原子收尾中斷、舊作業重播、重新計次、一般補抓語意、歷史資料保留及自動排程重新納入。前端新增 8 項 E2E，並以 local config 執行既有榜單／個股操作回歸；使用可重現 API fixtures，不呼叫真實 FinMind 或修改正式資料庫。
 
 
-2026-09-28 本機驗證結果：後端全套 263 項通過（新增本功能 22 項）；前端 E2E 26 項通過（新增 7 項）；TypeScript lint、production build、新增後端檔案 Ruff 與 Git whitespace 檢查通過。桌面截圖已檢視。後端使用隔離 SQLite，前端使用 API fixtures；本次未連接正式 PostgreSQL／NAS、未執行真實 FinMind 下載，也未部署正式環境，因此正式 PostgreSQL migration 與供應商實際回應仍需部署後驗證。
+2026-09-28 本機驗證結果：後端全套 264 項通過（本功能 23 項）；前端 fixture E2E 27 項通過（本功能 8 項）；TypeScript lint、production build、新增後端檔案 Ruff 與 Git whitespace 檢查通過。一次全套測試出現 SQLAlchemy `after_transaction_end` TypeError，本功能單獨及全套重跑均通過，尚未重現；保留此測試環境觀察。
+
+PostgreSQL 實證使用 `scripts/refresh_exclusions_postgres_probe.py`，在獨立臨時 schema 執行 migration 重入、跨程序去重、JSON 清單與意圖查詢、完成邊界回滾、原子解除、每日排程重新接手、舊作業重播等 7 項檢查，全部通過。測試結束刪除該臨時 schema，不修改正式股票或呼叫供應商。
+
+正式環境唯讀 E2E：
+
+```powershell
+cd frontend
+$env:E2E_BASE_URL='http://192.168.31.138:18080'
+$env:EXCLUSIONS_LIVE_SMOKE='true'
+npx playwright test refresh-exclusions-live.spec.ts --workers=1 --reporter=line
+```
+
+此測試檢查真實 API 清單、排除判斷、按鈕位置、進入、重新整理及返回，保存畫面截圖；不提交真實股票復原或消耗 FinMind 額度。供應商實際補抓與復原的完整流程仍以隔離測試驗證，未對正式股票提交復原驗收。
+
+2026-09-28 NAS 已部署程式版本 `80d9f39a2972201adaebd0fbe6bf6f88dfb903bd`，網址 `http://192.168.31.138:18080/#refresh-exclusions`。API、worker、frontend 版本一致；API／worker 全部 Python 程式在換行正規化後與 Git 相符，靜態資源與本機 production build 相符。正式 migration 014 已套用，API、worker、Nginx、PostgreSQL 健康，原自動作業 #29495 已續跑。正式唯讀 E2E 1 項通過，截圖已檢視。
+
+部署時驗證既有 backend requirements lock 相符後重用依賴層，完整複製已提交程式；前端使用本機 production build 製作 Nginx 映像。原全新 pip 建置停滯後已停止；封裝產生的靜態目錄讀取權限問題已在映像內修正並通過真實瀏覽器驗收。保留部署前映像與 NAS 本機回滾封存，既有 credentials、資料卷與使用者未提交的 evidence 檔案未覆蓋。
+
+正式清單為 933 檔、每頁 50 筆，最近驗證 API 約 26 毫秒；每日統計在同時載入首頁／執行 worker 時約 8 秒，背景顯示不阻擋操作。全市場 2148 檔，排除 933、已完成 1212、待完成 3（目標日 2026-09-24）。已取得資料與歷史分數保留，自動 worker 繼續新增評分。驗證細節及映像／版本資料見 [`REFRESH_EXCLUSIONS_DEPLOYMENT_EVIDENCE.json`](../deployment_evidence/REFRESH_EXCLUSIONS_DEPLOYMENT_EVIDENCE.json)。
