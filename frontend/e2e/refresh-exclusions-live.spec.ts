@@ -3,7 +3,7 @@ import { expect, test } from "@playwright/test";
 // Read-only deployment smoke test; never submits recovery or provider work.
 test.skip(process.env.EXCLUSIONS_LIVE_SMOKE !== "true", "requires an explicitly selected deployed server");
 
-test("deployed exclusion page reads real API data and preserves navigation", async ({ page, request }) => {
+test("deployed exclusion page reads real API data and preserves navigation", async ({ page, request }, testInfo) => {
   const response = await request.get("/api/refresh-exclusions?page_size=50");
   expect(response.ok()).toBeTruthy();
   const result = await response.json();
@@ -18,6 +18,7 @@ test("deployed exclusion page reads real API data and preserves navigation", asy
   await tabs.locator("button").nth(3).click();
   await expect(page.getByRole("heading", { name: "自動補抓排除清單" })).toBeVisible();
   await expect(page.getByTestId("exclusion-count")).toContainText(`全體排除 ${result.total} 檔`);
+  await page.screenshot({ path: testInfo.outputPath("deployed-exclusions.png"), fullPage: false });
   if (result.items.length) {
     const stock = result.items[0];
     await expect(page.getByTestId(`exclusion-row-${stock.stock_id}`)).toContainText(stock.stock_name);

@@ -119,6 +119,20 @@ def test_validation_enqueue_duplicate_and_merge_intent(db, api):
     assert api.get("/api/refresh-exclusions").json()["recent_results"][0]["job_id"] == first["job_id"]
 
 
+def test_listing_does_not_recompute_expensive_completion_unless_requested(db, api, monkeypatch):
+    import app.refresh_completion as completion
+    exclude(db)
+    calls = []
+    def calculate(*args, **kwargs):
+        calls.append(True)
+        return {"target_date": END.isoformat(), "excluded_count": 1, "pending_count": 0}
+    monkeypatch.setattr(completion, "daily_refresh_completion", calculate)
+    assert "daily_completion" not in api.get("/api/refresh-exclusions?page_size=1").json()
+    assert calls == []
+    result = api.get("/api/refresh-exclusions?include_completion=true").json()
+    assert result["daily_completion"]["excluded_count"] == 1 and calls == [True]
+
+
 def test_concurrent_recovery_posts_make_one_job(db, sessions):
     exclude(db)
     def enqueue(_):

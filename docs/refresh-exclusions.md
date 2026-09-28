@@ -16,7 +16,7 @@
 
 ## API
 
-- `GET /api/refresh-exclusions?search=&market=&page=1&page_size=50`：`total` 是全體排除數，`filtered_total` 是篩選結果數；`items`、`active_jobs`、`recent_results`、`daily_completion` 均來自本機資料庫。單頁最多 200 筆，總頁數無 200 筆限制。未保存的來源欄位回傳 null，前端顯示「未記錄」。
+- `GET /api/refresh-exclusions?search=&market=&page=1&page_size=50`：`total` 是全體排除數，`filtered_total` 是篩選結果數；`items`、`active_jobs`、`recent_results` 均來自本機資料庫。另加 `include_completion=true` 才計算並回傳 `daily_completion`；前端每分鐘背景更新，作業完成後立即更新，避免全市場統計拖慢清單、搜尋與作業輪詢。單頁最多 200 筆，總頁數無 200 筆限制。未保存的來源欄位回傳 null，前端顯示「未記錄」。
 - `POST /api/refresh-exclusions/{stock_id}/recover`：202，回傳作業契約與 `recovery`；可沿用既有 `source_date` 目標參數。排除已解除後的重送回傳最近一次復原收據；後續重新累積排除可再次建立新復原作業。
 - `GET /api/stocks/{stock_id}/fetch-and-score?job_id=...`：沿用狀態查詢；`status` 是補抓／評分結果，`recovery.automatic_refresh_eligibility`／`released_at` 是該次解除結果。`target_readiness` 與 `evaluated_source_date` 分別呈現目標完整性與實際評分日。
 
@@ -34,7 +34,7 @@ cd frontend
 npx playwright test --config playwright.local.config.ts --workers=2 --reporter=line
 ```
 
-`test_refresh_exclusions.py` 覆蓋分頁與舊 status、API 無下載、作業合併／並發、等待與重啟、實際個股評分持久化、資料不足／回退／失敗、原子收尾中斷、舊作業重播、重新計次、一般補抓語意、歷史資料保留及自動排程重新納入。前端新增 7 項 E2E，並以 local config 執行既有榜單／個股操作回歸；使用可重現 API fixtures，不呼叫真實 FinMind 或修改正式資料庫。
+`test_refresh_exclusions.py` 覆蓋分頁與舊 status、API 無下載、作業合併／並發、等待與重啟、實際個股評分持久化、資料不足／回退／失敗、原子收尾中斷、舊作業重播、重新計次、一般補抓語意、歷史資料保留及自動排程重新納入。前端新增 8 項 E2E，並以 local config 執行既有榜單／個股操作回歸；使用可重現 API fixtures，不呼叫真實 FinMind 或修改正式資料庫。
 
 
 2026-09-28 本機驗證結果：後端全套 263 項通過（新增本功能 22 項）；前端 E2E 26 項通過（新增 7 項）；TypeScript lint、production build、新增後端檔案 Ruff 與 Git whitespace 檢查通過。桌面截圖已檢視。後端使用隔離 SQLite，前端使用 API fixtures；本次未連接正式 PostgreSQL／NAS、未執行真實 FinMind 下載，也未部署正式環境，因此正式 PostgreSQL migration 與供應商實際回應仍需部署後驗證。

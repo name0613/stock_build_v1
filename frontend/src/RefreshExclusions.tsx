@@ -53,6 +53,8 @@ export function RefreshExclusions({ onBack, onChanged, onCount }: { onBack: () =
   const [market, setMarket] = useState("");
   const [page, setPage] = useState(1);
   const [data, setData] = useState<Exclusions | null>(null);
+  const [completion, setCompletion] = useState<Exclusions["daily_completion"]>();
+  const [completionError, setCompletionError] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [actionErrors, setActionErrors] = useState<Record<string, string>>({});
@@ -63,6 +65,24 @@ export function RefreshExclusions({ onBack, onChanged, onCount }: { onBack: () =
   const callbacks = useRef({ onChanged, onCount });
   callbacks.current = { onChanged, onCount };
   const [revision, setRevision] = useState(0);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    let inFlight = false;
+    async function loadCompletion() {
+      if (inFlight) return;
+      inFlight = true;
+      try {
+        const next = await request<Exclusions>("/api/refresh-exclusions?page_size=1&include_completion=true", { signal: controller.signal });
+        if (!controller.signal.aborted) { setCompletion(next.daily_completion); setCompletionError(false); }
+      } catch {
+        if (!controller.signal.aborted) setCompletionError(true);
+      } finally { inFlight = false; }
+    }
+    void loadCompletion();
+    const timer = window.setInterval(() => void loadCompletion(), 60000);
+    return () => { controller.abort(); window.clearInterval(timer); };
+  }, [revision]);
 
   function remember(next: RecoveryJob[]) {
     const merged = { ...jobsRef.current };
@@ -89,7 +109,7 @@ export function RefreshExclusions({ onBack, onChanged, onCount }: { onBack: () =
         const finished = returnedJobs.some(job => !active.has(job.status) && active.has(jobsRef.current[job.stock_id]?.status));
         remember(returnedJobs);
         setData(next); setError(""); callbacks.current.onCount(next.total);
-        if (finished) callbacks.current.onChanged();
+        if (finished) { callbacks.current.onChanged(); setRevision(value => value + 1); }
         const maxPage = Math.max(1, Math.ceil(next.filtered_total / 50));
         if (page > maxPage) setPage(maxPage);
         // Use the existing stock/job_id contract for progress, including off-page jobs.
@@ -125,13 +145,15 @@ export function RefreshExclusions({ onBack, onChanged, onCount }: { onBack: () =
     }
   }
   const results = Object.values(jobs).filter(job => job.recovery && !active.has(job.status)).sort((a, b) => b.job_id - a.job_id);
+  const currentCompletion = completion || data?.daily_completion;
   return <div className="app-shell exclusion-page">
     <header className="topbar"><button className="back-button" onClick={onBack}>← 返回原榜單</button><div><p className="eyebrow">REFRESH EXCLUSIONS</p><h1>自動補抓排除清單</h1></div></header>
     <main>
       <p className="notice">累計達門檻的股票會停止自動補抓。手動作業真正結束後，無論評分成功、資料不足或最終失敗，都會解除舊排除；後續自動失敗由 1/5 重新累計。</p>
       <section className="panel controls">
         <p data-testid="exclusion-count">全體排除 {data?.total ?? "—"} 檔 · 篩選結果 {data?.filtered_total ?? "—"} 檔</p>
-        {data?.daily_completion && <p data-testid="exclusion-daily-completion">目前目標日 {data.daily_completion.target_date} · 已完成 {data.daily_completion.completed_count} · 待完成 {data.daily_completion.pending_count} · 排除 {data.daily_completion.excluded_count}</p>}
+        {currentCompletion && <p data-testid="exclusion-daily-completion">最近統計目標日 {currentCompletion.target_date} · 已完成 {currentCompletion.completed_count} · 待完成 {currentCompletion.pending_count} · 排除 {currentCompletion.excluded_count}</p>}
+        {completionError && <p className="action-error">每日完成統計讀取失敗；可按重新讀取。</p>}
         <div className="control-row"><label>搜尋<input aria-label="排除股票代碼或名稱" value={search} placeholder="股票代碼／名稱" onChange={event => { setSearch(event.target.value); setPage(1); }} /></label><label>市場<select aria-label="排除股票市場" value={market} onChange={event => { setMarket(event.target.value); setPage(1); }}><option value="">全部</option><option>上市</option><option>上櫃</option><option>興櫃</option></select></label><button className="ghost-button" onClick={() => setRevision(value => value + 1)}>重新讀取</button></div>
       </section>
       {error && <p className="error-banner" role="alert">{error}</p>}

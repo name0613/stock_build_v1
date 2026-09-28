@@ -480,11 +480,13 @@ def rankings(kind: str = Query("top"), limit: int = Query(50, ge=1, le=200), db:
 
 
 @app.get("/api/refresh-exclusions")
-def refresh_exclusions(search: str = Query("", max_length=128), market: str = "", page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=200), db: Session = Depends(get_db)) -> dict[str, Any]:
+def refresh_exclusions(search: str = Query("", max_length=128), market: str = "", page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=200), include_completion: bool = False, db: Session = Depends(get_db)) -> dict[str, Any]:
     from .refresh_exclusions import list_exclusions
     from .refresh_completion import daily_refresh_completion, completion_summary
     result = list_exclusions(db, search=search, market=market, page=page, page_size=page_size)
-    result["daily_completion"] = completion_summary(daily_refresh_completion(db, _current_data_date(db, None)))
+    # Full-universe source aggregation must not delay pagination or job polling.
+    if include_completion:
+        result["daily_completion"] = completion_summary(daily_refresh_completion(db, _current_data_date(db, None)))
     return result
 
 

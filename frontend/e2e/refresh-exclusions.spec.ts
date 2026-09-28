@@ -140,3 +140,19 @@ test("ranking buttons wrap on narrow screens", async ({ page }) => {
   await page.getByTestId("refresh-exclusions-button").click();
   await expect(page.getByRole("heading", { name: "自動補抓排除清單" })).toBeVisible();
 });
+
+test("slow daily completion statistics never block the exclusion list", async ({ page }) => {
+  await fixtures(page, 2);
+  let release: () => void = () => {};
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  await page.route("**/api/refresh-exclusions?**", async route => {
+    if (new URL(route.request().url()).searchParams.get("include_completion") !== "true") return route.fallback();
+    await gate;
+    return route.fulfill({ json: { daily_completion: { target_date: "2026-09-08", excluded_count: 2, completed_count: 0, pending_count: 0 } } });
+  });
+  await page.goto("/#refresh-exclusions");
+  await expect(page.getByTestId("exclusion-row-7000")).toBeVisible({ timeout: 2000 });
+  await expect(page.getByTestId("exclusion-row-7000").getByRole("button")).toBeEnabled();
+  release();
+  await expect(page.getByTestId("exclusion-daily-completion")).toContainText("排除 2");
+});
