@@ -250,6 +250,11 @@ def test_reset_recounts_and_old_job_replay_cannot_reset_again(db):
         assert db.get(StockRefreshIssue, "9001").no_data_attempts == count
         assert ("9001" in ingestion.skipped_refresh_stock_ids(db)) == (count == 5)
     assert db.get(RefreshExclusionRecovery, job.id).released_at == released
+    finished_at = job.finished_at
+    ingestion._job_finish(db, job, "FAILED", checkpoint_state={"phase": "failed"})
+    assert job.status == "DATA_INSUFFICIENT" and job.finished_at == finished_at
+    assert job.checkpoint_state["phase"] == "completed"
+    assert db.get(RefreshExclusionRecovery, job.id).result["status"] == job.status
     again = manual.queue_manual_stock_refresh(db, "9001", END, recover_exclusion=True)
     assert again.id != job.id
     assert db.query(RefreshExclusionRecovery).count() == 2

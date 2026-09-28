@@ -119,6 +119,7 @@ def run():
             _record_no_data_attempt(db, "9001", next_job.id, {})
             db.commit()
             _job_finish(db, job, "FAILED", checkpoint_state={"phase": "failed"})
+            assert job.status == "DATA_INSUFFICIENT" and job.checkpoint_state["phase"] == "completed"
             assert db.get(StockRefreshIssue, "9001").no_data_attempts == 1
             assert db.get(RefreshExclusionRecovery, job.id).result["status"] == "DATA_INSUFFICIENT"
             checks["replay_preserves_new_failure_count_and_audit"] = True

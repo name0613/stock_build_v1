@@ -2387,7 +2387,13 @@ def _job_start(db: Session, dataset: str, start: date, end: date, stocks_attempt
 def _job_finish(db: Session, job: JobRun, status: str, *, records: int = 0, retry_count: int = 0, stocks_completed: int = 0, stocks_failed: int = 0, error_code: str | None = None, error: str | None = None, checkpoint_state: dict[str, Any] | None = None) -> None:
     if job.dataset == "manual_stock_refresh_score":
         from .refresh_exclusions import manual_transaction, release_exclusion
+        from .models import RefreshExclusionRecovery
         with manual_transaction(db):
+            recovery = db.get(RefreshExclusionRecovery, job.id, populate_existing=True)
+            if recovery is not None and recovery.released_at is not None:
+                # A replay is a read of the original receipt, not a new result.
+                db.refresh(job)
+                return
             state = {**(job.checkpoint_state or {}), **(checkpoint_state or {})}
             _set_job_finished(job, status, records=records, retry_count=retry_count, stocks_completed=stocks_completed, stocks_failed=stocks_failed, error_code=error_code, error=error, checkpoint_state=state)
             release_exclusion(db, job)
