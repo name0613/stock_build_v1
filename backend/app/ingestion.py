@@ -891,9 +891,14 @@ async def fetch_and_score_stock(
     stock = db.get(Stock, stock_id)
     if stock is None or not stock.is_common_stock:
         raise ValueError("stock not found")
-    target = as_of or completed_source_end_date(_now())
+    target = expected_trading_sessions(as_of or completed_source_end_date(_now()), 1)[-1]
     score_cutoff = _now()
     score_job = job or _job_start(db, TARGETED_STOCK_SYNC_DATASET, target, target, stocks_attempted=1)
+    if score_job.requested_end_date != target:
+        # Older queued manual jobs may still carry a calendar date. Revalidate
+        # their source checkpoints before scoring the corrected session.
+        score_job.requested_date = score_job.requested_start_date = score_job.requested_end_date = target
+        refreshed_datasets = None
     datasets: dict[str, Any] = {}
     fetch_errors: list[dict[str, str]] = []
     refreshed_datasets = set(refreshed_datasets or ())
@@ -2029,7 +2034,12 @@ async def intraday_sync(db: Session, client: FinMindClient, end_date: date | Non
 
 
 async def _intraday_sync_locked(db: Session, client: FinMindClient, end_date: date | None = None, progress_callback: Callable[[str], None] | None = None) -> dict[str, Any]:
-    end = end_date or date.today()
+    # The scheduler enters here only while OPEN. Direct callers on a closed
+    # market must use the latest closed session rather than a holiday.
+    if end_date is None:
+        session = market_session_state(_now())
+        end_date = date.fromisoformat(str(session["local_date"])) if session["state"] == "OPEN" else closed_market_target_date(_now())
+    end = expected_trading_sessions(end_date, 1)[-1]
     stock_ids = list(db.scalars(select(Stock.stock_id).where(Stock.is_common_stock.is_(True))).all())
     result: dict[str, Any] = {"status": "SUCCESS", "mode": "intraday", "datasets": {}}
     if not stock_ids:
@@ -2104,7 +2114,7 @@ async def _catch_up_locked(db: Session, client: FinMindClient, end_date: date | 
         if progress_callback:
             progress_callback(phase)
 
-    end = end_date or date.today()
+    end = expected_trading_sessions(end_date or completed_source_end_date(_now()), 1)[-1]
     start = expected_trading_sessions(end, 20)[0]
     result: dict[str, Any] = {"status": "SUCCESS", "datasets": {}, "scores": {}, "source_coverage": {}}
     required = ["TaiwanStockInstitutionalInvestorsBuySellWide", "TaiwanStockShareholding", "TaiwanStockHoldingSharesPer", "TaiwanStockPrice"]

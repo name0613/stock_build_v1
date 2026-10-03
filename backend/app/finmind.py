@@ -21,7 +21,7 @@ except ImportError:  # pragma: no cover - production image installs pyarrow
     pq = None
 
 from .config import Settings, get_settings
-from .calendar import is_trading_session
+from .calendar import completed_source_end_date, is_trading_session
 from .scoring import BROKER_ROW_CONTRACT_VERSION, HOLDING_SCHEMA_VERSION, HOLDING_WEEKLY_PERIOD_VERSION, holding_period_anchor, holding_schema_state, is_holding_metadata_level, parse_holding_level
 
 logger = logging.getLogger(__name__)
@@ -579,10 +579,10 @@ class FinMindClient:
 
     def probe(self, dataset: str, *, mode: str = "per_stock", production_used: bool | None = None) -> CapabilityResult:
         try:
-            end_date = date.today().isoformat()
-            start_date = (date.today() - timedelta(days=30)).isoformat()
+            target = completed_source_end_date()
+            end_date = target.isoformat()
+            start_date = (target - timedelta(days=30)).isoformat()
             if dataset in {"TaiwanStockTradingDailyReport", "TaiwanStockTradingDailyReportSecIdAgg"}:
-                end_date = (date.today() - timedelta(days=1)).isoformat()
                 start_date = end_date
             data_id = None if dataset == "TaiwanStockInfo" or mode == "broad" else "2330"
             trader_id = "075T" if dataset == "TaiwanStockTradingDailyReportSecIdAgg" else None

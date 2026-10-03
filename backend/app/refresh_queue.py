@@ -3,6 +3,7 @@ from datetime import date, datetime, timezone
 from threading import Lock
 from sqlalchemy import func, or_, select, text
 from sqlalchemy.orm import Session
+from .calendar import expected_trading_sessions
 from .models import AccumulationScore, BrokerDaily, ForeignShareholdingDaily, HoldingDistribution, InstitutionalDaily, JobRun, PriceDaily, Stock
 from .ingestion import UNIVERSE_BUDGET_LIMIT, UNIVERSE_BUDGET_REFRESH_DATASET, skipped_refresh_stock_ids
 from .scoring import SCORE_VERSION
@@ -54,6 +55,7 @@ def _universe_budget_queue(db: Session) -> tuple[list[str], dict[str, str | None
 
 
 def queue_universe_budget_refresh(db: Session, target: date, *, automatic: bool = False, now: datetime | None = None) -> tuple[JobRun, bool]:
+    target = expected_trading_sessions(target, 1)[-1]
     # PostgreSQL serializes the API and worker across processes until commit.
     with _queue_lock:
         try:

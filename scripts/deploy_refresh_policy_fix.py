@@ -2,8 +2,8 @@
 
 Requires NAS_HOST/NAS_USER/NAS_PASSWORD in the environment. Builds from committed
 Git sources and the verified running dependency layer; never uploads secrets.
-Run `stage` after frontend production build, then `rollout`. Rollout explicitly
-backs up and resets refresh counters using a revision-bound idempotency key.
+Run `stage` after frontend production build, then `rollout`. Refresh counters
+are preserved unless both phases explicitly use --reset-exclusions.
 """
 import argparse
 from datetime import datetime, timezone
@@ -29,11 +29,14 @@ EVIDENCE = ROOT / "deployment_evidence/REFRESH_POLICY_FIX_20261003.json"
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("phase", choices=["stage", "rollout"])
+    parser.add_argument("--reset-exclusions", action="store_true")
+    parser.add_argument("--evidence", type=Path, default=EVIDENCE)
     args = parser.parse_args()
     revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     release = f"/volume1/docker/tw-refresh-policy-release-{revision[:12]}"
     backup = f"/volume1/docker/tw-refresh-policy-backup-{revision[:12]}"
-    evidence = json.loads(EVIDENCE.read_text(encoding="utf-8")) if EVIDENCE.exists() else {}
+    evidence_path = args.evidence
+    evidence = json.loads(evidence_path.read_text(encoding="utf-8")) if evidence_path.exists() else {}
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     ssh.connect(os.environ.get("NAS_HOST", "192.168.31.138"), username=os.environ["NAS_USER"], password=os.environ["NAS_PASSWORD"], look_for_keys=False, allow_agent=False, timeout=15)
@@ -41,7 +44,7 @@ def main():
         def run(command, sudo=True):
             return remote(ssh, command, sudo=sudo)
         def save():
-            EVIDENCE.write_text(json.dumps(evidence, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+            evidence_path.write_text(json.dumps(evidence, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         if args.phase == "stage":
             paths = ["backend", "fixtures", "migrations", "scripts", "ARCHITECTURE.md", "SCORING.md", "docker-compose.yml", "nginx", "frontend/src", "frontend/package.json", "frontend/package-lock.json", "frontend/tsconfig.json", "frontend/vite.config.ts", "frontend/index.html", "frontend/Dockerfile", "docs", "README.md", "OPERATIONS.md"]
             if subprocess.check_output(["git", "status", "--porcelain", "--", *paths], cwd=ROOT, text=True).strip():
@@ -84,6 +87,7 @@ def main():
             assert probe == CALENDAR_HASH
             prior_attempt = evidence if evidence.get("reset_receipt") else evidence.get("prior_attempt")
             evidence = {"source_revision": revision, "release_directory": release, "rollback_directory": backup, "build_metadata": metadata, "frontend_metadata": front_metadata, "verified_dependency_image": base_image, "stage_completed_at": datetime.now(timezone.utc).isoformat(), "secrets_included": False}
+            evidence["reset_exclusions"] = args.reset_exclusions
             if prior_attempt:
                 evidence["prior_attempt"] = prior_attempt
             save()
@@ -91,6 +95,8 @@ def main():
             return
         if evidence.get("source_revision") != revision or not evidence.get("stage_completed_at"):
             raise RuntimeError("stage this exact revision first")
+        if evidence.get("reset_exclusions", False) != args.reset_exclusions:
+            raise RuntimeError("reset policy must match the staged release")
         if evidence.get("rollout_completed_at"):
             print("This rollout is already complete; use verification without resetting again")
             return
@@ -103,7 +109,7 @@ def main():
         run(f"cd {PROJECT} && tar -czf {backup}/application.tar.gz backend scripts migrations fixtures frontend/src docker-compose.yml nginx .env DEPLOYED_SOURCE_REVISION && chmod 600 {backup}/application.tar.gz")
         evidence["rollback_images"] = old_images
         save()
-        print("Stopping old API and worker before atomic counter reset", flush=True)
+        print("Stopping old API and worker before release activation", flush=True)
         run(f"cd {PROJECT} && docker compose stop -t 30 worker api")
         run(f"tar -xf {release}/source.tar -C {PROJECT}")
         sftp = ssh.open_sftp()
@@ -122,11 +128,12 @@ def main():
         for service in ("api", "worker"):
             run(f"docker tag tw-refresh-policy-backend:{revision[:12]} tw-accumulation-evidence-{service}:latest")
         run(f"docker tag tw-refresh-policy-frontend:{revision[:12]} tw-accumulation-evidence-frontend:latest")
-        reset_id = (evidence.get("prior_attempt", {}).get("reset_receipt") or {}).get("reset_id", f"calendar-policy-{revision[:12]}")
-        output = run(f"cd {PROJECT} && docker compose run --rm --no-deps api python /app/scripts/reset_refresh_issues.py --reset-id {reset_id}")
-        evidence["reset_receipt"] = json.loads(output)
-        save()
-        print(json.dumps(evidence["reset_receipt"]), flush=True)
+        if args.reset_exclusions:
+            reset_id = (evidence.get("prior_attempt", {}).get("reset_receipt") or {}).get("reset_id", f"calendar-policy-{revision[:12]}")
+            output = run(f"cd {PROJECT} && docker compose run --rm --no-deps api python /app/scripts/reset_refresh_issues.py --reset-id {reset_id}")
+            evidence["reset_receipt"] = json.loads(output)
+            save()
+            print(json.dumps(evidence["reset_receipt"]), flush=True)
         run(f"cd {PROJECT} && docker compose up -d --no-build --force-recreate api worker frontend nginx")
         evidence["rollout_completed_at"] = datetime.now(timezone.utc).isoformat()
         save()

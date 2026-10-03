@@ -21,7 +21,7 @@ from .ingestion import FAVORITE_REFRESH_DATASET, TARGETED_STOCK_SYNC_DATASET, UN
 from .refresh_queue import PARTIAL_SOURCE_SPECS, queue_universe_budget_refresh
 from .models import AccumulationFeature, AccumulationScore, BrokerDaily, CapitalAwareScore, DataSyncStatus, ForeignShareholdingDaily, HoldingDistribution, InstitutionalDaily, JobRun, PriceDaily, Stock, StockRefreshIssue
 from .schemas import PaginatedStocks, StockListItem
-from .calendar import CALENDAR_HASH, CALENDAR_VERSION
+from .calendar import CALENDAR_HASH, CALENDAR_VERSION, CalendarUnknownError, completed_source_end_date, expected_trading_sessions
 from .scoring import CAPITAL_AWARE_FORMULA_HASH, CAPITAL_AWARE_SCORE_MANIFEST, CAPITAL_AWARE_SCORE_VERSION, FORMULA_HASH, SCORE_MANIFEST, SCORE_VERSION
 from .worker_health import evaluate_health
 from .manual_refresh import MANUAL_STOCK_REFRESH_DATASET, manual_stock_job_payload as _targeted_score_job_payload, queue_manual_stock_refresh
@@ -173,7 +173,10 @@ def readiness(source_date: date | None = Query(None), stock_id: str | None = Que
 def _current_data_date(db: Session, requested: date | None = None) -> date:
     """Choose the current scoring target without asking FinMind for more data."""
     if requested is not None:
-        return requested
+        try:
+            return expected_trading_sessions(requested, 1)[-1]
+        except CalendarUnknownError as exc:
+            raise HTTPException(status_code=422, detail={"code": "CALENDAR_COVERAGE_UNKNOWN", "message": str(exc)}) from exc
     expected_dates = [
         expected
         for dataset in CURRENT_SCORE_DATASETS
@@ -186,7 +189,7 @@ def _current_data_date(db: Session, requested: date | None = None) -> date:
         for row in db.scalars(select(DataSyncStatus).where(DataSyncStatus.dataset.in_(CURRENT_SCORE_DATASETS))).all()
         if row.latest_source_date is not None
     ]
-    return max(persisted_dates, default=date.today())
+    return expected_trading_sessions(max(persisted_dates, default=completed_source_end_date()), 1)[-1]
 
 
 def _score_job_payload(job: JobRun) -> dict[str, Any]:

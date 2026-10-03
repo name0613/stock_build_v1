@@ -3,6 +3,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from .calendar import expected_trading_sessions
 from .models import JobRun, RefreshExclusionRecovery, StockRefreshIssue
 from .finmind import FinMindClient, FinMindError, GLOBAL_PROVIDER_FAILURE_CODES
 from .ingestion import fetch_and_score_stock, _job_finish
@@ -41,6 +42,7 @@ def manual_stock_job_payload(job: JobRun, db: Session | None = None) -> dict[str
 
 
 def queue_manual_stock_refresh(db: Session, stock_id: str, target: date, *, recover_exclusion: bool = False) -> JobRun:
+    target = expected_trading_sessions(target, 1)[-1]
     with manual_transaction(db):
         job = db.scalar(select(JobRun).where(
             JobRun.dataset == MANUAL_STOCK_REFRESH_DATASET,
