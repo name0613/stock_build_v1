@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 import hashlib
 import json
+import math
 import uuid
 from typing import Any, Awaitable, Callable
 
@@ -902,6 +903,7 @@ async def fetch_and_score_stock(
     defer_finish: bool = False,
     reuse_broker_observations: bool = False,
     allow_score_fallback: bool = True,
+    require_current_sources: bool = False,
 ) -> dict[str, Any]:
     """Fetch one stock's missing scoring inputs, then score it immediately.
 
@@ -987,7 +989,10 @@ async def fetch_and_score_stock(
             datasets[dataset] = {"status": "REUSED_REFRESH_CHECKPOINT", "physical_requests": 0, "refresh_complete": True}
             checkpoint(f"reused:{dataset}", pre_readiness=pre_readiness, quota=quota, progress={"completed": completed, "total": len(plan)})
             continue
-        if not force_refresh and reason not in set(pre_evaluation["missing_reasons"]):
+        current_source_complete = True
+        if require_current_sources and dataset == "TaiwanStockHoldingSharesPer":
+            current_source_complete = holding_coverage_state(db, [stock_id], end)["complete"]
+        if not force_refresh and reason not in set(pre_evaluation["missing_reasons"]) and current_source_complete:
             datasets[dataset] = {"status": "REUSED_LOCAL", "physical_requests": 0, "refresh_complete": True, "reason": "stock readiness already satisfied before fetch"}
             checkpoint(f"reused:{dataset}", pre_readiness=pre_readiness, quota=quota, progress={"completed": completed, "total": len(plan)})
             continue
@@ -1013,11 +1018,21 @@ async def fetch_and_score_stock(
                 broker_kwargs: dict[str, Any] = {"record_sink": sink, "progress_callback": provider_progress, "retry_deferred": True}
                 if reuse_broker_observations:
                     from .scoring import BROKER_ROW_CONTRACT_VERSION
-                    observed = db.scalars(select(BrokerDaily.source_date).where(
+                    observed = db.execute(select(BrokerDaily.source_date, BrokerDaily.provider_row_validated,
+                        BrokerDaily.provider_row_contract_version, BrokerDaily.net_volume,
+                        BrokerDaily.buy_volume, BrokerDaily.sell_volume).where(
                         BrokerDaily.stock_id == stock_id, BrokerDaily.source_date.between(start, end),
-                        BrokerDaily.source_dataset == dataset, BrokerDaily.provider_row_validated.is_(True),
-                        BrokerDaily.provider_row_contract_version == BROKER_ROW_CONTRACT_VERSION)).all()
-                    broker_kwargs["reusable_observations"] = {f"{stock_id}:{day.isoformat()}" for day in observed}
+                        BrokerDaily.source_dataset == dataset)).all()
+                    valid_days: set[date] = set()
+                    invalid_days: set[date] = set()
+                    for day, validated, contract, net, buy, sell in observed:
+                        valid_net = net is not None and math.isfinite(net)
+                        valid_pair = buy is not None and sell is not None and math.isfinite(buy) and math.isfinite(sell)
+                        if validated is True and contract == BROKER_ROW_CONTRACT_VERSION and (valid_net or valid_pair):
+                            valid_days.add(day)
+                        else:
+                            invalid_days.add(day)
+                    broker_kwargs["reusable_observations"] = {f"{stock_id}:{day.isoformat()}" for day in valid_days - invalid_days}
                 if force_refresh:
                     broker_kwargs["force_refresh"] = True
                 metrics = await client.fetch_broker_stocks([stock_id], start.isoformat(), end.isoformat(), **broker_kwargs)
@@ -1490,6 +1505,7 @@ async def resume_universe_budget_refresh_job(
             refreshed_datasets=refreshed,
             reuse_broker_observations=automatic,
             allow_score_fallback=not automatic,
+            require_current_sources=automatic,
         )
         merged_datasets = dict(previous.get("datasets", {}))
         for dataset, value in dict(result.get("datasets", {})).items():
@@ -1572,7 +1588,8 @@ async def resume_universe_budget_refresh_job(
             if issue.no_data_attempts >= REFRESH_NO_DATA_LIMIT:
                 checkpoint["skipped_no_data_count"] = int(checkpoint.get("skipped_no_data_count", 0) or 0) + 1
 
-        if incomplete_stock_attempt or not target_ready:
+        still_pending = automatic and bool(daily_refresh_completion(db, job.requested_end_date, [stock_id])["pending_stock_ids"])
+        if incomplete_stock_attempt or not target_ready or still_pending:
             # Give the provider time to publish. Never spend the rest of this
             # job's budget repeatedly downloading the same known gap.
             checkpoint["deferred_stock_ids"] = sorted(set(checkpoint.get("deferred_stock_ids", [])) | {stock_id})

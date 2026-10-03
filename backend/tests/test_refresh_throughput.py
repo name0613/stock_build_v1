@@ -11,8 +11,8 @@ import app.ingestion as ingestion
 from app.config import Settings
 from app.finmind import FinMindClient, FinMindRequestBudget
 from app.main import _score_evaluation_counts
-from app.models import AccumulationScore, Base, BrokerDaily, JobRun, PriceDaily, SourceRevision, Stock
-from app.refresh_queue import AUTOMATIC_SELECTION_POLICY, _universe_budget_queue
+from app.models import AccumulationScore, Base, BrokerDaily, HoldingDistribution, JobRun, PriceDaily, SourceRevision, Stock
+from app.refresh_queue import AUTOMATIC_SELECTION_POLICY, _universe_budget_queue, queue_universe_budget_refresh
 from app.scoring import BROKER_ROW_CONTRACT_VERSION, SCORE_VERSION
 from test_per_stock_scoring_gate import END, FETCHED_AT, _seed_complete_sources
 
@@ -156,6 +156,58 @@ def test_complete_local_inputs_get_current_score_without_provider_work(db):
     assert result["score"]["score"] is not None
     assert result["score"]["score_version"] == SCORE_VERSION
     assert all(value["physical_requests"] == 0 and value["refresh_complete"] for value in result["datasets"].values())
+
+
+@pytest.mark.parametrize("invalid_kind", ["legacy_contract", "null_net"])
+def test_mixed_valid_invalid_broker_day_is_refetched(db, monkeypatch, tmp_path, invalid_kind):
+    seed_stock(db)
+    _seed_complete_sources(db, "9001")
+    db.add(BrokerDaily(stock_id="9001", source_date=END, securities_trader_id="OLD",
+                       net_volume=10 if invalid_kind == "legacy_contract" else None,
+                       provider_row_validated=invalid_kind != "legacy_contract",
+                       provider_row_contract_version=BROKER_ROW_CONTRACT_VERSION,
+                       source_dataset="TaiwanStockTradingDailyReport", fetched_at=FETCHED_AT))
+    db.commit()
+    client = FinMindClient(Settings(raw_root=tmp_path, broker_max_retries=0))
+    calls = []
+    def fetch(dataset, sid, start, end, **_):
+        calls.append((start, end))
+        return [{"stock_id": sid, "date": start, "securities_trader_id": "OLD", "buy_volume": 11,
+                 "sell_volume": 1, "provider_row_validated": True, "provider_row_contract_version": BROKER_ROW_CONTRACT_VERSION}], {
+                     "provider_row_validated": True, "provider_row_contract_version": BROKER_ROW_CONTRACT_VERSION}
+    monkeypatch.setattr(client, "fetch", fetch)
+    result = asyncio.run(ingestion.fetch_and_score_stock(db, client, "9001", END,
+                                                       reuse_broker_observations=True, allow_score_fallback=False))
+    assert calls == [(END.isoformat(), END.isoformat())]
+    assert result["target_readiness"]["ready"]
+
+
+def test_stale_week_is_fetched_once_without_zero_request_scoring_loop(db, monkeypatch, tmp_path):
+    seed_stock(db)
+    _seed_complete_sources(db, "9001")
+    for row in db.scalars(select(HoldingDistribution).order_by(HoldingDistribution.source_date)).all():
+        row.source_date -= timedelta(days=7)
+        db.flush([row])
+    db.commit()
+    monkeypatch.setattr(ingestion, "closed_market_target_date", lambda *_: END)
+    monkeypatch.setattr(ingestion, "market_session_state", lambda: {"state": "CLOSED"})
+    job, _ = queue_universe_budget_refresh(db, END, automatic=True)
+    client = SimpleNamespace(settings=SimpleNamespace(broker_quota_reserve=0),
+                             request_budget=FinMindRequestBudget(3500, tmp_path / "stale-budget.json"),
+                             provider_quota=lambda **_: {"provider_reported_remaining": 6000})
+    calls = []
+    async def fetch(ids, dataset, start, end, **kwargs):
+        assert dataset == "TaiwanStockHoldingSharesPer"
+        calls.append((ids, start, end))
+        assert len(calls) == 1, "stale weekly source must not loop in the same job"
+        client.request_budget.reserve()
+        return {"success": 1, "physical_requests": 1, "rows_received": 0}
+    client.fetch_stocks_dataset = fetch
+    result = asyncio.run(ingestion.resume_universe_budget_refresh_job(db, client, job))
+    assert len(calls) == 1
+    assert result["phase"] == "waiting_for_source_data"
+    assert result["budget"]["used"] == 1
+    assert result["daily_completion"]["pending_count"] == 1
 
 
 def test_summary_distinguishes_unscored_from_evaluated_insufficient(db):
