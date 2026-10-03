@@ -1,0 +1,414 @@
+{
+  "observed_at": "2026-10-04T00:00:44.365246+08:00",
+  "deployed_revision": "d97b1a5977aae614d89d0a6209ef07c3e235bb2a",
+  "sanitized": true,
+  "secrets_included": false,
+  "post_deployment_attempts": {
+    "stock_attempts": [
+      {
+        "job_id": 34568,
+        "stock_id": "2321",
+        "status": "DATA_INSUFFICIENT",
+        "duration_ms": 4827,
+        "error_code": null,
+        "fetch_errors": [],
+        "physical_requests": 8,
+        "missing_reasons": [
+          "missing_institutional",
+          "missing_broker",
+          "missing_price"
+        ]
+      },
+      {
+        "job_id": 34569,
+        "stock_id": "2380",
+        "status": "SUCCESS",
+        "duration_ms": 15930,
+        "error_code": null,
+        "fetch_errors": [],
+        "physical_requests": 20,
+        "missing_reasons": []
+      },
+      {
+        "job_id": 34570,
+        "stock_id": "2424",
+        "status": "SUCCESS",
+        "duration_ms": 10382,
+        "error_code": null,
+        "fetch_errors": [],
+        "physical_requests": 20,
+        "missing_reasons": []
+      },
+      {
+        "job_id": 34571,
+        "stock_id": "2496",
+        "status": "DATA_INSUFFICIENT",
+        "duration_ms": 11228,
+        "error_code": null,
+        "fetch_errors": [],
+        "physical_requests": 20,
+        "missing_reasons": [
+          "missing_institutional"
+        ]
+      },
+      {
+        "job_id": 34572,
+        "stock_id": "2643",
+        "status": "DATA_INSUFFICIENT",
+        "duration_ms": 10408,
+        "error_code": null,
+        "fetch_errors": [],
+        "physical_requests": 20,
+        "missing_reasons": [
+          "missing_institutional"
+        ]
+      },
+      {
+        "job_id": 34573,
+        "stock_id": "2712",
+        "status": "DATA_INSUFFICIENT",
+        "duration_ms": 10163,
+        "error_code": null,
+        "fetch_errors": [],
+        "physical_requests": 20,
+        "missing_reasons": [
+          "missing_institutional"
+        ]
+      },
+      {
+        "job_id": 34574,
+        "stock_id": "2719",
+        "status": "DATA_INSUFFICIENT",
+        "duration_ms": 9754,
+        "error_code": null,
+        "fetch_errors": [],
+        "physical_requests": 20,
+        "missing_reasons": [
+          "missing_institutional"
+        ]
+      },
+      {
+        "job_id": 34575,
+        "stock_id": "2724",
+        "status": "DATA_INSUFFICIENT",
+        "duration_ms": 9522,
+        "error_code": null,
+        "fetch_errors": [],
+        "physical_requests": 20,
+        "missing_reasons": [
+          "missing_institutional",
+          "missing_broker"
+        ]
+      },
+      {
+        "job_id": 34576,
+        "stock_id": "2726",
+        "status": "DATA_INSUFFICIENT",
+        "duration_ms": 10087,
+        "error_code": null,
+        "fetch_errors": [],
+        "physical_requests": 20,
+        "missing_reasons": [
+          "missing_institutional"
+        ]
+      },
+      {
+        "job_id": 34577,
+        "stock_id": "2740",
+        "status": "DATA_INSUFFICIENT",
+        "duration_ms": 8490,
+        "error_code": null,
+        "fetch_errors": [],
+        "physical_requests": 20,
+        "missing_reasons": [
+          "missing_institutional"
+        ]
+      },
+      {
+        "job_id": 34578,
+        "stock_id": "2751",
+        "status": "DATA_INSUFFICIENT",
+        "duration_ms": 8354,
+        "error_code": null,
+        "fetch_errors": [],
+        "physical_requests": 20,
+        "missing_reasons": [
+          "missing_institutional",
+          "missing_broker"
+        ]
+      },
+      {
+        "job_id": 34579,
+        "stock_id": "2752",
+        "status": "DATA_INSUFFICIENT",
+        "duration_ms": 9745,
+        "error_code": null,
+        "fetch_errors": [],
+        "physical_requests": 20,
+        "missing_reasons": [
+          "missing_institutional"
+        ]
+      },
+      {
+        "job_id": 34580,
+        "stock_id": "2754",
+        "status": "DATA_INSUFFICIENT",
+        "duration_ms": 9783,
+        "error_code": null,
+        "fetch_errors": [],
+        "physical_requests": 20,
+        "missing_reasons": [
+          "missing_institutional"
+        ]
+      },
+      {
+        "job_id": 34581,
+        "stock_id": "2916",
+        "status": "DATA_INSUFFICIENT",
+        "duration_ms": 10928,
+        "error_code": null,
+        "fetch_errors": [],
+        "physical_requests": 20,
+        "missing_reasons": [
+          "missing_institutional"
+        ]
+      },
+      {
+        "job_id": 34582,
+        "stock_id": "2924",
+        "status": "DATA_INSUFFICIENT",
+        "duration_ms": 9643,
+        "error_code": null,
+        "fetch_errors": [],
+        "physical_requests": 20,
+        "missing_reasons": [
+          "missing_institutional"
+        ]
+      },
+      {
+        "job_id": 34583,
+        "stock_id": "2926",
+        "status": "DATA_INSUFFICIENT",
+        "duration_ms": 10337,
+        "error_code": null,
+        "fetch_errors": [],
+        "physical_requests": 20,
+        "missing_reasons": [
+          "missing_institutional",
+          "missing_broker"
+        ]
+      },
+      {
+        "job_id": 34584,
+        "stock_id": "2937",
+        "status": "DATA_INSUFFICIENT",
+        "duration_ms": 11571,
+        "error_code": null,
+        "fetch_errors": [],
+        "physical_requests": 20,
+        "missing_reasons": [
+          "missing_institutional",
+          "missing_broker"
+        ]
+      },
+      {
+        "job_id": 34585,
+        "stock_id": "2939",
+        "status": "SUCCESS",
+        "duration_ms": 10420,
+        "error_code": null,
+        "fetch_errors": [],
+        "physical_requests": 20,
+        "missing_reasons": []
+      },
+      {
+        "job_id": 34586,
+        "stock_id": "2941",
+        "status": "DATA_INSUFFICIENT",
+        "duration_ms": 9681,
+        "error_code": null,
+        "fetch_errors": [],
+        "physical_requests": 21,
+        "missing_reasons": [
+          "missing_institutional",
+          "missing_broker",
+          "missing_price"
+        ]
+      },
+      {
+        "job_id": 34587,
+        "stock_id": "2947",
+        "status": "DATA_INSUFFICIENT",
+        "duration_ms": 10352,
+        "error_code": null,
+        "fetch_errors": [],
+        "physical_requests": 20,
+        "missing_reasons": [
+          "missing_institutional"
+        ]
+      },
+      {
+        "job_id": 34588,
+        "stock_id": "2948",
+        "status": "DATA_INSUFFICIENT",
+        "duration_ms": 9786,
+        "error_code": null,
+        "fetch_errors": [],
+        "physical_requests": 20,
+        "missing_reasons": [
+          "missing_institutional"
+        ]
+      },
+      {
+        "job_id": 34589,
+        "stock_id": "2949",
+        "status": "DATA_INSUFFICIENT",
+        "duration_ms": 9777,
+        "error_code": null,
+        "fetch_errors": [],
+        "physical_requests": 21,
+        "missing_reasons": [
+          "missing_institutional",
+          "missing_broker",
+          "missing_price"
+        ]
+      },
+      {
+        "job_id": 34590,
+        "stock_id": "3064",
+        "status": "DATA_INSUFFICIENT",
+        "duration_ms": 9925,
+        "error_code": null,
+        "fetch_errors": [],
+        "physical_requests": 22,
+        "missing_reasons": [
+          "missing_institutional",
+          "missing_broker",
+          "missing_price"
+        ]
+      },
+      {
+        "job_id": 34591,
+        "stock_id": "3067",
+        "status": "DATA_INSUFFICIENT",
+        "duration_ms": 8419,
+        "error_code": null,
+        "fetch_errors": [],
+        "physical_requests": 20,
+        "missing_reasons": [
+          "missing_institutional",
+          "missing_broker",
+          "missing_price"
+        ]
+      },
+      {
+        "job_id": 34592,
+        "stock_id": "3115",
+        "status": "DATA_INSUFFICIENT",
+        "duration_ms": 14706,
+        "error_code": null,
+        "fetch_errors": [],
+        "physical_requests": 20,
+        "missing_reasons": [
+          "missing_institutional",
+          "missing_price"
+        ]
+      },
+      {
+        "job_id": 34593,
+        "stock_id": "3118",
+        "status": "DATA_INSUFFICIENT",
+        "duration_ms": 10874,
+        "error_code": null,
+        "fetch_errors": [],
+        "physical_requests": 20,
+        "missing_reasons": [
+          "missing_institutional",
+          "missing_price"
+        ]
+      },
+      {
+        "job_id": 34594,
+        "stock_id": "3085",
+        "status": "DATA_INSUFFICIENT",
+        "duration_ms": 13478,
+        "error_code": null,
+        "fetch_errors": [],
+        "physical_requests": 20,
+        "missing_reasons": [
+          "missing_institutional",
+          "missing_broker",
+          "missing_price"
+        ]
+      }
+    ],
+    "distinct_stock_count": 27,
+    "completed_attempt_count": 27,
+    "repeated_2321_attempts_after_fix": 1,
+    "median_duration_ms": 10087,
+    "execution_error_count": 0
+  },
+  "refresh": {
+    "job_id": 34470,
+    "status": "RUNNING",
+    "run_mode": "universe_fixed_budget_refresh_and_score",
+    "trigger": "closed_market_hourly",
+    "schedule_hour": "2026-10-03T11:00:00+00:00",
+    "daily_completion": {
+      "target_date": "2026-10-02",
+      "all_complete": false,
+      "pending_count": 2003,
+      "eligible_count": 2153,
+      "excluded_count": 0,
+      "universe_count": 2153,
+      "completed_count": 150
+    },
+    "target_date": "2026-10-02",
+    "phase": "refreshing_stock",
+    "current_stock_id": "3095",
+    "progress": {
+      "completed": 78,
+      "total": 2062
+    },
+    "budget": {
+      "limit": 3500,
+      "used": 1975,
+      "remaining": 1525
+    },
+    "next_retry_at": null,
+    "skipped_no_data_count": 0,
+    "started_at": "2026-10-03T11:13:06.726705Z",
+    "finished_at": null,
+    "error_code": null
+  },
+  "health": {
+    "status": "ok",
+    "ready": true,
+    "stale": false,
+    "job_progress_active": true
+  },
+  "summary": {
+    "stock_count": 2153,
+    "data_insufficient_count": 1903,
+    "score_metrics": {
+      "universe_stock_count": 2153,
+      "evaluated_stock_count": 2153,
+      "ready_stock_count": 250,
+      "not_ready_stock_count": 1903,
+      "score_rows_processed": 250,
+      "score_rows_data_insufficient": 1903,
+      "score_rows_failed": 0,
+      "missing_reason_counts": {
+        "missing_price": 1625,
+        "missing_broker": 1721,
+        "missing_institutional": 1808,
+        "missing_foreign_holding": 1834,
+        "tdcc_required_buckets_incomplete": 120
+      },
+      "accounting_invariant": true,
+      "pending_evaluation_count": 0,
+      "evaluated_insufficient_stock_count": 1903
+    }
+  },
+  "verification_passed": true
+}
