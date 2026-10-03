@@ -1,0 +1,140 @@
+{
+  "source_revision": "215a2a956ffafab174dbd41fd6dafc818734a6a8",
+  "release_directory": "/volume1/docker/tw-refresh-policy-release-215a2a956ffa",
+  "rollback_directory": "/volume1/docker/tw-refresh-policy-backup-215a2a956ffa",
+  "build_metadata": {
+    "source_revision": "215a2a956ffafab174dbd41fd6dafc818734a6a8",
+    "backend_lock_sha256": "75a0d62812977f2137f3fdbd0082594ba87efef8b0ce8af3c7fbbd0c0a0dfc47",
+    "score_spec_hash": "61792746e672727ad86e2e754cf4f8a701b7b760925088629baacb3101055132",
+    "calendar_hash": "7d848877e08575caddfd0479631b7628d6aada2565f18e0e1736d66b28358498",
+    "build_timestamp": "2026-10-03T02:35:28.448707+00:00"
+  },
+  "frontend_metadata": {
+    "source_revision": "215a2a956ffafab174dbd41fd6dafc818734a6a8",
+    "frontend_lock_sha256": "36c6571745da922fb5b37d65bf374a7fb146c28aadb7f55850a131399ff6ce0d",
+    "build_timestamp": "2026-10-03T02:35:28.448707+00:00"
+  },
+  "verified_dependency_image": "sha256:c8b903f3b24722f52bdebb021f258a380eb288f021d66dc72d2be63af91577eb",
+  "stage_completed_at": "2026-10-03T02:35:39.702899+00:00",
+  "secrets_included": false,
+  "reset_exclusions": false,
+  "rollback_images": {
+    "api": "sha256:c8b903f3b24722f52bdebb021f258a380eb288f021d66dc72d2be63af91577eb",
+    "worker": "sha256:c8b903f3b24722f52bdebb021f258a380eb288f021d66dc72d2be63af91577eb",
+    "frontend": "sha256:450da16edf59b68774014267921193015b2e3de7e494f58934dae01dd5a84c56"
+  },
+  "rollout_completed_at": "2026-10-03T02:37:30.772118+00:00",
+  "verification": {
+    "backend_tests_passed": 300,
+    "isolated_nas_image_tests_passed": 23,
+    "isolated_test_network": "none",
+    "reset_exclusions": false,
+    "services": [
+      {
+        "Service": "api",
+        "State": "running",
+        "Health": "healthy"
+      },
+      {
+        "Service": "frontend",
+        "State": "running",
+        "Health": ""
+      },
+      {
+        "Service": "nginx",
+        "State": "running",
+        "Health": "healthy"
+      },
+      {
+        "Service": "postgres",
+        "State": "running",
+        "Health": "healthy"
+      },
+      {
+        "Service": "worker",
+        "State": "running",
+        "Health": "healthy"
+      }
+    ],
+    "source_verification": {
+      "api": {
+        "matched_files": 18,
+        "all_match": true
+      },
+      "worker": {
+        "matched_files": 18,
+        "all_match": true
+      }
+    },
+    "runtime": {
+      "checked_at": "2026-10-03T02:41:45.983191+00:00",
+      "market": {
+        "state": "CLOSED",
+        "monitoring_active": false,
+        "reason": "weekend_or_exchange_holiday",
+        "timezone": "Asia/Taipei",
+        "local_date": "2026-10-03",
+        "local_time": "10:41:45",
+        "open_time": "09:00:00",
+        "close_time": "13:30:00",
+        "calendar_version": "tw-exchange-2026-v2",
+        "calendar_hash": "7d848877e08575caddfd0479631b7628d6aada2565f18e0e1736d66b28358498"
+      },
+      "target": "2026-10-02",
+      "publication_target": "2026-10-02",
+      "jobs_checked": 18,
+      "non_trading_job_targets": [],
+      "daily_windows_checked": 70,
+      "non_trading_daily_windows": [],
+      "recent_jobs": [
+        {
+          "id": 33654,
+          "status": "RUNNING",
+          "dataset": "targeted_stock_sync_score",
+          "target": "2026-10-02",
+          "phase": "fetching:TaiwanStockTradingDailyReport"
+        },
+        {
+          "id": 33653,
+          "status": "SUCCESS",
+          "dataset": "targeted_stock_sync_score",
+          "target": "2026-10-02",
+          "phase": "completed"
+        },
+        {
+          "id": 33652,
+          "status": "SUCCESS",
+          "dataset": "targeted_stock_sync_score",
+          "target": "2026-10-02",
+          "phase": "completed"
+        }
+      ],
+      "parent_job": {
+        "id": 33585,
+        "status": "RUNNING",
+        "target": "2026-10-02",
+        "stocks_completed": 16,
+        "current_stock_id": "1219"
+      },
+      "issue_records": 2,
+      "excluded_stocks": 0,
+      "failure_target_dates": [
+        "2026-10-02"
+      ],
+      "reset_receipts": 1
+    },
+    "api_healthy": true,
+    "worker_ready": true,
+    "metadata_matches_revision": true,
+    "api_target_checks": [
+      {
+        "requested": "2026-10-03",
+        "source_date": "2026-10-02"
+      },
+      {
+        "requested": "2026-09-28",
+        "source_date": "2026-09-24"
+      }
+    ]
+  }
+}
