@@ -53,6 +53,8 @@ def main():
             backend_lock = hashlib.sha256((ROOT / "backend/requirements.lock").read_bytes()).hexdigest()
             if deployed["backend_lock_sha256"] != backend_lock:
                 raise RuntimeError("running dependencies differ; full dependency build required")
+            dependency_tag = f"tw-refresh-policy-dependencies:{base_image.split(':')[-1][:16]}"
+            run(f"docker tag {base_image} {dependency_tag}")
             stamp = datetime.now(timezone.utc).isoformat()
             metadata = {"source_revision": revision, "backend_lock_sha256": backend_lock, "score_spec_hash": FORMULA_HASH, "calendar_hash": CALENDAR_HASH, "build_timestamp": stamp}
             front_metadata = {"source_revision": revision, "frontend_lock_sha256": hashlib.sha256((ROOT / "frontend/package-lock.json").read_bytes()).hexdigest(), "build_timestamp": stamp}
@@ -66,7 +68,7 @@ def main():
                 (tmp / "build-metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
                 (tmp / "frontend-metadata.json").write_text(json.dumps(front_metadata), encoding="utf-8")
                 labels = f'LABEL org.opencontainers.image.revision="{revision}" org.opencontainers.image.created="{stamp}" org.openai.calendar-sha256="{CALENDAR_HASH}"\n'
-                (tmp / "Dockerfile.backend").write_text(f"FROM {base_image}\nUSER root\n" + labels + "COPY --chown=app:app backend/app /app/app\nCOPY --chown=app:app backend/tests /app/tests\nCOPY --chown=app:app scripts /app/scripts\nCOPY --chown=app:app migrations /app/migrations\nCOPY --chown=app:app fixtures /app/fixtures\nCOPY --chown=app:app ARCHITECTURE.md SCORING.md build-metadata.json /app/\nUSER app\n", encoding="utf-8")
+                (tmp / "Dockerfile.backend").write_text(f"FROM {dependency_tag}\nUSER root\n" + labels + "COPY --chown=app:app backend/app /app/app\nCOPY --chown=app:app backend/tests /app/tests\nCOPY --chown=app:app scripts /app/scripts\nCOPY --chown=app:app migrations /app/migrations\nCOPY --chown=app:app fixtures /app/fixtures\nCOPY --chown=app:app ARCHITECTURE.md SCORING.md build-metadata.json /app/\nUSER app\n", encoding="utf-8")
                 (tmp / "Dockerfile.frontend").write_text("FROM nginx:1.27-alpine\n" + labels + "COPY frontend-dist /usr/share/nginx/html\nCOPY frontend-metadata.json /usr/share/nginx/html/build-metadata.json\nRUN chmod -R a+rX /usr/share/nginx/html\n", encoding="utf-8")
                 sftp = ssh.open_sftp()
                 prefix = detect_sftp_chroot(sftp, PROJECT)
