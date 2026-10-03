@@ -502,6 +502,24 @@ def test_partial_daily_range_keeps_unreturned_sessions_pending_across_restart(tm
     assert calls == [("2026-08-03", "2026-08-05"), ("2026-08-03", "2026-08-04")]
 
 
+def test_repeated_partial_rows_keep_missing_sessions_unverified_after_restart(tmp_path: Path) -> None:
+    import asyncio
+
+    settings = Settings(raw_root=tmp_path, broker_max_retries=0, source_concurrency=1)
+    dataset = "TaiwanStockPrice"
+    client = FinMindClient(settings)
+    client.fetch = lambda *args, **kwargs: ([{"stock_id": "2330", "date": day} for day in ("2026-08-03", "2026-08-05")], {"attempt": 1})
+    first = asyncio.run(client.fetch_stocks_dataset(["2330"], dataset, "2026-08-03", "2026-08-06"))
+    assert first["failure_codes"] == ["PARTIAL_OBSERVATION_COVERAGE"]
+    resumed = FinMindClient(settings)
+    resumed.fetch = lambda *args, **kwargs: ([{"stock_id": "2330", "date": "2026-08-05"}], {"attempt": 1})
+    second = asyncio.run(resumed.fetch_stocks_dataset(["2330"], dataset, "2026-08-03", "2026-08-06"))
+    assert second["failure_codes"] == ["PARTIAL_RESPONSE_UNVERIFIED"]
+    assert second["success"] == 0 and second["retryable_pending"] == 1
+    assert second["per_stock"]["2330"]["covered_dates"] == ["2026-08-03", "2026-08-05"]
+    assert second["per_stock"]["2330"]["unresolved_dates"] == ["2026-08-04", "2026-08-06"]
+
+
 def test_weekly_holding_checkpoint_retries_unreturned_publication(tmp_path: Path) -> None:
     import asyncio
 

@@ -8,7 +8,7 @@ from .models import JobRun, RefreshExclusionRecovery, StockRefreshIssue
 from .finmind import FinMindClient, FinMindError, GLOBAL_PROVIDER_FAILURE_CODES
 from .ingestion import fetch_and_score_stock, _job_finish
 from .refresh_exclusions import manual_transaction, recovery_payload, snapshot_issue
-from .refresh_policy import REFRESH_NO_DATA_LIMIT
+from .refresh_policy import REFRESH_NO_DATA_LIMIT, STOCK_COVERAGE_GAP_CODES
 
 MANUAL_STOCK_REFRESH_DATASET = "manual_stock_refresh_score"
 MANUAL_ACTIVE_STATUSES = ("QUEUED", "RUNNING", "WAITING_FOR_QUOTA", "WAITING_FOR_PROVIDER")
@@ -118,7 +118,7 @@ async def resume_manual_stock_refresh(db: Session, client: FinMindClient, job: J
         if "QUOTA_EXHAUSTED" in codes or any(int(value.get("quota_unselected_pending_count", 0) or 0) > 0 for value in result.get("datasets", {}).values() if isinstance(value, dict)):
             return wait("WAITING_FOR_QUOTA", "QUOTA_EXHAUSTED")
         terminal_codes = codes & (GLOBAL_PROVIDER_FAILURE_CODES | {"NON_RETRYABLE_4XX", "STOCK_SCHEMA_MISMATCH"})
-        retry_codes = codes - {"EMPTY_RESPONSE_UNVERIFIED", "PARTIAL_OBSERVATION_COVERAGE"}
+        retry_codes = codes - STOCK_COVERAGE_GAP_CODES
         unclassified_pending = any(
             int(value.get("retryable_pending", 0) or 0) > 0 and not value.get("failure_codes")
             for value in result.get("datasets", {}).values() if isinstance(value, dict)

@@ -187,7 +187,7 @@ class _FavoriteClient:
         return {"provider_reported_remaining": 5926, "provider_reported_limit_per_hour": 6000}
 
 
-@pytest.mark.parametrize("gap_code,ready", [("PARTIAL_OBSERVATION_COVERAGE", True), ("PARTIAL_OBSERVATION_COVERAGE", False), ("EMPTY_RESPONSE_UNVERIFIED", False)])
+@pytest.mark.parametrize("gap_code,ready", [("PARTIAL_OBSERVATION_COVERAGE", True), ("PARTIAL_OBSERVATION_COVERAGE", False), ("PARTIAL_RESPONSE_UNVERIFIED", True), ("PARTIAL_RESPONSE_UNVERIFIED", False), ("EMPTY_RESPONSE_UNVERIFIED", False)])
 def test_proven_stock_gaps_keep_score_and_advance_after_restart(monkeypatch, favorite_gap_job, gap_code, ready):
     job_id = favorite_gap_job
     holding = "TaiwanStockHoldingSharesPer"

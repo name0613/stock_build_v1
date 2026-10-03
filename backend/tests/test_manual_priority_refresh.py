@@ -158,6 +158,30 @@ def test_quota_wait_restart_and_resume_preserve_completed_sources(monkeypatch):
         assert result["status"] == "SUCCESS"
 
 
+@pytest.mark.parametrize("codes,expected", [
+    (["PARTIAL_RESPONSE_UNVERIFIED"], "DATA_INSUFFICIENT"),
+    (["PARTIAL_RESPONSE_UNVERIFIED", "NETWORK_ERROR"], "WAITING_FOR_PROVIDER"),
+    (["INCOMPLETE_PROVIDER_COVERAGE"], "WAITING_FOR_PROVIDER"),
+])
+def test_manual_partial_gap_finishes_without_hiding_other_failures(monkeypatch, codes, expected):
+    async def fetch(db, _client, stock_id, target, *, job, **kwargs):
+        result = {"status": "DATA_INSUFFICIENT", "fetch_errors": [],
+                  "datasets": {"TaiwanStockInstitutionalInvestorsBuySellWide": {
+                      "refresh_complete": False, "failure_codes": codes, "retryable_pending": 1, "records_accepted": 19}},
+                  "score": {"score": None}, "target_readiness": {"ready": False}}
+        job.checkpoint_state = {**job.checkpoint_state, **result}
+        db.commit()
+        return result
+
+    monkeypatch.setattr(manual, "fetch_and_score_stock", fetch)
+    with SessionLocal() as db:
+        job = manual.queue_manual_stock_refresh(db, "2330", date(2026, 8, 20))
+        result = asyncio.run(manual.resume_manual_stock_refresh(db, client_with_quota(), job))
+        assert result["status"] == expected
+        assert result["score"]["score"] is None
+        assert result["datasets"]["TaiwanStockInstitutionalInvestorsBuySellWide"]["refresh_complete"] is False
+
+
 def test_manual_failure_does_not_leave_running_job_or_block_next(monkeypatch):
     calls = []
 

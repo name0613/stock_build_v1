@@ -1,0 +1,671 @@
+{
+  "verified_at": "2026-10-03T11:17:25.117502+00:00",
+  "source_revision": "d438acec7304783daa87fdd6239538401945cf36",
+  "sanitized": true,
+  "secrets_included": false,
+  "runtime_hash_verification": {
+    "api": {
+      "metadata": {
+        "source_revision": "d438acec7304783daa87fdd6239538401945cf36",
+        "backend_lock_sha256": "75a0d62812977f2137f3fdbd0082594ba87efef8b0ce8af3c7fbbd0c0a0dfc47",
+        "score_spec_hash": "61792746e672727ad86e2e754cf4f8a701b7b760925088629baacb3101055132",
+        "calendar_hash": "7d848877e08575caddfd0479631b7628d6aada2565f18e0e1736d66b28358498",
+        "build_timestamp": "2026-10-03T11:09:41.127335+00:00"
+      },
+      "hashes": {
+        "app/ingestion.py": "4fb52970f009e79ccc9d586b127f5c2e952767b0de77e5b58d60bb4ca5ad523f",
+        "app/refresh_queue.py": "ea9d3b03e8119975b4f3b69e7706c9b34f8314df01c08d4c65555756fb116338",
+        "app/main.py": "4cc765a45577a69a37eb99cb7efb56ee7b358c7ad7ec22f4e99eb4fae1c014bf"
+      }
+    },
+    "worker": {
+      "metadata": {
+        "source_revision": "d438acec7304783daa87fdd6239538401945cf36",
+        "backend_lock_sha256": "75a0d62812977f2137f3fdbd0082594ba87efef8b0ce8af3c7fbbd0c0a0dfc47",
+        "score_spec_hash": "61792746e672727ad86e2e754cf4f8a701b7b760925088629baacb3101055132",
+        "calendar_hash": "7d848877e08575caddfd0479631b7628d6aada2565f18e0e1736d66b28358498",
+        "build_timestamp": "2026-10-03T11:09:41.127335+00:00"
+      },
+      "hashes": {
+        "app/ingestion.py": "4fb52970f009e79ccc9d586b127f5c2e952767b0de77e5b58d60bb4ca5ad523f",
+        "app/refresh_queue.py": "ea9d3b03e8119975b4f3b69e7706c9b34f8314df01c08d4c65555756fb116338",
+        "app/main.py": "4cc765a45577a69a37eb99cb7efb56ee7b358c7ad7ec22f4e99eb4fae1c014bf"
+      }
+    },
+    "source_hashes_match": true,
+    "comparison": "git HEAD blobs with core.autocrlf Git archive checkout conversion"
+  },
+  "tests": {
+    "backend_full": 311,
+    "frontend_playwright": 28,
+    "nas_image_regression": 32
+  },
+  "universe_recovery": {
+    "job_id": 34469,
+    "status": "SUCCESS",
+    "common_stock_count": 2153,
+    "stock_7812_exists": true
+  },
+  "automatic_refresh_sample": {
+    "completed_stock_jobs": [
+      {
+        "job_id": 34472,
+        "stock_id": "2938",
+        "status": "DATA_INSUFFICIENT",
+        "duration_ms": 14338,
+        "error_code": null,
+        "physical_requests": 24,
+        "rows_received": 1886,
+        "rows_accepted": 1315,
+        "datasets": {
+          "TaiwanStockPrice": {
+            "physical_requests": 1,
+            "records_accepted": 21,
+            "reused_complete": 0,
+            "observations_reused": 0,
+            "force_refresh_requested": false
+          },
+          "TaiwanStockShareholding": {
+            "physical_requests": 1,
+            "records_accepted": 12,
+            "reused_complete": 0,
+            "observations_reused": 0,
+            "force_refresh_requested": false
+          },
+          "TaiwanStockHoldingSharesPer": {
+            "physical_requests": 1,
+            "records_accepted": 135,
+            "reused_complete": 0,
+            "observations_reused": 0,
+            "force_refresh_requested": true
+          },
+          "TaiwanStockTradingDailyReport": {
+            "physical_requests": 20,
+            "records_accepted": 1141,
+            "reused_complete": 0,
+            "observations_reused": 0,
+            "force_refresh_requested": false
+          },
+          "TaiwanStockInstitutionalInvestorsBuySellWide": {
+            "physical_requests": 1,
+            "records_accepted": 6,
+            "reused_complete": 0,
+            "observations_reused": 0,
+            "force_refresh_requested": false
+          }
+        }
+      },
+      {
+        "job_id": 34473,
+        "stock_id": "3718",
+        "status": "DATA_INSUFFICIENT",
+        "duration_ms": 52842,
+        "error_code": null,
+        "physical_requests": 24,
+        "rows_received": 49953,
+        "rows_accepted": 12108,
+        "datasets": {
+          "TaiwanStockPrice": {
+            "physical_requests": 1,
+            "records_accepted": 20,
+            "reused_complete": 0,
+            "observations_reused": 0,
+            "force_refresh_requested": false
+          },
+          "TaiwanStockShareholding": {
+            "physical_requests": 1,
+            "records_accepted": 21,
+            "reused_complete": 0,
+            "observations_reused": 0,
+            "force_refresh_requested": false
+          },
+          "TaiwanStockHoldingSharesPer": {
+            "physical_requests": 1,
+            "records_accepted": 75,
+            "reused_complete": 0,
+            "observations_reused": 0,
+            "force_refresh_requested": true
+          },
+          "TaiwanStockTradingDailyReport": {
+            "physical_requests": 20,
+            "records_accepted": 11972,
+            "reused_complete": 0,
+            "observations_reused": 0,
+            "force_refresh_requested": false
+          },
+          "TaiwanStockInstitutionalInvestorsBuySellWide": {
+            "physical_requests": 1,
+            "records_accepted": 20,
+            "reused_complete": 0,
+            "observations_reused": 0,
+            "force_refresh_requested": false
+          }
+        }
+      },
+      {
+        "job_id": 34474,
+        "stock_id": "7812",
+        "status": "DATA_INSUFFICIENT",
+        "duration_ms": 15774,
+        "error_code": null,
+        "physical_requests": 24,
+        "rows_received": 3154,
+        "rows_accepted": 1714,
+        "datasets": {
+          "TaiwanStockPrice": {
+            "physical_requests": 1,
+            "records_accepted": 21,
+            "reused_complete": 0,
+            "observations_reused": 0,
+            "force_refresh_requested": false
+          },
+          "TaiwanStockShareholding": {
+            "physical_requests": 1,
+            "records_accepted": 8,
+            "reused_complete": 0,
+            "observations_reused": 0,
+            "force_refresh_requested": false
+          },
+          "TaiwanStockHoldingSharesPer": {
+            "physical_requests": 1,
+            "records_accepted": 135,
+            "reused_complete": 0,
+            "observations_reused": 0,
+            "force_refresh_requested": true
+          },
+          "TaiwanStockTradingDailyReport": {
+            "physical_requests": 20,
+            "records_accepted": 1535,
+            "reused_complete": 0,
+            "observations_reused": 0,
+            "force_refresh_requested": false
+          },
+          "TaiwanStockInstitutionalInvestorsBuySellWide": {
+            "physical_requests": 1,
+            "records_accepted": 15,
+            "reused_complete": 0,
+            "observations_reused": 0,
+            "force_refresh_requested": false
+          }
+        }
+      },
+      {
+        "job_id": 34475,
+        "stock_id": "7825",
+        "status": "DATA_INSUFFICIENT",
+        "duration_ms": 24444,
+        "error_code": null,
+        "physical_requests": 24,
+        "rows_received": 15305,
+        "rows_accepted": 5784,
+        "datasets": {
+          "TaiwanStockPrice": {
+            "physical_requests": 1,
+            "records_accepted": 20,
+            "reused_complete": 0,
+            "observations_reused": 0,
+            "force_refresh_requested": false
+          },
+          "TaiwanStockShareholding": {
+            "physical_requests": 1,
+            "records_accepted": 16,
+            "reused_complete": 0,
+            "observations_reused": 0,
+            "force_refresh_requested": false
+          },
+          "TaiwanStockHoldingSharesPer": {
+            "physical_requests": 1,
+            "records_accepted": 135,
+            "reused_complete": 0,
+            "observations_reused": 0,
+            "force_refresh_requested": true
+          },
+          "TaiwanStockTradingDailyReport": {
+            "physical_requests": 20,
+            "records_accepted": 5593,
+            "reused_complete": 0,
+            "observations_reused": 0,
+            "force_refresh_requested": false
+          },
+          "TaiwanStockInstitutionalInvestorsBuySellWide": {
+            "physical_requests": 1,
+            "records_accepted": 20,
+            "reused_complete": 0,
+            "observations_reused": 0,
+            "force_refresh_requested": false
+          }
+        }
+      },
+      {
+        "job_id": 34476,
+        "stock_id": "7856",
+        "status": "DATA_INSUFFICIENT",
+        "duration_ms": 35885,
+        "error_code": null,
+        "physical_requests": 24,
+        "rows_received": 41812,
+        "rows_accepted": 10018,
+        "datasets": {
+          "TaiwanStockPrice": {
+            "physical_requests": 1,
+            "records_accepted": 20,
+            "reused_complete": 0,
+            "observations_reused": 0,
+            "force_refresh_requested": false
+          },
+          "TaiwanStockShareholding": {
+            "physical_requests": 1,
+            "records_accepted": 8,
+            "reused_complete": 0,
+            "observations_reused": 0,
+            "force_refresh_requested": false
+          },
+          "TaiwanStockHoldingSharesPer": {
+            "physical_requests": 1,
+            "records_accepted": 135,
+            "reused_complete": 0,
+            "observations_reused": 0,
+            "force_refresh_requested": true
+          },
+          "TaiwanStockTradingDailyReport": {
+            "physical_requests": 20,
+            "records_accepted": 9835,
+            "reused_complete": 0,
+            "observations_reused": 0,
+            "force_refresh_requested": false
+          },
+          "TaiwanStockInstitutionalInvestorsBuySellWide": {
+            "physical_requests": 1,
+            "records_accepted": 20,
+            "reused_complete": 0,
+            "observations_reused": 0,
+            "force_refresh_requested": false
+          }
+        }
+      },
+      {
+        "job_id": 34477,
+        "stock_id": "8933",
+        "status": "DATA_INSUFFICIENT",
+        "duration_ms": 14084,
+        "error_code": null,
+        "physical_requests": 21,
+        "rows_received": 1366,
+        "rows_accepted": 912,
+        "datasets": {
+          "TaiwanStockPrice": {
+            "physical_requests": 1,
+            "records_accepted": 17,
+            "reused_complete": 0,
+            "observations_reused": 1,
+            "force_refresh_requested": false
+          },
+          "TaiwanStockShareholding": {
+            "physical_requests": 1,
+            "records_accepted": 17,
+            "reused_complete": 0,
+            "observations_reused": 1,
+            "force_refresh_requested": false
+          },
+          "TaiwanStockHoldingSharesPer": {
+            "physical_requests": 1,
+            "records_accepted": 135,
+            "reused_complete": 0,
+            "observations_reused": 5,
+            "force_refresh_requested": true
+          },
+          "TaiwanStockTradingDailyReport": {
+            "physical_requests": 17,
+            "records_accepted": 729,
+            "reused_complete": 3,
+            "observations_reused": 3,
+            "force_refresh_requested": false
+          },
+          "TaiwanStockInstitutionalInvestorsBuySellWide": {
+            "physical_requests": 1,
+            "records_accepted": 14,
+            "reused_complete": 0,
+            "observations_reused": 1,
+            "force_refresh_requested": false
+          }
+        }
+      },
+      {
+        "job_id": 34478,
+        "stock_id": "8941",
+        "status": "DATA_INSUFFICIENT",
+        "duration_ms": 11486,
+        "error_code": null,
+        "physical_requests": 21,
+        "rows_received": 390,
+        "rows_accepted": 329,
+        "datasets": {
+          "TaiwanStockPrice": {
+            "physical_requests": 1,
+            "records_accepted": 17,
+            "reused_complete": 0,
+            "observations_reused": 1,
+            "force_refresh_requested": false
+          },
+          "TaiwanStockShareholding": {
+            "physical_requests": 1,
+            "records_accepted": 17,
+            "reused_complete": 0,
+            "observations_reused": 1,
+            "force_refresh_requested": false
+          },
+          "TaiwanStockHoldingSharesPer": {
+            "physical_requests": 1,
+            "records_accepted": 135,
+            "reused_complete": 0,
+            "observations_reused": 5,
+            "force_refresh_requested": true
+          },
+          "TaiwanStockTradingDailyReport": {
+            "physical_requests": 17,
+            "records_accepted": 154,
+            "reused_complete": 3,
+            "observations_reused": 3,
+            "force_refresh_requested": false
+          },
+          "TaiwanStockInstitutionalInvestorsBuySellWide": {
+            "physical_requests": 1,
+            "records_accepted": 6,
+            "reused_complete": 0,
+            "observations_reused": 1,
+            "force_refresh_requested": false
+          }
+        }
+      },
+      {
+        "job_id": 34479,
+        "stock_id": "9110",
+        "status": "DATA_INSUFFICIENT",
+        "duration_ms": 11530,
+        "error_code": null,
+        "physical_requests": 22,
+        "rows_received": 385,
+        "rows_accepted": 308,
+        "datasets": {
+          "TaiwanStockPrice": {
+            "physical_requests": 1,
+            "records_accepted": 17,
+            "reused_complete": 0,
+            "observations_reused": 1,
+            "force_refresh_requested": false
+          },
+          "TaiwanStockShareholding": {
+            "physical_requests": 1,
+            "records_accepted": 17,
+            "reused_complete": 0,
+            "observations_reused": 1,
+            "force_refresh_requested": false
+          },
+          "TaiwanStockHoldingSharesPer": {
+            "physical_requests": 1,
+            "records_accepted": 135,
+            "reused_complete": 0,
+            "observations_reused": 5,
+            "force_refresh_requested": true
+          },
+          "TaiwanStockTradingDailyReport": {
+            "physical_requests": 18,
+            "records_accepted": 138,
+            "reused_complete": 2,
+            "observations_reused": 2,
+            "force_refresh_requested": false
+          },
+          "TaiwanStockInstitutionalInvestorsBuySellWide": {
+            "physical_requests": 1,
+            "records_accepted": 1,
+            "reused_complete": 0,
+            "observations_reused": 1,
+            "force_refresh_requested": false
+          }
+        }
+      },
+      {
+        "job_id": 34480,
+        "stock_id": "9918",
+        "status": "SUCCESS",
+        "duration_ms": 11255,
+        "error_code": null,
+        "physical_requests": 21,
+        "rows_received": 831,
+        "rows_accepted": 636,
+        "datasets": {
+          "TaiwanStockPrice": {
+            "physical_requests": 1,
+            "records_accepted": 17,
+            "reused_complete": 0,
+            "observations_reused": 1,
+            "force_refresh_requested": false
+          },
+          "TaiwanStockShareholding": {
+            "physical_requests": 1,
+            "records_accepted": 17,
+            "reused_complete": 0,
+            "observations_reused": 1,
+            "force_refresh_requested": false
+          },
+          "TaiwanStockHoldingSharesPer": {
+            "physical_requests": 1,
+            "records_accepted": 135,
+            "reused_complete": 0,
+            "observations_reused": 5,
+            "force_refresh_requested": true
+          },
+          "TaiwanStockTradingDailyReport": {
+            "physical_requests": 17,
+            "records_accepted": 450,
+            "reused_complete": 3,
+            "observations_reused": 3,
+            "force_refresh_requested": false
+          },
+          "TaiwanStockInstitutionalInvestorsBuySellWide": {
+            "physical_requests": 1,
+            "records_accepted": 17,
+            "reused_complete": 0,
+            "observations_reused": 1,
+            "force_refresh_requested": false
+          }
+        }
+      },
+      {
+        "job_id": 34481,
+        "stock_id": "9928",
+        "status": "DATA_INSUFFICIENT",
+        "duration_ms": 11208,
+        "error_code": null,
+        "physical_requests": 21,
+        "rows_received": 800,
+        "rows_accepted": 623,
+        "datasets": {
+          "TaiwanStockPrice": {
+            "physical_requests": 1,
+            "records_accepted": 17,
+            "reused_complete": 0,
+            "observations_reused": 1,
+            "force_refresh_requested": false
+          },
+          "TaiwanStockShareholding": {
+            "physical_requests": 1,
+            "records_accepted": 17,
+            "reused_complete": 0,
+            "observations_reused": 1,
+            "force_refresh_requested": false
+          },
+          "TaiwanStockHoldingSharesPer": {
+            "physical_requests": 1,
+            "records_accepted": 135,
+            "reused_complete": 0,
+            "observations_reused": 5,
+            "force_refresh_requested": true
+          },
+          "TaiwanStockTradingDailyReport": {
+            "physical_requests": 17,
+            "records_accepted": 451,
+            "reused_complete": 3,
+            "observations_reused": 3,
+            "force_refresh_requested": false
+          },
+          "TaiwanStockInstitutionalInvestorsBuySellWide": {
+            "physical_requests": 1,
+            "records_accepted": 3,
+            "reused_complete": 0,
+            "observations_reused": 1,
+            "force_refresh_requested": false
+          }
+        }
+      }
+    ],
+    "job_count": 10,
+    "distinct_stock_count": 10,
+    "physical_requests": 226,
+    "rows_received": 115882,
+    "rows_accepted": 33747,
+    "median_duration_ms": 14211.0,
+    "new_fk_failures": 0
+  },
+  "services": [
+    {
+      "Service": "api",
+      "State": "running",
+      "Health": "healthy",
+      "Image": "tw-accumulation-evidence-api"
+    },
+    {
+      "Service": "frontend",
+      "State": "running",
+      "Health": "",
+      "Image": "tw-accumulation-evidence-frontend"
+    },
+    {
+      "Service": "nginx",
+      "State": "running",
+      "Health": "healthy",
+      "Image": "nginx:1.27-alpine"
+    },
+    {
+      "Service": "postgres",
+      "State": "running",
+      "Health": "healthy",
+      "Image": "postgres:16-alpine"
+    },
+    {
+      "Service": "worker",
+      "State": "running",
+      "Health": "healthy",
+      "Image": "tw-accumulation-evidence-worker"
+    }
+  ],
+  "api_health": {
+    "status": "ok",
+    "service": "api",
+    "database": "ok",
+    "score_version": "s-only-v6-calendar-v2",
+    "formula_hash": "61792746e672727ad86e2e754cf4f8a701b7b760925088629baacb3101055132",
+    "timezone": "Asia/Taipei"
+  },
+  "worker_health": {
+    "status": "ok",
+    "ready": true,
+    "stale": false,
+    "job_progress_active": true,
+    "heartbeat_age_seconds": 0,
+    "progress_age_seconds": 0
+  },
+  "score_job": {
+    "job_id": 34471,
+    "status": "RUNNING",
+    "run_mode": "existing_data",
+    "target_date": "2026-10-02",
+    "started_at": "2026-10-03T11:13:10.435060Z",
+    "finished_at": null,
+    "processed_stock_count": 325,
+    "universe_stock_count": 2153,
+    "scores": {
+      "WATCH": 39,
+      "ACCUMULATION": 30,
+      "DATA_INSUFFICIENT": 246,
+      "NO_STRONG_EVIDENCE": 9,
+      "STRONG_ACCUMULATION": 1
+    },
+    "score_metrics": {
+      "ready_stock_count": 79,
+      "score_rows_failed": 0,
+      "accounting_invariant": true,
+      "score_rows_processed": 79,
+      "universe_stock_count": 2153,
+      "evaluated_stock_count": 325,
+      "missing_reason_counts": {
+        "missing_price": 158,
+        "missing_broker": 236,
+        "missing_institutional": 245,
+        "missing_foreign_holding": 233,
+        "tdcc_required_buckets_incomplete": 12
+      },
+      "not_ready_stock_count": 246,
+      "score_rows_data_insufficient": 246
+    },
+    "error_code": null
+  },
+  "refresh_job": {
+    "job_id": 34470,
+    "status": "RUNNING",
+    "run_mode": "universe_fixed_budget_refresh_and_score",
+    "trigger": "closed_market_hourly",
+    "schedule_hour": "2026-10-03T11:00:00+00:00",
+    "daily_completion": {
+      "target_date": "2026-10-02",
+      "all_complete": false,
+      "pending_count": 2062,
+      "eligible_count": 2153,
+      "excluded_count": 0,
+      "universe_count": 2153,
+      "completed_count": 91
+    },
+    "target_date": "2026-10-02",
+    "phase": "refreshing_stock",
+    "current_stock_id": "9929",
+    "progress": {
+      "completed": 10,
+      "total": 2062
+    },
+    "budget": {
+      "limit": 3500,
+      "used": 226,
+      "remaining": 3274
+    },
+    "next_retry_at": null,
+    "skipped_no_data_count": 0,
+    "started_at": "2026-10-03T11:13:06.726705Z",
+    "finished_at": null,
+    "error_code": null
+  },
+  "summary": {
+    "stock_count": 2153,
+    "data_insufficient_count": 2046,
+    "score_version": "s-only-v6-calendar-v2",
+    "formula_hash": "61792746e672727ad86e2e754cf4f8a701b7b760925088629baacb3101055132",
+    "score_metrics": {
+      "universe_stock_count": 2153,
+      "evaluated_stock_count": 592,
+      "ready_stock_count": 107,
+      "not_ready_stock_count": 2046,
+      "score_rows_processed": 107,
+      "score_rows_data_insufficient": 2046,
+      "score_rows_failed": 0,
+      "missing_reason_counts": {
+        "missing_price": 158,
+        "missing_broker": 236,
+        "missing_institutional": 245,
+        "missing_foreign_holding": 233,
+        "tdcc_required_buckets_incomplete": 12
+      },
+      "accounting_invariant": true,
+      "pending_evaluation_count": 1561,
+      "evaluated_insufficient_stock_count": 485
+    }
+  }
+}

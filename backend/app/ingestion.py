@@ -12,7 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .calendar import CALENDAR_HASH, CALENDAR_VERSION, closed_market_target_date, completed_source_end_date, expected_trading_sessions, is_trading_session, market_session_state, missing_sessions
-from .refresh_policy import REFRESH_NO_DATA_LIMIT, exclusion_predicate
+from .refresh_policy import REFRESH_NO_DATA_LIMIT, STOCK_COVERAGE_GAP_CODES, exclusion_predicate
 from .refresh_completion import completion_summary, daily_refresh_completion
 from .features import build_features
 from .finmind import AUTOMATIC_REFRESH_PAUSED, CAPABILITY_ONLY_DATASETS, GLOBAL_PROVIDER_FAILURE_CODES, FinMindClient, FinMindError, SchemaMismatch
@@ -1544,13 +1544,6 @@ async def resume_universe_budget_refresh_job(
             dataset for dataset, value in merged_datasets.items()
             if dataset in FAVORITE_REFRESH_DATASETS and isinstance(value, dict) and value.get("refresh_complete") is True
         }
-        incomplete_datasets = {
-            dataset: value
-            for dataset, value in merged_datasets.items()
-            if dataset in FAVORITE_REFRESH_DATASETS
-            and isinstance(value, dict)
-            and value.get("refresh_complete") is not True
-        }
         attempt_rows = sum(
             int(value.get("records_accepted", value.get("rows_received", value.get("rows", 0))) or 0)
             for value in merged_datasets.values()
@@ -1559,16 +1552,7 @@ async def resume_universe_budget_refresh_job(
         # Only proven stock-level empty/partial responses may advance the
         # queue. Network errors, unclassified failures, and unattempted sources
         # must not increment the persistent missing-data counter.
-        incomplete_stock_attempt = (
-            bool(incomplete_datasets)
-            and not error_codes
-            and set(merged_datasets) >= set(FAVORITE_REFRESH_DATASETS)
-            and all(
-                bool(value.get("failure_codes"))
-                and set(value["failure_codes"]) <= {"EMPTY_RESPONSE_UNVERIFIED", "PARTIAL_OBSERVATION_COVERAGE"}
-                for value in incomplete_datasets.values()
-            )
-        )
+        incomplete_stock_attempt = bool(_proven_stock_refresh_gaps(merged_datasets, error_codes))
         if completed_datasets != set(FAVORITE_REFRESH_DATASETS) and not incomplete_stock_attempt:
             return _budget_wait(db, job, checkpoint, "WAITING_FOR_PROVIDER", "REFRESH_INCOMPLETE")
 
@@ -1607,7 +1591,7 @@ def _proven_stock_refresh_gaps(datasets: dict[str, Any], error_codes: set[str]) 
 
     Refresh completeness covers the entire download window, which can exceed
     the scoring window (e.g. 8-week holdings versus required 4-week holdings).
-    Keep these gaps explicit without blocking the rest of a favorite batch.
+    Keep these gaps explicit without blocking the rest of a refresh batch.
     Unattempted datasets, transport failures and unknown errors still retry.
     """
     if error_codes or not set(datasets) >= set(FAVORITE_REFRESH_DATASETS):
@@ -1620,7 +1604,10 @@ def _proven_stock_refresh_gaps(datasets: dict[str, Any], error_codes: set[str]) 
         if value.get("refresh_complete") is True:
             continue
         codes = value.get("failure_codes") or []
-        if not codes or not set(codes) <= {"EMPTY_RESPONSE_UNVERIFIED", "PARTIAL_OBSERVATION_COVERAGE"}:
+        # A retry may return the same partial rows without adding a newly
+        # verified date. FinMind labels that PARTIAL_RESPONSE_UNVERIFIED;
+        # it remains a stock coverage gap, not a global provider outage.
+        if not codes or not set(codes) <= STOCK_COVERAGE_GAP_CODES:
             return None
         if int(value.get("quota_unselected_pending_count", 0) or 0) > 0:
             return None
