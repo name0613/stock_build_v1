@@ -1,0 +1,280 @@
+{
+  "source_revision": "ff5daa836cda7af72ebc937a4efd493b6d343bca",
+  "release_directory": "/volume1/docker/tw-refresh-policy-release-ff5daa836cda",
+  "rollback_directory": "/volume1/docker/tw-refresh-policy-backup-ff5daa836cda",
+  "build_metadata": {
+    "source_revision": "ff5daa836cda7af72ebc937a4efd493b6d343bca",
+    "backend_lock_sha256": "75a0d62812977f2137f3fdbd0082594ba87efef8b0ce8af3c7fbbd0c0a0dfc47",
+    "score_spec_hash": "61792746e672727ad86e2e754cf4f8a701b7b760925088629baacb3101055132",
+    "calendar_hash": "7d848877e08575caddfd0479631b7628d6aada2565f18e0e1736d66b28358498",
+    "build_timestamp": "2026-10-03T02:16:53.916352+00:00"
+  },
+  "frontend_metadata": {
+    "source_revision": "ff5daa836cda7af72ebc937a4efd493b6d343bca",
+    "frontend_lock_sha256": "36c6571745da922fb5b37d65bf374a7fb146c28aadb7f55850a131399ff6ce0d",
+    "build_timestamp": "2026-10-03T02:16:53.916352+00:00"
+  },
+  "verified_dependency_image": "sha256:9dbe364061dbafb90f206e28687e45d83bfe3f1504aa1e72b45f59648f497ba1",
+  "stage_completed_at": "2026-10-03T02:17:01.527419+00:00",
+  "secrets_included": false,
+  "prior_attempt": {
+    "source_revision": "44149da60129b21654524b2dec60711824d38050",
+    "release_directory": "/volume1/docker/tw-refresh-policy-release-44149da60129",
+    "rollback_directory": "/volume1/docker/tw-refresh-policy-backup-44149da60129",
+    "build_metadata": {
+      "source_revision": "44149da60129b21654524b2dec60711824d38050",
+      "backend_lock_sha256": "75a0d62812977f2137f3fdbd0082594ba87efef8b0ce8af3c7fbbd0c0a0dfc47",
+      "score_spec_hash": "5cc03768a331e0c35be8db47ff40db1a2f8c275363143b200948dd672cbb8b9c",
+      "calendar_hash": "7d848877e08575caddfd0479631b7628d6aada2565f18e0e1736d66b28358498",
+      "build_timestamp": "2026-10-03T02:10:12.185419+00:00"
+    },
+    "frontend_metadata": {
+      "source_revision": "44149da60129b21654524b2dec60711824d38050",
+      "frontend_lock_sha256": "36c6571745da922fb5b37d65bf374a7fb146c28aadb7f55850a131399ff6ce0d",
+      "build_timestamp": "2026-10-03T02:10:12.185419+00:00"
+    },
+    "verified_dependency_image": "sha256:d91fc3b77c34777bc770a65eb8de91c73be59938b83444d92405d16610f42989",
+    "stage_completed_at": "2026-10-03T02:10:21.699898+00:00",
+    "secrets_included": false,
+    "postgres_probe": {
+      "database": "postgresql",
+      "checks": {
+        "migration_idempotent": true,
+        "cross_process_deduplication": true,
+        "postgres_json_query_and_intent": true,
+        "completion_crash_atomic_rollback": true,
+        "atomic_release_and_receipt": true,
+        "completed_schedule_reopens_without_rewriting_history": true,
+        "replay_preserves_new_failure_count_and_audit": true
+      },
+      "passed": true,
+      "public_data_modified": false,
+      "provider_requests": 0,
+      "secrets_included": false
+    },
+    "rollback_images": {
+      "api": "sha256:d91fc3b77c34777bc770a65eb8de91c73be59938b83444d92405d16610f42989",
+      "worker": "sha256:d91fc3b77c34777bc770a65eb8de91c73be59938b83444d92405d16610f42989",
+      "frontend": "sha256:eda77dc9f021780df29acd1475def2ca451c0945283d0bd85be63dedd3178a5d"
+    },
+    "reset_receipt": {
+      "reset_id": "calendar-policy-44149da60129",
+      "cleared_issue_count": 2100,
+      "previously_excluded_count": 1645,
+      "excluded_count_after_reset": 0,
+      "universe_count": 2148,
+      "requeued_job_ids": [
+        33585
+      ],
+      "target_date": "2026-10-02",
+      "backup_path": "/data/raw/operations/refresh-exclusion-backups/calendar-policy-44149da60129-a7cefdc6787748b18d0100ac6727bd9f.json",
+      "backup_sha256": "1ffa0194e25e59b61a411f43b5eb162f21bb180198adcf39249263c43f147ccb",
+      "calendar_version": "tw-exchange-2026-v2",
+      "source_revision": "44149da60129b21654524b2dec60711824d38050",
+      "completed_at": "2026-10-03T02:12:17.327932+00:00"
+    }
+  },
+  "rollback_images": {
+    "api": "sha256:9dbe364061dbafb90f206e28687e45d83bfe3f1504aa1e72b45f59648f497ba1",
+    "worker": "sha256:9dbe364061dbafb90f206e28687e45d83bfe3f1504aa1e72b45f59648f497ba1",
+    "frontend": "sha256:42be1b0c3bf31aa270c9894679934c9db723915aadc7bf324a468520259fcff4"
+  },
+  "reset_receipt": {
+    "reset_id": "calendar-policy-44149da60129",
+    "backup_path": "/data/raw/operations/refresh-exclusion-backups/calendar-policy-44149da60129-a7cefdc6787748b18d0100ac6727bd9f.json",
+    "target_date": "2026-10-02",
+    "completed_at": "2026-10-03T02:12:17.327932+00:00",
+    "backup_sha256": "1ffa0194e25e59b61a411f43b5eb162f21bb180198adcf39249263c43f147ccb",
+    "universe_count": 2148,
+    "source_revision": "44149da60129b21654524b2dec60711824d38050",
+    "calendar_version": "tw-exchange-2026-v2",
+    "requeued_job_ids": [
+      33585
+    ],
+    "cleared_issue_count": 2100,
+    "previously_excluded_count": 1645,
+    "excluded_count_after_reset": 0,
+    "replayed": true
+  },
+  "rollout_completed_at": "2026-10-03T02:17:56.416067+00:00",
+  "http_verification": {
+    "checked_at": "2026-10-03T02:18:34.099243+00:00",
+    "health": {
+      "status": "ok",
+      "service": "api",
+      "database": "ok",
+      "score_version": "s-only-v6-calendar-v2",
+      "formula_hash": "61792746e672727ad86e2e754cf4f8a701b7b760925088629baacb3101055132",
+      "timezone": "Asia/Taipei"
+    },
+    "build_metadata": {
+      "source_revision": "ff5daa836cda7af72ebc937a4efd493b6d343bca",
+      "backend_lock_sha256": "75a0d62812977f2137f3fdbd0082594ba87efef8b0ce8af3c7fbbd0c0a0dfc47",
+      "score_spec_hash": "61792746e672727ad86e2e754cf4f8a701b7b760925088629baacb3101055132",
+      "calendar_hash": "7d848877e08575caddfd0479631b7628d6aada2565f18e0e1736d66b28358498",
+      "build_timestamp": "2026-10-03T02:16:53.916352+00:00",
+      "build_metadata_available": true,
+      "error_code": null,
+      "score_spec_match": true,
+      "calendar_match": true
+    },
+    "exclusions": {
+      "total": 0,
+      "filtered_total": 0,
+      "daily_completion": {
+        "target_date": "2026-10-02",
+        "universe_count": 2148,
+        "eligible_count": 2148,
+        "excluded_count": 0,
+        "completed_count": 0,
+        "pending_count": 2148,
+        "all_complete": false
+      }
+    },
+    "6283_readiness": {
+      "ready": true,
+      "missing_reasons": [],
+      "source_date": "2026-10-02",
+      "latest_ready_source_date": "2026-10-02"
+    },
+    "6283_missing_sessions": {
+      "institutional": [],
+      "foreign_holding": [],
+      "broker": [],
+      "price": []
+    },
+    "job": {
+      "job_id": 33585,
+      "status": "QUEUED",
+      "phase": "queued",
+      "trigger": "closed_market_hourly",
+      "target_date": "2026-10-02",
+      "current_stock_id": null,
+      "progress": {
+        "completed": 0,
+        "total": 2148
+      },
+      "budget": {
+        "limit": 3500,
+        "used": 1176,
+        "remaining": 2324
+      },
+      "skipped_no_data_count": 0
+    },
+    "worker": {
+      "status": "ok",
+      "ready": true,
+      "scheduler_ready": true,
+      "last_job_progress_at": null,
+      "job_phase": null,
+      "current_job_run_id": null
+    }
+  },
+  "containers": {
+    "api": {
+      "metadata": {
+        "source_revision": "ff5daa836cda7af72ebc937a4efd493b6d343bca",
+        "backend_lock_sha256": "75a0d62812977f2137f3fdbd0082594ba87efef8b0ce8af3c7fbbd0c0a0dfc47",
+        "score_spec_hash": "61792746e672727ad86e2e754cf4f8a701b7b760925088629baacb3101055132",
+        "calendar_hash": "7d848877e08575caddfd0479631b7628d6aada2565f18e0e1736d66b28358498",
+        "build_timestamp": "2026-10-03T02:16:53.916352+00:00"
+      },
+      "image_id": "sha256:c8b903f3b24722f52bdebb021f258a380eb288f021d66dc72d2be63af91577eb",
+      "all_python_source_hashes_match_git": true
+    },
+    "worker": {
+      "metadata": {
+        "source_revision": "ff5daa836cda7af72ebc937a4efd493b6d343bca",
+        "backend_lock_sha256": "75a0d62812977f2137f3fdbd0082594ba87efef8b0ce8af3c7fbbd0c0a0dfc47",
+        "score_spec_hash": "61792746e672727ad86e2e754cf4f8a701b7b760925088629baacb3101055132",
+        "calendar_hash": "7d848877e08575caddfd0479631b7628d6aada2565f18e0e1736d66b28358498",
+        "build_timestamp": "2026-10-03T02:16:53.916352+00:00"
+      },
+      "image_id": "sha256:c8b903f3b24722f52bdebb021f258a380eb288f021d66dc72d2be63af91577eb",
+      "all_python_source_hashes_match_git": true
+    },
+    "frontend": {
+      "metadata": {
+        "source_revision": "ff5daa836cda7af72ebc937a4efd493b6d343bca",
+        "frontend_lock_sha256": "36c6571745da922fb5b37d65bf374a7fb146c28aadb7f55850a131399ff6ce0d",
+        "build_timestamp": "2026-10-03T02:16:53.916352+00:00"
+      },
+      "image_id": "sha256:450da16edf59b68774014267921193015b2e3de7e494f58934dae01dd5a84c56"
+    }
+  },
+  "services": [
+    "api running healthy",
+    "frontend running ",
+    "nginx running healthy",
+    "postgres running healthy",
+    "worker running healthy"
+  ],
+  "reset_backup_hash_verified": true,
+  "tests": {
+    "backend_passed": 277,
+    "frontend_e2e_passed": 27,
+    "production_readonly_e2e_passed": 1,
+    "frontend_lint": "passed",
+    "frontend_build": "passed"
+  },
+  "post_restart_verification": {
+    "failure_counters": {
+      "recorded_stocks": 0,
+      "maximum_attempts": 0,
+      "excluded_count": 0
+    },
+    "score_versions": [
+      {
+        "version": "s-only-v6",
+        "manifest_hash": "21df6cf28188f6ef3973e8283cb6f482d9895203e9f023f3dc9c69bec926f99b"
+      },
+      {
+        "version": "s-only-v6-calendar-v2",
+        "manifest_hash": "61792746e672727ad86e2e754cf4f8a701b7b760925088629baacb3101055132"
+      }
+    ],
+    "score_rows_by_version": [
+      {
+        "score_version": "s-only-v1",
+        "rows": 8595,
+        "numeric_rows": 9
+      },
+      {
+        "score_version": "s-only-v2",
+        "rows": 4296,
+        "numeric_rows": 6
+      },
+      {
+        "score_version": "s-only-v4",
+        "rows": 2148,
+        "numeric_rows": 0
+      },
+      {
+        "score_version": "s-only-v6",
+        "rows": 97494,
+        "numeric_rows": 24439
+      },
+      {
+        "score_version": "s-only-v6-calendar-v2",
+        "rows": 1,
+        "numeric_rows": 1
+      }
+    ],
+    "refresh_job": {
+      "job_id": 33585,
+      "status": "RUNNING",
+      "phase": "refreshing_stock",
+      "current_stock_id": "1102",
+      "progress": {
+        "completed": 1,
+        "total": 2148
+      },
+      "budget": {
+        "limit": 3500,
+        "used": 1210,
+        "remaining": 2290
+      }
+    },
+    "verified_at": "2026-10-03T02:20:54.823418+00:00"
+  }
+}

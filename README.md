@@ -63,7 +63,7 @@ Worker 啟動時在來源發布窗口已開啟後才做完整 catch-up：動態 
 
 ## Data status / troubleshooting
 
-首頁「排除股票」可分頁管理累計 5 次失敗的股票，逐檔補抓並立即評分後解除舊排除。操作、API、稽核與啟用方式見 [排除股票管理與手動恢復](docs/refresh-exclusions.md)。
+首頁「排除股票」可分頁管理連續 5 個不同目標交易日缺少必要資料的股票，逐檔補抓並立即評分後解除舊排除。操作、API、稽核與啟用方式見 [排除股票管理與手動恢復](docs/refresh-exclusions.md)。
 
 - `/health`：API／DB health。
 - `/api/data-status`：每個 dataset 的 status、source date、last successful sync、job runs 與安全錯誤碼。

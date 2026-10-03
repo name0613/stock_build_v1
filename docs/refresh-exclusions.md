@@ -68,3 +68,14 @@ npx playwright test refresh-exclusions-live.spec.ts --workers=1 --reporter=line
 
 
 2026-10 日曆修訂使用獨立評分版本 `s-only-v6-calendar-v2`，綁定 `tw-exchange-2026-v2` 與新 manifest hash。舊 `s-only-v6` 的 manifest、分數與輸入快照保持不變；新增評分由補抓或本機重新評分產生。capital-aware-v7 的資金公式及門檻不變。
+
+
+## 2026-10-03 NAS 修正與重新計次
+
+已部署程式 `ff5daa836cda7af72ebc937a4efd493b6d343bca`。API、worker、frontend 版本一致；API／worker 所有 Python 原始碼經換行正規化後與 Git 相符，五個服務皆正常。
+
+此次清零前有 2,100 筆失敗紀錄，其中 1,645 檔達排除門檻。全部有效計次已清空，排除清單驗證為 0，2,148 檔普通股重新納入作業 #33585；原作業剩餘預算保留，舊 checkpoint 中的來源完成標記已清除。備份位於 NAS raw volume 的 `operations/refresh-exclusion-backups/`，SHA-256 已驗證。相同 reset ID 重跑已證明不會重複清零。
+
+日曆變更同時改變評分 manifest；首次啟動被既有版本保護攔下後，改用獨立 `s-only-v6-calendar-v2` 並重新部署，未覆寫舊 manifest。驗證保留 97,494 筆舊 s-only-v6 評分；新版作業已產生數值評分並繼續下一檔。6283 的 2026-10-02 必要來源檢查已全部通過，不再缺 9/28。
+
+驗證：後端 277 項、前端 fixture E2E 27 項、正式唯讀 E2E 1 項，以及 PostgreSQL 隔離檢查 7 項通過；TypeScript、production build 與 Git whitespace 檢查通過。全市場補抓仍在背景進行，這些驗證不表示 2,148 檔都已完成最新評分。部署、清零收據、備份雜湊及即時進度见 [REFRESH_POLICY_FIX_20261003.json](../deployment_evidence/REFRESH_POLICY_FIX_20261003.json)。
