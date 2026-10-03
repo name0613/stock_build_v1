@@ -37,3 +37,6 @@ Capability probes are structurally outside ingestion. In particular, `TaiwanStoc
 - global source `PARTIAL`/quota status remains observable but is not a universal score veto; readiness is evaluated independently for every eligible stock and `/api/readiness` exposes the same audit.
 - holding distribution is low-frequency; the UI shows source date and latest available date.
 - no official stable 5%+ automated source is assumed; its table remains empty and unavailable is documented.
+
+
+2026-10 日曆修訂使用獨立評分版本 `s-only-v6-calendar-v2`，綁定 `tw-exchange-2026-v2` 與新 manifest hash。舊 `s-only-v6` 的 manifest、分數與輸入快照保持不變；新增評分由補抓或本機重新評分產生。capital-aware-v7 的資金公式及門檻不變。

@@ -8,9 +8,9 @@ import math
 from statistics import mean
 from typing import Any, Iterable
 
-from .calendar import CALENDAR_HASH, CALENDAR_MANIFEST
+from .calendar import CALENDAR_HASH, CALENDAR_MANIFEST, CALENDAR_VERSION
 
-SCORE_VERSION = "s-only-v6"
+SCORE_VERSION = "s-only-v6-calendar-v2"
 WEIGHTS = {"institutional_persistence": 0.35, "ownership_accumulation": 0.35, "broker_persistence": 0.30}
 HOLDING_METADATA_LEVELS = frozenset({"total", "all", "差異數調整（說明4）"})
 HOLDING_SCHEMA_VERSION = "finmind-holding-shares-level-v1"
@@ -68,7 +68,7 @@ SCORE_SPEC = {
     "thresholds": {"strong": 80, "accumulation": 65, "watch": 50},
     "holding_boundaries": {"400": ">400 lots (source bucket lower bound >= 400,001 shares)", "1000": ">1000 lots (source bucket lower bound >= 1,000,001 shares)"},
     "holding_schema": {"version": HOLDING_SCHEMA_VERSION, "canonical_levels": [{"label": label, "threshold": threshold} for label, threshold in HOLDING_CANONICAL_LEVELS], "required_relevant_thresholds": sorted(HOLDING_RELEVANT_THRESHOLDS), "metadata_levels": sorted(HOLDING_METADATA_LEVELS), "unknown_bucket": "SCHEMA_MISMATCH", "missing_duplicate_or_null_canonical_bucket": "DATA_INSUFFICIENT"},
-    "calendar_version": "tw-exchange-2026-v1",
+    "calendar_version": CALENDAR_VERSION,
     "calendar_manifest": CALENDAR_MANIFEST,
     "calendar_hash": CALENDAR_HASH,
     "semantic_versions": {"institutional_normalization": "dealer-components-v1", "broker_features": "confirmed-positive-events-v6-no-omission-imputation", "holding_parser": HOLDING_SCHEMA_VERSION, "holding_weekly_period": HOLDING_WEEKLY_PERIOD_VERSION, "missing_data": "fail-closed-v6-current-score-run-gate"},

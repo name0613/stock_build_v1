@@ -65,3 +65,6 @@ npx playwright test refresh-exclusions-live.spec.ts --workers=1 --reporter=line
 部署時驗證既有 backend requirements lock 相符後重用依賴層，完整複製已提交程式；前端使用本機 production build 製作 Nginx 映像。原全新 pip 建置停滯後已停止；封裝產生的靜態目錄讀取權限問題已在映像內修正並通過真實瀏覽器驗收。保留部署前映像與 NAS 本機回滾封存，既有 credentials、資料卷與使用者未提交的 evidence 檔案未覆蓋。
 
 正式清單為 933 檔、每頁 50 筆，最近驗證 API 約 26 毫秒；每日統計在同時載入首頁／執行 worker 時約 8 秒，背景顯示不阻擋操作。全市場 2148 檔，排除 933、已完成 1212、待完成 3（目標日 2026-09-24）。已取得資料與歷史分數保留，自動 worker 繼續新增評分。驗證細節及映像／版本資料見 [`REFRESH_EXCLUSIONS_DEPLOYMENT_EVIDENCE.json`](../deployment_evidence/REFRESH_EXCLUSIONS_DEPLOYMENT_EVIDENCE.json)。
+
+
+2026-10 日曆修訂使用獨立評分版本 `s-only-v6-calendar-v2`，綁定 `tw-exchange-2026-v2` 與新 manifest hash。舊 `s-only-v6` 的 manifest、分數與輸入快照保持不變；新增評分由補抓或本機重新評分產生。capital-aware-v7 的資金公式及門檻不變。

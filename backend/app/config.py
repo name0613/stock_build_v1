@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     raw_root: Path = Path("data/raw")
     timezone: str = "Asia/Taipei"
     source_revision: str = "runtime"
-    score_version: str = "s-only-v6"
+    score_version: str = "s-only-v6-calendar-v2"
     broker_concurrency: int = 4
     broker_rate_per_second: float = 4.0
     provider_rate_per_second: float = 4.0

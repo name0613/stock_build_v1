@@ -30,6 +30,18 @@ def test_score_version_seed_is_idempotent_and_hash_bound() -> None:
     assert rows[0].manifest_hash == FORMULA_HASH
 
 
+def test_calendar_revision_seeds_new_version_without_overwriting_production_v6():
+    db, _ = _db()
+    old_hash = "21df6cf28188f6ef3973e8283cb6f482d9895203e9f023f3dc9c69bec926f99b"
+    old = ScoreVersion(version="s-only-v6", config={"calendar_version": "tw-exchange-2026-v1"}, manifest_hash=old_hash, explanation="historical", created_at=datetime.now(timezone.utc))
+    db.add(old)
+    db.commit()
+    seed_score_version(db)
+    assert db.get(ScoreVersion, "s-only-v6").manifest_hash == old_hash
+    assert db.get(ScoreVersion, SCORE_VERSION).manifest_hash == FORMULA_HASH
+    assert SCORE_VERSION != "s-only-v6"
+
+
 def _complete_holding_rows(stock_id: str, day: date, base_percent: float = 10.0) -> list[dict[str, object]]:
     return [
         {"stock_id": stock_id, "date": day, "HoldingSharesLevel": level, "holding_shares_threshold": threshold, "percent": base_percent + index, "people": index + 1, "shares": threshold}

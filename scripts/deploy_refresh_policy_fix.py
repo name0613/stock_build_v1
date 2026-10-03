@@ -47,9 +47,9 @@ def main():
             if subprocess.check_output(["git", "status", "--porcelain", "--", *paths], cwd=ROOT, text=True).strip():
                 raise RuntimeError("commit reviewed application changes before staging")
             run(f"test -d {PROJECT} && mkdir -p {release}", sudo=False)
-            api = run(f"cd {PROJECT} && docker compose ps -q api")
+            api = run(f"cd {PROJECT} && docker compose ps -a -q api")
             base_image = run(f"docker inspect --format '{{{{.Image}}}}' {api}")
-            deployed = json.loads(run(f"docker exec {api} cat /app/build-metadata.json"))
+            deployed = json.loads(run(f"docker run --rm --entrypoint cat {base_image} /app/build-metadata.json"))
             backend_lock = hashlib.sha256((ROOT / "backend/requirements.lock").read_bytes()).hexdigest()
             if deployed["backend_lock_sha256"] != backend_lock:
                 raise RuntimeError("running dependencies differ; full dependency build required")
@@ -82,7 +82,10 @@ def main():
             run(f"docker build -f {release}/Dockerfile.frontend -t tw-refresh-policy-frontend:{revision[:12]} {release}")
             probe = run(f"docker run --rm --entrypoint python tw-refresh-policy-backend:{revision[:12]} -c " + shlex.quote("from app.calendar import *; assert not is_trading_session(date(2026,9,28)); print(CALENDAR_HASH)"))
             assert probe == CALENDAR_HASH
+            prior_attempt = evidence if evidence.get("reset_receipt") else evidence.get("prior_attempt")
             evidence = {"source_revision": revision, "release_directory": release, "rollback_directory": backup, "build_metadata": metadata, "frontend_metadata": front_metadata, "verified_dependency_image": base_image, "stage_completed_at": datetime.now(timezone.utc).isoformat(), "secrets_included": False}
+            if prior_attempt:
+                evidence["prior_attempt"] = prior_attempt
             save()
             print("Stage complete", flush=True)
             return
@@ -94,7 +97,7 @@ def main():
         run(f"mkdir -p {backup} && chmod 700 {backup}")
         old_images = {}
         for service in ("api", "worker", "frontend"):
-            cid = run(f"cd {PROJECT} && docker compose ps -q {service}")
+            cid = run(f"cd {PROJECT} && docker compose ps -a -q {service}")
             old_images[service] = run(f"docker inspect --format '{{{{.Image}}}}' {cid}")
             run(f"docker tag {old_images[service]} tw-refresh-policy-rollback-{service}:{revision[:12]}")
         run(f"cd {PROJECT} && tar -czf {backup}/application.tar.gz backend scripts migrations fixtures frontend/src docker-compose.yml nginx .env DEPLOYED_SOURCE_REVISION && chmod 600 {backup}/application.tar.gz")
@@ -119,7 +122,8 @@ def main():
         for service in ("api", "worker"):
             run(f"docker tag tw-refresh-policy-backend:{revision[:12]} tw-accumulation-evidence-{service}:latest")
         run(f"docker tag tw-refresh-policy-frontend:{revision[:12]} tw-accumulation-evidence-frontend:latest")
-        output = run(f"cd {PROJECT} && docker compose run --rm --no-deps api python /app/scripts/reset_refresh_issues.py --reset-id calendar-policy-{revision[:12]}")
+        reset_id = (evidence.get("prior_attempt", {}).get("reset_receipt") or {}).get("reset_id", f"calendar-policy-{revision[:12]}")
+        output = run(f"cd {PROJECT} && docker compose run --rm --no-deps api python /app/scripts/reset_refresh_issues.py --reset-id {reset_id}")
         evidence["reset_receipt"] = json.loads(output)
         save()
         print(json.dumps(evidence["reset_receipt"]), flush=True)

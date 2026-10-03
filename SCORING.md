@@ -64,3 +64,6 @@ families and a 20D return no greater than 30%. A return above 30% subtracts
 `DATA_INSUFFICIENT`. Broker amount features use only validated positive rows;
 unknown branches are not zero-filled and broker branches are not beneficial
 owners.
+
+
+2026-10 日曆修訂使用獨立評分版本 `s-only-v6-calendar-v2`，綁定 `tw-exchange-2026-v2` 與新 manifest hash。舊 `s-only-v6` 的 manifest、分數與輸入快照保持不變；新增評分由補抓或本機重新評分產生。capital-aware-v7 的資金公式及門檻不變。
