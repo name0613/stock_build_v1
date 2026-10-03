@@ -1,0 +1,27 @@
+{
+  "source_revision": "d97b1a5977aae614d89d0a6209ef07c3e235bb2a",
+  "release_directory": "/volume1/docker/tw-refresh-policy-release-d97b1a5977aa",
+  "rollback_directory": "/volume1/docker/tw-refresh-policy-backup-d97b1a5977aa",
+  "build_metadata": {
+    "source_revision": "d97b1a5977aae614d89d0a6209ef07c3e235bb2a",
+    "backend_lock_sha256": "75a0d62812977f2137f3fdbd0082594ba87efef8b0ce8af3c7fbbd0c0a0dfc47",
+    "score_spec_hash": "61792746e672727ad86e2e754cf4f8a701b7b760925088629baacb3101055132",
+    "calendar_hash": "7d848877e08575caddfd0479631b7628d6aada2565f18e0e1736d66b28358498",
+    "build_timestamp": "2026-10-03T15:50:31.143311+00:00"
+  },
+  "frontend_metadata": {
+    "source_revision": "d97b1a5977aae614d89d0a6209ef07c3e235bb2a",
+    "frontend_lock_sha256": "36c6571745da922fb5b37d65bf374a7fb146c28aadb7f55850a131399ff6ce0d",
+    "build_timestamp": "2026-10-03T15:50:31.143311+00:00"
+  },
+  "verified_dependency_image": "sha256:dd24ab477e4319648726495a57b8d5e99bb5627663edc3e2df42f8f1d5716d03",
+  "stage_completed_at": "2026-10-03T15:50:44.811257+00:00",
+  "secrets_included": false,
+  "reset_exclusions": false,
+  "rollback_images": {
+    "api": "sha256:dd24ab477e4319648726495a57b8d5e99bb5627663edc3e2df42f8f1d5716d03",
+    "worker": "sha256:dd24ab477e4319648726495a57b8d5e99bb5627663edc3e2df42f8f1d5716d03",
+    "frontend": "sha256:3ed4fca64af159498cf0724377d3daec4df9ba9ceaa23b78cf75a346b419a3b2"
+  },
+  "rollout_completed_at": "2026-10-03T15:52:10.112668+00:00"
+}

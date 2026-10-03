@@ -1,0 +1,489 @@
+{
+  "source_revision": "d97b1a5977aae614d89d0a6209ef07c3e235bb2a",
+  "sanitized": true,
+  "secrets_included": false,
+  "tests": {
+    "backend_full_passed": 322,
+    "nas_image_regressions_passed": 95,
+    "frontend_playwright_passed": 28,
+    "frontend_unchanged_since_28_test_run": true
+  },
+  "full_universe_rescore": {
+    "job_id": 34471,
+    "status": "SUCCESS",
+    "run_mode": "existing_data",
+    "target_date": "2026-10-02",
+    "started_at": "2026-10-03T11:13:10.435060Z",
+    "finished_at": "2026-10-03T11:42:54.362584Z",
+    "processed_stock_count": 2153,
+    "universe_stock_count": 2153,
+    "scores": {
+      "WATCH": 120,
+      "ACCUMULATION": 79,
+      "DATA_INSUFFICIENT": 1938,
+      "NO_STRONG_EVIDENCE": 14,
+      "STRONG_ACCUMULATION": 2
+    },
+    "score_metrics": {
+      "ready_stock_count": 215,
+      "score_rows_failed": 0,
+      "accounting_invariant": true,
+      "score_rows_processed": 215,
+      "universe_stock_count": 2153,
+      "evaluated_stock_count": 2153,
+      "missing_reason_counts": {
+        "missing_price": 1625,
+        "missing_broker": 1721,
+        "missing_institutional": 1808,
+        "missing_foreign_holding": 1834,
+        "tdcc_required_buckets_incomplete": 120
+      },
+      "not_ready_stock_count": 1938,
+      "score_rows_data_insufficient": 1938
+    },
+    "error_code": null
+  },
+  "before_rollout": {
+    "observed_at": "2026-10-03T15:50:48.163564+00:00",
+    "score": {
+      "job_id": 34471,
+      "status": "SUCCESS",
+      "run_mode": "existing_data",
+      "target_date": "2026-10-02",
+      "started_at": "2026-10-03T11:13:10.435060Z",
+      "finished_at": "2026-10-03T11:42:54.362584Z",
+      "processed_stock_count": 2153,
+      "universe_stock_count": 2153,
+      "scores": {
+        "WATCH": 120,
+        "ACCUMULATION": 79,
+        "DATA_INSUFFICIENT": 1938,
+        "NO_STRONG_EVIDENCE": 14,
+        "STRONG_ACCUMULATION": 2
+      },
+      "score_metrics": {
+        "ready_stock_count": 215,
+        "score_rows_failed": 0,
+        "accounting_invariant": true,
+        "score_rows_processed": 215,
+        "universe_stock_count": 2153,
+        "evaluated_stock_count": 2153,
+        "missing_reason_counts": {
+          "missing_price": 1625,
+          "missing_broker": 1721,
+          "missing_institutional": 1808,
+          "missing_foreign_holding": 1834,
+          "tdcc_required_buckets_incomplete": 120
+        },
+        "not_ready_stock_count": 1938,
+        "score_rows_data_insufficient": 1938
+      },
+      "error_code": null
+    },
+    "refresh": {
+      "job_id": 34470,
+      "status": "WAITING_FOR_PROVIDER",
+      "run_mode": "universe_fixed_budget_refresh_and_score",
+      "trigger": "closed_market_hourly",
+      "schedule_hour": "2026-10-03T11:00:00+00:00",
+      "daily_completion": {
+        "target_date": "2026-10-02",
+        "all_complete": false,
+        "pending_count": 2003,
+        "eligible_count": 2153,
+        "excluded_count": 0,
+        "universe_count": 2153,
+        "completed_count": 150
+      },
+      "target_date": "2026-10-02",
+      "phase": "waiting_for_provider",
+      "current_stock_id": "2321",
+      "progress": {
+        "completed": 51,
+        "total": 2062
+      },
+      "budget": {
+        "limit": 3500,
+        "used": 1443,
+        "remaining": 2057
+      },
+      "next_retry_at": "2026-10-03T15:55:01.019437+00:00",
+      "skipped_no_data_count": 0,
+      "started_at": "2026-10-03T11:13:06.726705Z",
+      "finished_at": null,
+      "error_code": "REFRESH_INCOMPLETE"
+    },
+    "summary": {
+      "stock_count": 2153,
+      "data_insufficient_count": 1906,
+      "score_version": "s-only-v6-calendar-v2",
+      "formula_hash": "61792746e672727ad86e2e754cf4f8a701b7b760925088629baacb3101055132",
+      "score_metrics": {
+        "universe_stock_count": 2153,
+        "evaluated_stock_count": 2153,
+        "ready_stock_count": 247,
+        "not_ready_stock_count": 1906,
+        "score_rows_processed": 247,
+        "score_rows_data_insufficient": 1906,
+        "score_rows_failed": 0,
+        "missing_reason_counts": {
+          "missing_price": 1625,
+          "missing_broker": 1721,
+          "missing_institutional": 1808,
+          "missing_foreign_holding": 1834,
+          "tdcc_required_buckets_incomplete": 120
+        },
+        "accounting_invariant": true,
+        "pending_evaluation_count": 0,
+        "evaluated_insufficient_stock_count": 1906
+      }
+    }
+  },
+  "deployment_verification": {
+    "api": {
+      "metadata": {
+        "source_revision": "d97b1a5977aae614d89d0a6209ef07c3e235bb2a",
+        "backend_lock_sha256": "75a0d62812977f2137f3fdbd0082594ba87efef8b0ce8af3c7fbbd0c0a0dfc47",
+        "score_spec_hash": "61792746e672727ad86e2e754cf4f8a701b7b760925088629baacb3101055132",
+        "calendar_hash": "7d848877e08575caddfd0479631b7628d6aada2565f18e0e1736d66b28358498",
+        "build_timestamp": "2026-10-03T15:50:31.143311+00:00"
+      },
+      "hashes": {
+        "app/ingestion.py": "3f54a809cdee16fa3d5f0fc076adf527c8695c3771d94aff76b0f2243d55c7c6",
+        "app/refresh_queue.py": "ea9d3b03e8119975b4f3b69e7706c9b34f8314df01c08d4c65555756fb116338",
+        "app/main.py": "4cc765a45577a69a37eb99cb7efb56ee7b358c7ad7ec22f4e99eb4fae1c014bf",
+        "app/manual_refresh.py": "080433c8fbcfab60ded0194a1ad1272a4ae03e14bc567e78db5131de2182641b",
+        "app/refresh_policy.py": "1ed86d8953fba0849bc8e6886566ef1beef70b21fccb65243b90f37c6c30346d"
+      }
+    },
+    "worker": {
+      "metadata": {
+        "source_revision": "d97b1a5977aae614d89d0a6209ef07c3e235bb2a",
+        "backend_lock_sha256": "75a0d62812977f2137f3fdbd0082594ba87efef8b0ce8af3c7fbbd0c0a0dfc47",
+        "score_spec_hash": "61792746e672727ad86e2e754cf4f8a701b7b760925088629baacb3101055132",
+        "calendar_hash": "7d848877e08575caddfd0479631b7628d6aada2565f18e0e1736d66b28358498",
+        "build_timestamp": "2026-10-03T15:50:31.143311+00:00"
+      },
+      "hashes": {
+        "app/ingestion.py": "3f54a809cdee16fa3d5f0fc076adf527c8695c3771d94aff76b0f2243d55c7c6",
+        "app/refresh_queue.py": "ea9d3b03e8119975b4f3b69e7706c9b34f8314df01c08d4c65555756fb116338",
+        "app/main.py": "4cc765a45577a69a37eb99cb7efb56ee7b358c7ad7ec22f4e99eb4fae1c014bf",
+        "app/manual_refresh.py": "080433c8fbcfab60ded0194a1ad1272a4ae03e14bc567e78db5131de2182641b",
+        "app/refresh_policy.py": "1ed86d8953fba0849bc8e6886566ef1beef70b21fccb65243b90f37c6c30346d"
+      }
+    },
+    "all_source_hashes_match_git": true,
+    "comparison": "Git HEAD blobs with core.autocrlf archive conversion",
+    "services": [
+      {
+        "Service": "api",
+        "State": "running",
+        "Health": "healthy"
+      },
+      {
+        "Service": "frontend",
+        "State": "running",
+        "Health": ""
+      },
+      {
+        "Service": "nginx",
+        "State": "running",
+        "Health": "healthy"
+      },
+      {
+        "Service": "postgres",
+        "State": "running",
+        "Health": "healthy"
+      },
+      {
+        "Service": "worker",
+        "State": "running",
+        "Health": "healthy"
+      }
+    ],
+    "frontend_metadata": {
+      "source_revision": "d97b1a5977aae614d89d0a6209ef07c3e235bb2a",
+      "frontend_lock_sha256": "36c6571745da922fb5b37d65bf374a7fb146c28aadb7f55850a131399ff6ce0d",
+      "build_timestamp": "2026-10-03T15:50:31.143311+00:00"
+    },
+    "verified_at": "2026-10-03T15:52:59.640039+00:00"
+  },
+  "live_ui_verification": {
+    "evaluation_breakdown": "已評估不足 1906 · 待新版評分 0",
+    "pending_evaluation_zero": true
+  },
+  "verified_at": "2026-10-03T15:56:32.797756+00:00",
+  "queue_recovery": {
+    "parent_job_id": 34470,
+    "queue_index": 54,
+    "stocks_completed": 54,
+    "stock_2321_deferred": true,
+    "parent_status": "RUNNING",
+    "current_stock_id": "2496",
+    "budget": {
+      "used": 1491,
+      "limit": 3500,
+      "remaining": 2009
+    },
+    "jobs_after_rollout": [
+      {
+        "job_id": 34568,
+        "stock_id": "2321",
+        "status": "DATA_INSUFFICIENT",
+        "duration_ms": 4827,
+        "error_code": null,
+        "physical_requests": 8,
+        "target_ready": false,
+        "datasets": {
+          "TaiwanStockPrice": {
+            "refresh_complete": true,
+            "failure_codes": null,
+            "physical_requests": 0,
+            "records_accepted": null,
+            "reused_complete": null
+          },
+          "TaiwanStockShareholding": {
+            "refresh_complete": true,
+            "failure_codes": null,
+            "physical_requests": 0,
+            "records_accepted": null,
+            "reused_complete": null
+          },
+          "TaiwanStockHoldingSharesPer": {
+            "refresh_complete": true,
+            "failure_codes": null,
+            "physical_requests": 0,
+            "records_accepted": null,
+            "reused_complete": null
+          },
+          "TaiwanStockTradingDailyReport": {
+            "refresh_complete": false,
+            "failure_codes": [
+              "EMPTY_RESPONSE_UNVERIFIED"
+            ],
+            "physical_requests": 7,
+            "records_accepted": 0,
+            "reused_complete": 13
+          },
+          "TaiwanStockInstitutionalInvestorsBuySellWide": {
+            "refresh_complete": false,
+            "failure_codes": [
+              "PARTIAL_RESPONSE_UNVERIFIED"
+            ],
+            "physical_requests": 1,
+            "records_accepted": 1,
+            "reused_complete": 0
+          }
+        }
+      },
+      {
+        "job_id": 34569,
+        "stock_id": "2380",
+        "status": "SUCCESS",
+        "duration_ms": 15930,
+        "error_code": null,
+        "physical_requests": 20,
+        "target_ready": true,
+        "datasets": {
+          "TaiwanStockPrice": {
+            "refresh_complete": true,
+            "failure_codes": [],
+            "physical_requests": 1,
+            "records_accepted": 16,
+            "reused_complete": 0
+          },
+          "TaiwanStockShareholding": {
+            "refresh_complete": true,
+            "failure_codes": [],
+            "physical_requests": 1,
+            "records_accepted": 16,
+            "reused_complete": 0
+          },
+          "TaiwanStockHoldingSharesPer": {
+            "refresh_complete": true,
+            "failure_codes": [],
+            "physical_requests": 1,
+            "records_accepted": 135,
+            "reused_complete": 0
+          },
+          "TaiwanStockTradingDailyReport": {
+            "refresh_complete": true,
+            "failure_codes": [],
+            "physical_requests": 16,
+            "records_accepted": 1738,
+            "reused_complete": 4
+          },
+          "TaiwanStockInstitutionalInvestorsBuySellWide": {
+            "refresh_complete": true,
+            "failure_codes": [],
+            "physical_requests": 1,
+            "records_accepted": 16,
+            "reused_complete": 0
+          }
+        }
+      },
+      {
+        "job_id": 34570,
+        "stock_id": "2424",
+        "status": "SUCCESS",
+        "duration_ms": 10382,
+        "error_code": null,
+        "physical_requests": 20,
+        "target_ready": true,
+        "datasets": {
+          "TaiwanStockPrice": {
+            "refresh_complete": true,
+            "failure_codes": [],
+            "physical_requests": 1,
+            "records_accepted": 16,
+            "reused_complete": 0
+          },
+          "TaiwanStockShareholding": {
+            "refresh_complete": true,
+            "failure_codes": [],
+            "physical_requests": 1,
+            "records_accepted": 16,
+            "reused_complete": 0
+          },
+          "TaiwanStockHoldingSharesPer": {
+            "refresh_complete": true,
+            "failure_codes": [],
+            "physical_requests": 1,
+            "records_accepted": 135,
+            "reused_complete": 0
+          },
+          "TaiwanStockTradingDailyReport": {
+            "refresh_complete": true,
+            "failure_codes": [],
+            "physical_requests": 16,
+            "records_accepted": 328,
+            "reused_complete": 4
+          },
+          "TaiwanStockInstitutionalInvestorsBuySellWide": {
+            "refresh_complete": true,
+            "failure_codes": [],
+            "physical_requests": 1,
+            "records_accepted": 16,
+            "reused_complete": 0
+          }
+        }
+      },
+      {
+        "job_id": 34571,
+        "stock_id": "2496",
+        "status": "RUNNING",
+        "duration_ms": null,
+        "error_code": null,
+        "physical_requests": 4,
+        "target_ready": null,
+        "datasets": {
+          "TaiwanStockPrice": {
+            "refresh_complete": true,
+            "failure_codes": [],
+            "physical_requests": 1,
+            "records_accepted": 16,
+            "reused_complete": 0
+          },
+          "TaiwanStockShareholding": {
+            "refresh_complete": true,
+            "failure_codes": [],
+            "physical_requests": 1,
+            "records_accepted": 16,
+            "reused_complete": 0
+          },
+          "TaiwanStockHoldingSharesPer": {
+            "refresh_complete": true,
+            "failure_codes": [],
+            "physical_requests": 1,
+            "records_accepted": 135,
+            "reused_complete": 0
+          },
+          "TaiwanStockInstitutionalInvestorsBuySellWide": {
+            "refresh_complete": false,
+            "failure_codes": [
+              "PARTIAL_OBSERVATION_COVERAGE"
+            ],
+            "physical_requests": 1,
+            "records_accepted": 10,
+            "reused_complete": 0
+          }
+        }
+      }
+    ]
+  },
+  "after_rollout": {
+    "api_health": {
+      "status": "ok",
+      "service": "api",
+      "database": "ok",
+      "score_version": "s-only-v6-calendar-v2",
+      "formula_hash": "61792746e672727ad86e2e754cf4f8a701b7b760925088629baacb3101055132",
+      "timezone": "Asia/Taipei"
+    },
+    "worker_health": {
+      "status": "ok",
+      "ready": true,
+      "stale": false,
+      "job_progress_active": true
+    },
+    "refresh": {
+      "job_id": 34470,
+      "status": "RUNNING",
+      "run_mode": "universe_fixed_budget_refresh_and_score",
+      "trigger": "closed_market_hourly",
+      "schedule_hour": "2026-10-03T11:00:00+00:00",
+      "daily_completion": {
+        "target_date": "2026-10-02",
+        "all_complete": false,
+        "pending_count": 2003,
+        "eligible_count": 2153,
+        "excluded_count": 0,
+        "universe_count": 2153,
+        "completed_count": 150
+      },
+      "target_date": "2026-10-02",
+      "phase": "refreshing_stock",
+      "current_stock_id": "2496",
+      "progress": {
+        "completed": 54,
+        "total": 2062
+      },
+      "budget": {
+        "limit": 3500,
+        "used": 1491,
+        "remaining": 2009
+      },
+      "next_retry_at": null,
+      "skipped_no_data_count": 0,
+      "started_at": "2026-10-03T11:13:06.726705Z",
+      "finished_at": null,
+      "error_code": null
+    },
+    "summary": {
+      "stock_count": 2153,
+      "data_insufficient_count": 1904,
+      "score_version": "s-only-v6-calendar-v2",
+      "formula_hash": "61792746e672727ad86e2e754cf4f8a701b7b760925088629baacb3101055132",
+      "score_metrics": {
+        "universe_stock_count": 2153,
+        "evaluated_stock_count": 2153,
+        "ready_stock_count": 249,
+        "not_ready_stock_count": 1904,
+        "score_rows_processed": 249,
+        "score_rows_data_insufficient": 1904,
+        "score_rows_failed": 0,
+        "missing_reason_counts": {
+          "missing_price": 1625,
+          "missing_broker": 1721,
+          "missing_institutional": 1808,
+          "missing_foreign_holding": 1834,
+          "tdcc_required_buckets_incomplete": 120
+        },
+        "accounting_invariant": true,
+        "pending_evaluation_count": 0,
+        "evaluated_insufficient_stock_count": 1904
+      }
+    }
+  },
+  "verification_passed": true
+}
