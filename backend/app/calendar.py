@@ -5,7 +5,7 @@ import hashlib
 import json
 from zoneinfo import ZoneInfo
 
-CALENDAR_VERSION = "tw-exchange-2026-v1"
+CALENDAR_VERSION = "tw-exchange-2026-v2"
 CALENDAR_COVERAGE_START = date(2026, 1, 1)
 CALENDAR_COVERAGE_END = date(2026, 12, 31)
 
@@ -14,14 +14,14 @@ class CalendarUnknownError(ValueError):
     """The versioned exchange calendar does not cover a requested date."""
 
 # Taiwan exchange holidays used by the rolling-window validator.  The list is
-# deliberately explicit and reviewable; an unknown future holiday is treated
-# as an expected session until the next release adds it, never silently
-# backfilled with an older observation.
+# Source: https://www.twse.com.tw/zh/trading/holiday.html (115 year schedule).
+# Include settlement-only days and substitute holidays, not just holiday dates.
 TW_HOLIDAYS = {
-    date(2026, 1, 1), date(2026, 2, 16), date(2026, 2, 17), date(2026, 2, 18),
-    date(2026, 2, 19), date(2026, 2, 20), date(2026, 2, 28), date(2026, 4, 3),
+    date(2026, 1, 1), date(2026, 2, 12), date(2026, 2, 13),
+    date(2026, 2, 16), date(2026, 2, 17), date(2026, 2, 18),
+    date(2026, 2, 19), date(2026, 2, 20), date(2026, 2, 27), date(2026, 2, 28), date(2026, 4, 3),
     date(2026, 4, 6), date(2026, 5, 1), date(2026, 6, 19), date(2026, 9, 25),
-    date(2026, 10, 9), date(2026, 10, 26), date(2026, 12, 25),
+    date(2026, 9, 28), date(2026, 10, 9), date(2026, 10, 26), date(2026, 12, 25),
 }
 CALENDAR_MANIFEST = {"version": CALENDAR_VERSION, "coverage_start": CALENDAR_COVERAGE_START.isoformat(), "coverage_end": CALENDAR_COVERAGE_END.isoformat(), "holidays": sorted(day.isoformat() for day in TW_HOLIDAYS)}
 CALENDAR_HASH = hashlib.sha256(json.dumps(CALENDAR_MANIFEST, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()

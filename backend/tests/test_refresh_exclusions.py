@@ -1,6 +1,6 @@
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -257,7 +257,7 @@ def test_reset_recounts_and_old_job_replay_cannot_reset_again(db):
     finish(db, job)
     released = db.get(RefreshExclusionRecovery, job.id).released_at
     for count in range(1, 6):
-        issue = ingestion._record_no_data_attempt(db, "9001", None, {})
+        issue = ingestion._record_no_data_attempt(db, "9001", None, {}, target=date(2026, 8, 10) + timedelta(days=count - 1))
         db.commit()
         assert issue.no_data_attempts == count
         finish(db, job)  # replay of the old completion boundary
@@ -274,18 +274,18 @@ def test_reset_recounts_and_old_job_replay_cannot_reset_again(db):
     assert db.query(RefreshExclusionRecovery).count() == 2
 
 
-def test_general_recovery_and_general_manual_job_keep_cumulative_semantics(db):
+def test_general_recovery_clears_cumulative_failures(db):
     exclude(db, attempts=4)
     ingestion._mark_refresh_recovered(db, "9001")
     db.commit()
-    assert db.get(StockRefreshIssue, "9001").no_data_attempts == 4
+    assert db.get(StockRefreshIssue, "9001").no_data_attempts == 0
     ingestion._record_no_data_attempt(db, "9001", None, {})
     db.commit()
     ingestion._mark_refresh_recovered(db, "9001")
     db.commit()
     job = manual.queue_manual_stock_refresh(db, "9001", END)
     finish(db, job, "SUCCESS")
-    assert "9001" in ingestion.skipped_refresh_stock_ids(db)
+    assert "9001" not in ingestion.skipped_refresh_stock_ids(db)
     assert db.query(RefreshExclusionRecovery).count() == 0
 
 

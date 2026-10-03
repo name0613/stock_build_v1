@@ -149,7 +149,7 @@ export function RefreshExclusions({ onBack, onChanged, onCount }: { onBack: () =
   return <div className="app-shell exclusion-page">
     <header className="topbar"><button className="back-button" onClick={onBack}>← 返回原榜單</button><div><p className="eyebrow">REFRESH EXCLUSIONS</p><h1>自動補抓排除清單</h1></div></header>
     <main>
-      <p className="notice">累計達門檻的股票會停止自動補抓。手動作業真正結束後，無論評分成功、資料不足或最終失敗，都會解除舊排除；後續自動失敗由 1/5 重新累計。</p>
+      <p className="notice">連續 5 個不同目標交易日缺少必要資料才會暫停自動補抓；同日重試不重複計次，目標日資料恢復後歸零。手動作業真正結束後，無論評分成功、資料不足或最終失敗，都會解除舊排除；後續自動失敗由 1/5 重新累計。</p>
       <section className="panel controls">
         <p data-testid="exclusion-count">全體排除 {data?.total ?? "—"} 檔 · 篩選結果 {data?.filtered_total ?? "—"} 檔</p>
         {currentCompletion && <p data-testid="exclusion-daily-completion">最近統計目標日 {currentCompletion.target_date} · 已完成 {currentCompletion.completed_count} · 待完成 {currentCompletion.pending_count} · 排除 {currentCompletion.excluded_count}</p>}
@@ -158,7 +158,7 @@ export function RefreshExclusions({ onBack, onChanged, onCount }: { onBack: () =
       </section>
       {error && <p className="error-banner" role="alert">{error}</p>}
       {loading ? <p className="empty" role="status">正在載入排除清單…</p> : data && <section className="panel">
-        {data.items.length === 0 ? <p className="empty">{data.total === 0 ? "目前沒有被排除的股票。" : "查無符合搜尋或市場篩選的排除股票。"}</p> : <div className="table-scroll"><table className="exclusion-table"><thead><tr><th>股票</th><th>市場</th><th>累計失敗／門檻</th><th>排除原因</th><th>已知缺失來源</th><th>最近嘗試</th><th>本次手動作業</th><th>操作</th></tr></thead><tbody>{data.items.map(item => {
+        {data.items.length === 0 ? <p className="empty">{data.total === 0 ? "目前沒有被排除的股票。" : "查無符合搜尋或市場篩選的排除股票。"}</p> : <div className="table-scroll"><table className="exclusion-table"><thead><tr><th>股票</th><th>市場</th><th>失敗交易日／門檻</th><th>排除原因</th><th>已知缺失來源</th><th>最近嘗試</th><th>本次手動作業</th><th>操作</th></tr></thead><tbody>{data.items.map(item => {
           const job = active.has(jobs[item.stock_id]?.status) ? jobs[item.stock_id] : item.job;
           return <tr key={item.stock_id} data-testid={`exclusion-row-${item.stock_id}`}><td><strong>{item.stock_id}</strong><br />{item.stock_name}</td><td>{item.market}</td><td>{item.no_data_attempts}/{item.attempt_limit}</td><td>{item.reason === "INCOMPLETE" ? "必要來源不完整" : item.reason === "NO_DATA" ? "完全無資料" : "未記錄"}</td><td>{item.missing_sources?.length ? item.missing_sources.map(source => sources[source] || source).join("、") : "未記錄"}</td><td>{dateText(item.last_attempt_at)}</td><td><JobStatus job={job} /></td><td><button className="primary-button" disabled={submitting.includes(item.stock_id) || !!job && active.has(job.status)} onClick={() => void recover(item.stock_id)}>{submitting.includes(item.stock_id) ? "提交中…" : "補抓並評分，恢復自動補抓"}</button>{actionErrors[item.stock_id] && <p className="action-error" role="alert">{actionErrors[item.stock_id]}</p>}</td></tr>;
         })}</tbody></table></div>}

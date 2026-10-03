@@ -70,7 +70,7 @@ Worker 啟動時在來源發布窗口已開啟後才做完整 catch-up：動態 
 - `POST /api/score/current`：只用目前 PostgreSQL 已寫入的來源資料建立背景評分作業，不呼叫 FinMind；以 `GET /api/score/current?job_id=<id>` 查詢進度與結果。
 - `GET /api/finmind/quota`：即時讀取已驗證帳號的 FinMind 每小時可用額度，只回傳去敏後的 used／remaining／limit／plan。
 - `POST /api/favorites/fetch-and-score`：把按下按鈕當下的「我的最愛」依現有數值評分由高到低固化為持久佇列，逐檔強制重抓五項來源並重評；以同路徑 `GET` 查詢進度。額度不足會進入 `WAITING_FOR_QUOTA`，worker 每分鐘檢查並從未完成股票與資料集自動續跑。已確定的個股空回應／部分期間缺漏會保留原始覆蓋率與評分，記為 `PARTIAL` 並繼續下一檔，不因非評分必要的歷史缺口無限重試；必要資料不足仍顯示 `DATA_INSUFFICIENT`。API 與畫面會列出 `partial_stock_ids`，整批處理完有缺漏時回報 `PARTIAL`。網路錯誤、未知錯誤與尚未嘗試的來源仍保留重試，已完成資料集的筆數與來源紀錄不會被續跑標記覆蓋。
-- `POST /api/universe/refresh-and-score`：每次按鈕固定配置 3,500 次 FinMind 資料 HTTP 請求，先處理無來源資料且無數值評分的股票，再依最舊寫入時間輪替強制刷新並評分；使用量會在每次真正送出請求前持久化，額度恢復後由 worker 自動續跑。同一股票累計 5 次補抓無資料或仍缺必要來源後，會依 `stock_refresh_issues.no_data_attempts` 永久跳過此按鈕的自動補抓，並在清單顯示原因。次數跨作業、重啟與部署保留，成功抓取不會清除歷史次數；舊版兩次紀錄沿用原次數，未滿 5 次仍可補抓。網路錯誤、額度不足及未完成請求不計次；舊佇列續跑也會先排除已滿 5 次的股票，不消耗資料請求額度。
+- `POST /api/universe/refresh-and-score`：每次按鈕固定配置 3,500 次 FinMind 資料 HTTP 請求，先處理無來源資料且無數值評分的股票，再依最舊寫入時間輪替強制刷新並評分；使用量會在每次真正送出請求前持久化，額度恢復後由 worker 自動續跑。同一股票連續 5 個不同目標交易日仍缺必要資料後，會依 `stock_refresh_issues.no_data_attempts` 暫停自動補抓，並在清單顯示原因。同日重試不重複計次，目標日必要資料恢復後歸零；額外歷史缺口不計入已可評分股票的排除。網路錯誤、額度不足及未完成請求不計次；舊佇列續跑也會先排除已滿 5 次的股票，不消耗資料請求額度。
 - `/api/readiness?stock_id=<代碼>`：單股 side-effect-free 診斷，列出缺少的評分欄位、來源日期與穩定缺失原因；若最新目標日尚未發布但較早資料日已完整，也會回傳 `latest_ready_source_date`。
 - `/api/rankings?kind=large_capital|high_confidence`：v7 大型資金／高可信榜；`kind=top|stealth` 保留 v6 榜單。`/api/score-spec` 同時公開兩個版本、固定門檻與 formula hash。
 - `/api/docs`：API schema。
@@ -107,3 +107,6 @@ Worker 以 Asia/Taipei 時區在每小時整點檢查交易日曆，只有 CLOSE
 完成判定以實際資料庫為準：每檔最新一筆目前版本 S 評分必須是目標日的數值結果，具正確公式與輸入快照，五個來源皆達應有日期（持股分布採該週日期），而來源寫入時間不能晚於評分的 knowledge_cutoff。舊日期 fallback、DATA_INSUFFICIENT、資料更新後尚未重評分，皆仍是待完成。正常評分流程同時更新 capital-aware 結果。
 
 全部達標即標示 daily_target_completed，即使還有剩餘額度也立即停止補抓。後续整點只讀本地完成狀態，不再呼叫 FinMind 或建立重複完成作業；新交易日、新增股票或來源修訂導致需要重新評分時恢復。前端 daily_completion 顯示目標日、上次檢查完成／待完成／排除檔數，避免將本輪額度用完誤認為全市場已完成。原有手動優先佇列與開市暫停保護仍適用。
+
+
+2026-10 排除修正：來源缺口每輪僅嘗試一次，交由後續整點再試；3,500 為請求上限，無需為耗盡額度重抓同一缺口。計次、日曆更新與部署清零見 [排除規則](docs/refresh-exclusions.md)。

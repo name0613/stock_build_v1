@@ -120,7 +120,7 @@ def test_single_dispatcher_selects_oldest_job_across_both_refresh_types() -> Non
             db.commit()
 
 
-def test_five_complete_empty_fetches_are_persisted_and_skipped(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+def test_empty_fetch_is_deferred_without_repeating_in_same_job(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     with SessionLocal() as db:
         db.add(Stock(stock_id="9998", stock_name="空資料測試", market="上市", is_common_stock=True))
         job = JobRun(
@@ -172,18 +172,19 @@ def test_five_complete_empty_fetches_are_persisted_and_skipped(monkeypatch: pyte
         with SessionLocal() as db:
             result = asyncio.run(resume_universe_budget_refresh_job(db, FakeClient(), db.get(JobRun, job_id)))
             issue = db.get(StockRefreshIssue, "9998")
-            assert result["status"] == "SUCCESS"
-            assert result["budget"] == {"limit": 5, "used": 5, "remaining": 0}
-            assert calls == 5
+            assert result["status"] == "PARTIAL"
+            assert result["phase"] == "waiting_for_source_data"
+            assert result["budget"] == {"limit": 5, "used": 1, "remaining": 4}
+            assert calls == 1
             assert issue is not None
-            assert issue.no_data_attempts == 5
-            assert issue.status == "SKIPPED_AFTER_FIVE_NO_DATA"
-            assert issue.reason_code == "NO_DATA_AFTER_FIVE_FETCHES"
+            assert issue.no_data_attempts == 1
+            assert issue.status == "RETRY_PENDING"
+            assert issue.reason_code == "NO_DATA_RETRY_PENDING"
         with TestClient(api_app) as client:
             list_payload = client.get("/api/stocks", params={"search": "9998"}).json()
             detail_payload = client.get("/api/stocks/9998").json()
-        assert list_payload["items"][0]["refresh_issue"]["no_data_attempts"] == 5
-        assert detail_payload["stock"]["refresh_issue"]["status"] == "SKIPPED_AFTER_FIVE_NO_DATA"
+        assert list_payload["items"][0]["refresh_issue"]["no_data_attempts"] == 1
+        assert detail_payload["stock"]["refresh_issue"]["status"] == "RETRY_PENDING"
     finally:
         with SessionLocal() as db:
             db.query(JobRun).filter(JobRun.id == job_id).delete(synchronize_session=False)
@@ -195,8 +196,8 @@ def test_five_complete_empty_fetches_are_persisted_and_skipped(monkeypatch: pyte
 
 
 @pytest.mark.parametrize("source_codes,source_rows,expected_issue", [
-    (None, 0, "SKIPPED_AFTER_FIVE_NO_DATA"),
-    (["PARTIAL_OBSERVATION_COVERAGE"], 60, "SKIPPED_AFTER_FIVE_INCOMPLETE"),
+    (None, 0, "RETRY_PENDING"),
+    (["PARTIAL_OBSERVATION_COVERAGE"], 60, "RETRY_PENDING"),
     (["NETWORK_ERROR"], 0, None),
     ([], 0, None),
 ])
@@ -267,10 +268,10 @@ def test_stock_level_missing_responses_do_not_block_queue(monkeypatch: pytest.Mo
                 assert result["budget"]["used"] == 1
                 assert issue is None
                 return
-            assert result["status"] == "SUCCESS"
-            assert result["budget"] == {"limit": 5, "used": 5, "remaining": 0}
+            assert result["status"] == "PARTIAL"
+            assert result["budget"] == {"limit": 5, "used": 1, "remaining": 4}
             assert issue is not None
-            assert issue.no_data_attempts == 5
+            assert issue.no_data_attempts == 1
             assert issue.status == expected_issue
         with TestClient(api_app) as api:
             payload = api.get(f"/api/stocks/{stock_id}").json()["stock"]["refresh_issue"]
@@ -279,7 +280,7 @@ def test_stock_level_missing_responses_do_not_block_queue(monkeypatch: pytest.Mo
                 assert "保留取得的資料" in payload["details"]["message"]
         with SessionLocal() as db:
             from app.refresh_queue import _universe_budget_queue
-            assert stock_id not in _universe_budget_queue(db)[0]
+            assert stock_id in _universe_budget_queue(db)[0]
     finally:
         with SessionLocal() as db:
             db.query(JobRun).filter(JobRun.id == job_id).delete(synchronize_session=False)
@@ -382,7 +383,7 @@ def test_five_empty_attempts_survive_jobs_and_restart(monkeypatch, tmp_path, his
             with SessionLocal() as db:
                 from app.refresh_queue import _universe_budget_queue
                 assert (stock_id in _universe_budget_queue(db)[0]) == (number <= 5)
-                job = JobRun(dataset=UNIVERSE_BUDGET_REFRESH_DATASET, status="QUEUED", started_at=datetime.now(timezone.utc), requested_end_date=date(2026, 8, 20), checkpoint_state={"stock_ids": [stock_id], "cycle_stock_ids": [stock_id], "budget": {"limit": 1, "used": 0, "remaining": 1}})
+                job = JobRun(dataset=UNIVERSE_BUDGET_REFRESH_DATASET, status="QUEUED", started_at=datetime.now(timezone.utc), requested_end_date=date(2026, 8, 10) + timedelta(days=number - 1), checkpoint_state={"stock_ids": [stock_id], "cycle_stock_ids": [stock_id], "budget": {"limit": 1, "used": 0, "remaining": 1}})
                 db.add(job)
                 db.commit()
                 job_ids.append(job.id)
@@ -406,7 +407,7 @@ def test_five_empty_attempts_survive_jobs_and_restart(monkeypatch, tmp_path, his
             db.commit()
 
 
-def test_legacy_counts_and_success_history_are_preserved():
+def test_success_clears_failure_streak_and_can_restore_excluded_stock():
     from app.refresh_queue import _universe_budget_queue
     stock_id = "9995"
     now = datetime.now(timezone.utc)
@@ -423,20 +424,23 @@ def test_legacy_counts_and_success_history_are_preserved():
             assert "2/5" in payload["details"]["message"]
             ingestion_module._mark_refresh_recovered(db, stock_id)
             db.commit()
-            assert issue.no_data_attempts == 2
+            assert issue.no_data_attempts == 0
             assert ingestion_module.stock_refresh_issue_payload(issue) is None
-            for expected in (3, 4, 5):
-                ingestion_module._record_no_data_attempt(db, stock_id, None, {"datasets": {}})
+            for expected in range(1, 6):
+                ingestion_module._record_no_data_attempt(db, stock_id, None, {"datasets": {}}, target=date(2026, 8, 10) + timedelta(days=expected - 1))
                 db.commit()
                 assert issue.no_data_attempts == expected
             assert stock_id not in _universe_budget_queue(db)[0]
-            ingestion_module._mark_refresh_recovered(db, stock_id)
             assert issue.no_data_attempts == 5
             assert issue.status == "SKIPPED_AFTER_FIVE_NO_DATA"
             # The count, rather than an old status string, controls skipping.
             issue.status = "RETRY_PENDING"
             db.commit()
             assert stock_id not in _universe_budget_queue(db)[0]
+            ingestion_module._mark_refresh_recovered(db, stock_id)
+            db.commit()
+            assert issue.no_data_attempts == 0
+            assert stock_id in _universe_budget_queue(db)[0]
         finally:
             db.delete(issue)
             db.flush()

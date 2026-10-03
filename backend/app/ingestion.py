@@ -10,7 +10,7 @@ from sqlalchemy import func, inspect, select, text, tuple_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from .calendar import CALENDAR_HASH, CALENDAR_VERSION, closed_market_target_date, completed_source_end_date, expected_trading_sessions, market_session_state, missing_sessions
+from .calendar import CALENDAR_HASH, CALENDAR_VERSION, closed_market_target_date, completed_source_end_date, expected_trading_sessions, is_trading_session, market_session_state, missing_sessions
 from .refresh_policy import REFRESH_NO_DATA_LIMIT, exclusion_predicate
 from .refresh_completion import completion_summary, daily_refresh_completion
 from .features import build_features
@@ -1072,6 +1072,8 @@ async def fetch_and_score_stock(
     if defer_finish:
         checkpoint("ready_to_finalize", **_jsonable(result), progress={"completed": len(plan), "total": len(plan)})
         return result
+    if target_evaluation["ready"]:
+        _mark_refresh_recovered(db, stock_id)
     _job_finish(db, score_job, status, records=sum(int(item.get("records_accepted", 0)) for item in datasets.values()), stocks_completed=1 if final_evaluation["ready"] else 0, stocks_failed=0, error_code=(fetch_errors[0]["error_code"] if fetch_errors else None), checkpoint_state=_jsonable({"run_mode": "targeted_fetch_and_score", **result, "phase": "completed", "progress": {"completed": len(plan), "total": len(plan)}}))
     return result
 
@@ -1168,22 +1170,30 @@ def _refresh_issue_state(attempts: int, *, partial: bool) -> tuple[str, str, str
     status = ("SKIPPED_AFTER_FIVE_INCOMPLETE" if partial else "SKIPPED_AFTER_FIVE_NO_DATA") if terminal else "RETRY_PENDING"
     reason = ("INCOMPLETE_AFTER_FIVE_FETCHES" if partial else "NO_DATA_AFTER_FIVE_FETCHES") if terminal else ("INCOMPLETE_RETRY_PENDING" if partial else "NO_DATA_RETRY_PENDING")
     description = "仍缺少必要來源資料，已保留取得的資料" if partial else "未回傳此股票的可用資料"
-    action = "已永久跳過自動補抓。" if terminal else "未滿 5 次，後續將繼續嘗試。"
-    return status, reason, f"FinMind 累計 {attempts}/5 次{description}，{action}"
+    action = "已暫停自動補抓，可手動補抓恢復。" if terminal else "未滿 5 個目標交易日，後續將繼續嘗試。"
+    return status, reason, f"連續 {attempts}/5 個不同目標交易日{description}，{action}"
 
 
 def skipped_refresh_stock_ids(db: Session) -> set[str]:
     return set(db.scalars(select(StockRefreshIssue.stock_id).where(exclusion_predicate())).all())
 
 
-def _record_no_data_attempt(db: Session, stock_id: str, job_id: int | None, result: dict[str, Any], *, partial: bool = False) -> StockRefreshIssue:
+def _record_no_data_attempt(db: Session, stock_id: str, job_id: int | None, result: dict[str, Any], *, partial: bool = False, target: date | None = None) -> StockRefreshIssue:
     now = _now()
     issue = db.get(StockRefreshIssue, stock_id, populate_existing=True)
+    target = target or completed_source_end_date(now)
+    # Durable deduplication across hourly jobs, button clicks and restarts.
+    # Older target replays cannot add another failure to the current streak.
+    last_target = (issue.details or {}).get("last_counted_target_date") if issue else None
+    if last_target and target.isoformat() <= last_target:
+        return issue
     attempts = min(REFRESH_NO_DATA_LIMIT, int(issue.no_data_attempts if issue else 0) + 1)
     status, reason, message = _refresh_issue_state(attempts, partial=partial)
     details = {
         "message": message,
         "last_fetch_errors": result.get("fetch_errors", []),
+        "last_counted_target_date": target.isoformat(),
+        "counter_policy": "distinct-target-days-v2",
     }
     details["incomplete_datasets"] = [dataset for dataset, value in result.get("datasets", {}).items() if isinstance(value, dict) and value.get("refresh_complete") is not True]
     if issue is None:
@@ -1214,8 +1224,11 @@ def _record_no_data_attempt(db: Session, stock_id: str, job_id: int | None, resu
 
 def _mark_refresh_recovered(db: Session, stock_id: str) -> None:
     issue = db.get(StockRefreshIssue, stock_id, populate_existing=True)
-    if issue is not None and issue.no_data_attempts < REFRESH_NO_DATA_LIMIT:
+    if issue is not None:
+        issue.no_data_attempts = 0
         issue.status = "RECOVERED"
+        issue.reason_code = "TARGET_DATA_RECOVERED"
+        # Keep the date marker so a same-target replay cannot count twice.
 
 
 def _budget_wait(db: Session, job: JobRun, checkpoint: dict[str, Any], status: str, error_code: str) -> dict[str, Any]:
@@ -1238,7 +1251,9 @@ async def resume_universe_budget_refresh_job(
     progress_callback: Callable[[str], None] | None = None,
     stock_boundary_callback: Callable[[], Awaitable[None]] | None = None,
 ) -> dict[str, Any]:
-    """Spend exactly the persisted per-click request budget, resuming safely."""
+    """Refresh within the persisted budget, deferring known gaps to a later job."""
+    if job.status in {"SUCCESS", "PARTIAL", "FAILED"}:
+        return universe_budget_job_payload(job)
     checkpoint = dict(job.checkpoint_state or {})
     automatic = checkpoint.get("trigger") == "closed_market_hourly"
     request_budget = getattr(client, "request_budget", None)
@@ -1274,7 +1289,7 @@ async def resume_universe_budget_refresh_job(
             return False
         state = daily_refresh_completion(db, target)
         job.requested_date = job.requested_start_date = job.requested_end_date = target
-        checkpoint.update({"target_date": target.isoformat(), "previous_target_date": checkpoint.get("target_date"), "stock_ids": state["pending_stock_ids"], "cycle_stock_ids": state["pending_stock_ids"], "queue_index": 0, "stocks_completed": 0, "current_stock_id": None, "current_stock_progress": {}, "next_retry_at": None, "phase": "target_date_advanced", "daily_completion": completion_summary(state)})
+        checkpoint.update({"target_date": target.isoformat(), "previous_target_date": checkpoint.get("target_date"), "stock_ids": state["pending_stock_ids"], "cycle_stock_ids": state["pending_stock_ids"], "deferred_stock_ids": [], "queue_index": 0, "stocks_completed": 0, "current_stock_id": None, "current_stock_progress": {}, "next_retry_at": None, "phase": "target_date_advanced", "daily_completion": completion_summary(state)})
         job.stocks_attempted = len(state["pending_stock_ids"])
         job.stocks_completed = 0
         job.checkpoint_state = _jsonable(checkpoint)
@@ -1349,7 +1364,13 @@ async def resume_universe_budget_refresh_job(
             cycle_source = list(dict.fromkeys([*cycle_source, *pending_restored]))
             skipped = skipped_refresh_stock_ids(db)
             next_cycle = daily_refresh_completion(db, job.requested_end_date)["pending_stock_ids"] if automatic else [stock_id for stock_id in cycle_source if stock_id not in skipped]
+            deferred = set(checkpoint.get("deferred_stock_ids", []))
+            next_cycle = [sid for sid in next_cycle if sid not in deferred]
             if not next_cycle:
+                if deferred:
+                    sync_budget()
+                    _job_finish(db, job, "PARTIAL", stocks_completed=int(checkpoint.get("stocks_completed", 0)), checkpoint_state=_jsonable({**checkpoint, "phase": "waiting_for_source_data", "current_stock_id": None, "next_retry_at": None}))
+                    return universe_budget_job_payload(job)
                 _job_finish(db, job, "FAILED", error_code="NO_ELIGIBLE_STOCKS", checkpoint_state=_jsonable({**checkpoint, "phase": "failed"}))
                 return universe_budget_job_payload(job)
             stock_ids.extend(next_cycle)
@@ -1360,6 +1381,9 @@ async def resume_universe_budget_refresh_job(
             db.commit()
 
         stock_id = stock_ids[queue_index]
+        if stock_id in set(checkpoint.get("deferred_stock_ids", [])):
+            checkpoint["queue_index"] = queue_index + 1
+            continue
         if automatic and not daily_refresh_completion(db, job.requested_end_date, [stock_id])["pending_stock_ids"]:
             checkpoint["queue_index"] = queue_index + 1
             continue
@@ -1480,18 +1504,26 @@ async def resume_universe_budget_refresh_job(
         if completed_datasets != set(FAVORITE_REFRESH_DATASETS) and not incomplete_stock_attempt:
             return _budget_wait(db, job, checkpoint, "WAITING_FOR_PROVIDER", "REFRESH_INCOMPLETE")
 
-        if attempt_rows > 0 and not incomplete_stock_attempt:
+        # A ready target wins over nonessential history gaps. A fallback score
+        # for an older date does not certify the requested target.
+        target_readiness = result.get("target_readiness")
+        target_ready = (
+            target_readiness.get("ready") is True if isinstance(target_readiness, dict)
+            else not result.get("fallback_applied") and attempt_rows > 0 and not incomplete_stock_attempt
+        )
+        if target_ready:
             _mark_refresh_recovered(db, stock_id)
-        elif not (automatic and job.requested_end_date > completed_source_end_date(_now())):
+        elif (incomplete_stock_attempt or attempt_rows == 0) and is_trading_session(job.requested_end_date) and job.requested_end_date <= completed_source_end_date(_now()):
             # Today's sources may still be publishing after the close. Do
             # not permanently exclude a stock because of this normal delay.
-            issue = _record_no_data_attempt(db, stock_id, job.id, {**result, "datasets": merged_datasets}, partial=incomplete_stock_attempt and attempt_rows > 0)
-            if issue.no_data_attempts < REFRESH_NO_DATA_LIMIT:
-                stock_ids.insert(queue_index + 1, stock_id)
-                checkpoint["stock_ids"] = stock_ids
-                job.stocks_attempted = len(stock_ids)
-            else:
+            issue = _record_no_data_attempt(db, stock_id, job.id, {**result, "datasets": merged_datasets}, partial=incomplete_stock_attempt and attempt_rows > 0, target=job.requested_end_date)
+            if issue.no_data_attempts >= REFRESH_NO_DATA_LIMIT:
                 checkpoint["skipped_no_data_count"] = int(checkpoint.get("skipped_no_data_count", 0) or 0) + 1
+
+        if incomplete_stock_attempt or not target_ready:
+            # Give the provider time to publish. Never spend the rest of this
+            # job's budget repeatedly downloading the same known gap.
+            checkpoint["deferred_stock_ids"] = sorted(set(checkpoint.get("deferred_stock_ids", [])) | {stock_id})
 
         checkpoint["queue_index"] = queue_index + 1
         checkpoint["stocks_completed"] = int(checkpoint.get("stocks_completed", 0) or 0) + 1
@@ -2395,6 +2427,8 @@ def _job_finish(db: Session, job: JobRun, status: str, *, records: int = 0, retr
                 db.refresh(job)
                 return
             state = {**(job.checkpoint_state or {}), **(checkpoint_state or {})}
+            if recovery is None and job.status in {"QUEUED", "RUNNING", "WAITING_FOR_PROVIDER", "WAITING_FOR_QUOTA"} and status == "SUCCESS" and (state.get("target_readiness") or {}).get("ready") is True:
+                _mark_refresh_recovered(db, state["stock_id"])
             _set_job_finished(job, status, records=records, retry_count=retry_count, stocks_completed=stocks_completed, stocks_failed=stocks_failed, error_code=error_code, error=error, checkpoint_state=state)
             release_exclusion(db, job)
         return
