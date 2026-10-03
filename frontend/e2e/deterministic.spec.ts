@@ -96,7 +96,7 @@ async function installApiFixtures(page: Page) {
   await page.route("**/api/**", async (route) => {
     const url = new URL(route.request().url());
     if (url.pathname === "/api/summary") {
-      return route.fulfill({ json: { stock_count: 55, strong_count: 21, accumulation_count: 15, watch_count: 15, data_insufficient_count: 3, no_strong_evidence_count: 1, status_invariant: true, score_version: "s-only-v6", formula_hash: formulaHash, latest_score_date: "2026-08-20", sync_status: [] } });
+      return route.fulfill({ json: { stock_count: 55, strong_count: 21, accumulation_count: 15, watch_count: 15, data_insufficient_count: 3, no_strong_evidence_count: 1, status_invariant: true, score_version: "s-only-v6", formula_hash: formulaHash, latest_score_date: "2026-08-20", score_metrics: { ready_stock_count: 52, evaluated_insufficient_stock_count: 1, pending_evaluation_count: 2 }, sync_status: [] } });
     }
     if (url.pathname === "/api/holdings/status") {
       return route.fulfill({ json: { dataset: "TaiwanStockHoldingSharesPer", market_session_required: false, total: stocks.length, available_count: stocks.length, items: stocks.map((stock) => ({ stock_id: stock.stock_id, stock_name: stock.stock_name, market: stock.market, status: "AVAILABLE", latest_source_date: "2026-08-20" })) } });
@@ -384,3 +384,11 @@ for (const complete of [false, true]) {
     await expect(page.getByTestId("daily-refresh-completion")).toContainText("排除多次抓不到資料 5 檔");
   });
 }
+
+
+test("summary separates missing sources from stocks awaiting current-version scoring", async ({ page }) => {
+  await installApiFixtures(page);
+  await page.goto("/");
+  await expect(page.getByTestId("score-evaluation-breakdown")).toHaveText("已評估不足 1 · 待新版評分 2");
+  await expect(page.getByTestId("score-readiness-metrics")).toContainText("1 檔已評估資料不足 · 2 檔待新版評分");
+});

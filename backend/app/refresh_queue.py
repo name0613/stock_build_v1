@@ -5,12 +5,13 @@ from sqlalchemy import func, or_, select, text
 from sqlalchemy.orm import Session
 from .calendar import expected_trading_sessions
 from .models import AccumulationScore, BrokerDaily, ForeignShareholdingDaily, HoldingDistribution, InstitutionalDaily, JobRun, PriceDaily, Stock
-from .ingestion import UNIVERSE_BUDGET_LIMIT, UNIVERSE_BUDGET_REFRESH_DATASET, skipped_refresh_stock_ids
+from .ingestion import TARGETED_STOCK_SYNC_DATASET, UNIVERSE_BUDGET_LIMIT, UNIVERSE_BUDGET_REFRESH_DATASET, skipped_refresh_stock_ids
 from .scoring import SCORE_VERSION
 from .refresh_completion import completion_summary, daily_refresh_completion
 
 ACTIVE_STATUSES = ("QUEUED", "RUNNING", "WAITING_FOR_QUOTA", "WAITING_FOR_PROVIDER")
 _queue_lock = Lock()
+AUTOMATIC_SELECTION_POLICY = "unattempted_target_then_oldest_attempt_v2"
 
 PARTIAL_SOURCE_SPECS = {
     "institutional": (InstitutionalDaily, "TaiwanStockInstitutionalInvestorsBuySellWide"),
@@ -21,7 +22,7 @@ PARTIAL_SOURCE_SPECS = {
 }
 
 
-def _universe_budget_queue(db: Session) -> tuple[list[str], dict[str, str | None], int]:
+def _universe_budget_queue(db: Session, *, target: date | None = None) -> tuple[list[str], dict[str, str | None], int]:
     stocks = list(db.scalars(select(Stock).where(Stock.is_common_stock.is_(True)).order_by(Stock.stock_id)).all())
     skipped = skipped_refresh_stock_ids(db)
     latest_scores = {
@@ -43,9 +44,21 @@ def _universe_budget_queue(db: Session) -> tuple[list[str], dict[str, str | None
             if fetched_at is not None and (str(stock_id) not in latest_fetch or fetched_at > latest_fetch[str(stock_id)]):
                 latest_fetch[str(stock_id)] = fetched_at
     eligible = [stock.stock_id for stock in stocks if stock.stock_id not in skipped]
+    attempts = {}
+    if target is not None:
+        # Empty responses never update a source fetched_at. Use durable job
+        # attempts so they cannot jump ahead of untouched stocks every hour.
+        sid = JobRun.checkpoint_state["stock_id"].as_string()
+        attempts = dict(db.execute(select(sid, func.max(JobRun.started_at)).where(
+            JobRun.dataset == TARGETED_STOCK_SYNC_DATASET,
+            JobRun.requested_end_date == target,
+            sid.is_not(None),
+        ).group_by(sid)).all())
     ordered = sorted(
         eligible,
         key=lambda stock_id: (
+            1 if stock_id in attempts else 0,
+            attempts[stock_id].isoformat() if stock_id in attempts else "",
             0 if stock_id not in latest_fetch and latest_scores.get(stock_id) is None else 1,
             latest_fetch[stock_id].isoformat() if stock_id in latest_fetch else "",
             stock_id,
@@ -80,7 +93,7 @@ def _queue_unlocked(db: Session, target: date, *, automatic: bool, now: datetime
     if job is not None:
         db.commit()
         return job, False
-    stock_ids, latest_fetch, skipped_count = _universe_budget_queue(db)
+    stock_ids, latest_fetch, skipped_count = _universe_budget_queue(db, target=target if automatic else None)
     completion = daily_refresh_completion(db, target) if automatic else None
     if completion is not None:
         pending = set(completion["pending_stock_ids"])
@@ -107,6 +120,7 @@ def _queue_unlocked(db: Session, target: date, *, automatic: bool, now: datetime
         checkpoint_state={
             "run_mode": "universe_fixed_budget_refresh_and_score",
             "trigger": "closed_market_hourly" if automatic else "manual",
+            "selection_policy": AUTOMATIC_SELECTION_POLICY if automatic else "no_data_then_oldest_updated_stock_cycle_v1",
             "schedule_hour": schedule_hour,
             "target_date": target.isoformat(),
             "phase": "daily_target_completed" if done else "queued",

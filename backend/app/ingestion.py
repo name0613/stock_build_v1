@@ -81,14 +81,19 @@ def _payload_content_hash(payload: dict[str, Any]) -> str:
     return hashlib.sha256(json.dumps(_jsonable(content), ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
-def _record_revision(db: Session, dataset: str, normalized: dict[str, Any], unique: dict[str, Any], fetched_at: datetime) -> str:
+def _record_revision(db: Session, dataset: str, normalized: dict[str, Any], unique: dict[str, Any], fetched_at: datetime, pending: set[tuple[str, str]]) -> bool:
     payload = _jsonable(normalized)
     content_hash = _payload_content_hash(payload)
     natural_key = json.dumps(_jsonable(unique), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    exists = db.scalar(select(SourceRevision).where(SourceRevision.dataset == dataset, SourceRevision.natural_key == natural_key, SourceRevision.content_hash == content_hash))
+    key = (natural_key, content_hash)
+    if key in pending:
+        return False
+    exists = db.scalar(select(SourceRevision.id).where(SourceRevision.dataset == dataset, SourceRevision.natural_key == natural_key, SourceRevision.content_hash == content_hash))
     if exists is None:
         db.add(SourceRevision(dataset=dataset, stock_id=normalized.get("stock_id"), source_date=normalized.get("source_date"), natural_key=natural_key, payload=payload, content_hash=content_hash, fetched_at=fetched_at))
-    return content_hash
+        pending.add(key)
+        return True
+    return False
 
 
 def normalize_stock(row: dict[str, Any], fetched_at: datetime | None = None) -> dict[str, Any] | None:
@@ -230,7 +235,7 @@ def _net_field(row: dict[str, Any], buy_keys: tuple[str, ...], sell_keys: tuple[
     return buy - sell if buy is not None and sell is not None else None
 
 
-def ingest_records(db: Session, dataset: str, records: list[dict[str, Any]]) -> int:
+def ingest_records(db: Session, dataset: str, records: list[dict[str, Any]], *, metrics: dict[str, int] | None = None) -> int:
     if dataset in CAPABILITY_ONLY_DATASETS:
         raise FinMindError("CAPABILITY_ONLY_DATASET", f"{dataset} is probe-only and cannot enter production ingestion")
     if dataset == "TaiwanStockHoldingSharesPer":
@@ -291,6 +296,9 @@ def ingest_records(db: Session, dataset: str, records: list[dict[str, Any]]) -> 
         records = list(aggregated.values())
     valid_stock_ids = None if dataset == "TaiwanStockInfo" else set(db.scalars(select(Stock.stock_id).where(Stock.is_common_stock.is_(True))).all())
     count = 0
+    versioned = 0
+    pending_revisions: set[tuple[str, str]] = set()
+    pending_models: dict[str, Any] = {}
     fetched_at = _now()
     for row in records:
         # Raw Parquet replay carries the original provider fetch timestamp in
@@ -318,10 +326,25 @@ def ingest_records(db: Session, dataset: str, records: list[dict[str, Any]]) -> 
         else:
             continue
         if normalized and unique and (valid_stock_ids is None or normalized["stock_id"] in valid_stock_ids):
-            _record_revision(db, dataset, normalized, unique, row_fetched_at)
-            _upsert(db, model, unique, {k: v for k, v in values.items() if k not in unique})
+            key = json.dumps(_jsonable(unique), sort_keys=True)
+            updates = {k: v for k, v in values.items() if k not in unique}
+            item = pending_models.get(key)
+            if item is None:
+                item = _upsert(db, model, unique, updates)
+                pending_models[key] = item
+            else:
+                for field, value in updates.items():
+                    setattr(item, field, value)
+            if model is Stock and inspect(item).pending:
+                # SourceRevision has a FK to Stock. Flush the new parent in
+                # this same transaction before adding its history record.
+                db.flush([item])
+            versioned += int(_record_revision(db, dataset, normalized, unique, row_fetched_at, pending_revisions))
             count += 1
     db.commit()
+    if metrics is not None:
+        # Report this committed batch, never COUNT the entire source history.
+        metrics.update(accepted_count=count, versioned_count=versioned)
     return count
 
 
@@ -878,6 +901,7 @@ async def fetch_and_score_stock(
     refreshed_datasets: set[str] | None = None,
     defer_finish: bool = False,
     reuse_broker_observations: bool = False,
+    allow_score_fallback: bool = True,
 ) -> dict[str, Any]:
     """Fetch one stock's missing scoring inputs, then score it immediately.
 
@@ -964,7 +988,7 @@ async def fetch_and_score_stock(
             checkpoint(f"reused:{dataset}", pre_readiness=pre_readiness, quota=quota, progress={"completed": completed, "total": len(plan)})
             continue
         if not force_refresh and reason not in set(pre_evaluation["missing_reasons"]):
-            datasets[dataset] = {"status": "REUSED_LOCAL", "physical_requests": 0, "reason": "stock readiness already satisfied before fetch"}
+            datasets[dataset] = {"status": "REUSED_LOCAL", "physical_requests": 0, "refresh_complete": True, "reason": "stock readiness already satisfied before fetch"}
             checkpoint(f"reused:{dataset}", pre_readiness=pre_readiness, quota=quota, progress={"completed": completed, "total": len(plan)})
             continue
         checkpoint(f"fetching:{dataset}", pre_readiness=pre_readiness, quota=quota, progress={"completed": completed - 1, "total": len(plan)})
@@ -973,13 +997,12 @@ async def fetch_and_score_stock(
 
         def sink(rows: list[dict[str, Any]]) -> dict[str, Any]:
             nonlocal accepted, versioned
-            before = int(db.scalar(select(func.count()).select_from(SourceRevision).where(SourceRevision.dataset == dataset)) or 0)
-            accepted_now = ingest_records(db, dataset, rows)
-            after = int(db.scalar(select(func.count()).select_from(SourceRevision).where(SourceRevision.dataset == dataset)) or 0)
+            batch: dict[str, int] = {}
+            accepted_now = ingest_records(db, dataset, rows, metrics=batch)
             accepted += accepted_now
-            versioned += max(0, after - before)
+            versioned += batch["versioned_count"]
             dates = sorted({value for value in (_as_date(_v(row, "date", "source_date")) for row in rows) if value is not None})
-            return {"accepted_count": accepted_now, "versioned_count": max(0, after - before), "accepted_dates": [value.isoformat() for value in dates]}
+            return {"accepted_count": accepted_now, "versioned_count": batch["versioned_count"], "accepted_dates": [value.isoformat() for value in dates]}
 
         try:
             def provider_progress(message: str) -> None:
@@ -1000,7 +1023,11 @@ async def fetch_and_score_stock(
                 metrics = await client.fetch_broker_stocks([stock_id], start.isoformat(), end.isoformat(), **broker_kwargs)
             else:
                 source_kwargs: dict[str, Any] = {"record_sink": sink, "progress_callback": provider_progress, "retry_provider_missing": True}
-                if force_refresh:
+                coverage_key = {"missing_institutional": "institutional", "missing_foreign_holding": "foreign_holding", "missing_price": "price"}.get(reason)
+                # A downloaded row can still have invalid/null required
+                # fields. Its provider checkpoint must not hide that gap.
+                missing_dates = pre_evaluation["coverage"].get("missing_sessions", {}).get(coverage_key, [])
+                if force_refresh or not missing_dates:
                     source_kwargs["force_refresh"] = True
                 metrics = await client.fetch_stocks_dataset([stock_id], dataset, start.isoformat(), end.isoformat(), **source_kwargs)
             refresh_complete = (
@@ -1054,6 +1081,7 @@ async def fetch_and_score_stock(
         target,
         evaluation_cutoff,
         initial_evaluation=target_evaluation,
+        max_fallback_sessions=TARGETED_SCORE_FALLBACK_SESSIONS if allow_score_fallback else 0,
     )
     score = _persist_stock_evaluation(db, final_evaluation)
     readiness = _targeted_readiness_payload(final_evaluation)
@@ -1286,6 +1314,23 @@ async def resume_universe_budget_refresh_job(
     if not market_allows_run():
         return pause_for_market()
 
+    if automatic:
+        from .refresh_queue import AUTOMATIC_SELECTION_POLICY, _universe_budget_queue
+        if checkpoint.get("selection_policy") != AUTOMATIC_SELECTION_POLICY:
+            # Upgrade an interrupted old queue without losing its consumed
+            # budget, completed prefix or current stock's source checkpoints.
+            ordered, _, _ = _universe_budget_queue(db, target=job.requested_end_date)
+            original = list(checkpoint.get("stock_ids", []))
+            index = int(checkpoint.get("queue_index", 0))
+            remaining = set(original[index:])
+            current = checkpoint.get("current_stock_id")
+            tail = [sid for sid in ordered if sid in remaining and sid != current]
+            if current in remaining:
+                tail.insert(0, current)
+            checkpoint.update(stock_ids=original[:index] + tail, selection_policy=AUTOMATIC_SELECTION_POLICY)
+            job.checkpoint_state = _jsonable(checkpoint)
+            db.commit()
+
     def update_target() -> bool:
         if not automatic:
             return False
@@ -1441,8 +1486,10 @@ async def resume_universe_budget_refresh_job(
             stock_id,
             job.requested_end_date or completed_source_end_date(_now()),
             progress_callback=progress_callback,
-            force_refresh=True,
+            force_refresh=not automatic,
             refreshed_datasets=refreshed,
+            reuse_broker_observations=automatic,
+            allow_score_fallback=not automatic,
         )
         merged_datasets = dict(previous.get("datasets", {}))
         for dataset, value in dict(result.get("datasets", {})).items():
@@ -2052,12 +2099,11 @@ async def _intraday_sync_locked(db: Session, client: FinMindClient, end_date: da
         try:
             def sink(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 nonlocal accepted, versioned
-                before = db.scalar(select(func.count()).select_from(SourceRevision).where(SourceRevision.dataset == dataset)) or 0
-                accepted_now = ingest_records(db, dataset, rows)
-                after = db.scalar(select(func.count()).select_from(SourceRevision).where(SourceRevision.dataset == dataset)) or 0
+                batch: dict[str, int] = {}
+                accepted_now = ingest_records(db, dataset, rows, metrics=batch)
                 accepted += accepted_now
-                versioned += max(0, int(after) - int(before))
-                return {"accepted_count": accepted_now, "versioned_count": max(0, int(after) - int(before)), "accepted_dates": sorted({str(_as_date(_v(row, "date", "source_date"))) for row in rows if _as_date(_v(row, "date", "source_date")) is not None})}
+                versioned += batch["versioned_count"]
+                return {"accepted_count": accepted_now, "versioned_count": batch["versioned_count"], "accepted_dates": sorted({str(_as_date(_v(row, "date", "source_date"))) for row in rows if _as_date(_v(row, "date", "source_date")) is not None})}
 
             if hasattr(client, "fetch_stocks_dataset"):
                 metrics = await client.fetch_stocks_dataset(stock_ids, dataset, end.isoformat(), end.isoformat(), record_sink=sink, progress_callback=progress_callback)
@@ -2145,10 +2191,9 @@ async def _catch_up_locked(db: Session, client: FinMindClient, end_date: date | 
         latest_dates: list[date] = []
         def sink(rows: list[dict[str, Any]]) -> dict[str, Any]:
             nonlocal accepted, versioned
-            revisions_before = db.scalar(select(func.count()).select_from(SourceRevision).where(SourceRevision.dataset == dataset)) or 0
-            accepted_now = ingest_records(db, dataset, rows)
-            revisions_after = db.scalar(select(func.count()).select_from(SourceRevision).where(SourceRevision.dataset == dataset)) or 0
-            versioned_now = max(0, int(revisions_after) - int(revisions_before))
+            batch: dict[str, int] = {}
+            accepted_now = ingest_records(db, dataset, rows, metrics=batch)
+            versioned_now = batch["versioned_count"]
             accepted += accepted_now
             versioned += versioned_now
             model = _DATASET_MODELS[dataset]
@@ -2208,10 +2253,9 @@ async def _catch_up_locked(db: Session, client: FinMindClient, end_date: date | 
             else:
                 records, meta = client.fetch(dataset, start_date=(start - timedelta(days=30)).isoformat(), end_date=end.isoformat())
                 received = len(records)
-                revisions_before = db.scalar(select(func.count()).select_from(SourceRevision).where(SourceRevision.dataset == dataset)) or 0
-                accepted = ingest_records(db, dataset, records)
-                revisions_after = db.scalar(select(func.count()).select_from(SourceRevision).where(SourceRevision.dataset == dataset)) or 0
-                versioned = max(0, int(revisions_after) - int(revisions_before))
+                batch: dict[str, int] = {}
+                accepted = ingest_records(db, dataset, records, metrics=batch)
+                versioned = batch["versioned_count"]
                 latest = _as_date(meta.get("source_date"))
                 status = "SUCCESS" if accepted else "PARTIAL"
                 code = None if accepted else "NO_DATA"
@@ -2275,11 +2319,10 @@ async def _catch_up_locked(db: Session, client: FinMindClient, end_date: date | 
         nonlocal stored, broker_versioned
         broker_buffer.extend(rows)
         if len(broker_buffer) >= 5000:
-            revisions_before = db.scalar(select(func.count()).select_from(SourceRevision).where(SourceRevision.dataset == "TaiwanStockTradingDailyReport")) or 0
-            stored_now = ingest_records(db, "TaiwanStockTradingDailyReport", broker_buffer[:])
-            revisions_after = db.scalar(select(func.count()).select_from(SourceRevision).where(SourceRevision.dataset == "TaiwanStockTradingDailyReport")) or 0
+            batch: dict[str, int] = {}
+            stored_now = ingest_records(db, "TaiwanStockTradingDailyReport", broker_buffer[:], metrics=batch)
             stored += stored_now
-            broker_versioned += max(0, int(revisions_after) - int(revisions_before))
+            broker_versioned += batch["versioned_count"]
             broker_buffer.clear()
         return stored
 
@@ -2288,11 +2331,10 @@ async def _catch_up_locked(db: Session, client: FinMindClient, end_date: date | 
             refresh_stock_ids = prioritize_stock_ids(db, stock_ids, "TaiwanStockTradingDailyReport")
             broker_metrics = await client.fetch_broker_stocks(refresh_stock_ids, broker_start.isoformat(), end.isoformat(), record_sink=broker_sink, progress_callback=progress)
         if broker_buffer:
-            revisions_before = db.scalar(select(func.count()).select_from(SourceRevision).where(SourceRevision.dataset == "TaiwanStockTradingDailyReport")) or 0
-            stored_now = ingest_records(db, "TaiwanStockTradingDailyReport", broker_buffer)
-            revisions_after = db.scalar(select(func.count()).select_from(SourceRevision).where(SourceRevision.dataset == "TaiwanStockTradingDailyReport")) or 0
+            batch: dict[str, int] = {}
+            stored_now = ingest_records(db, "TaiwanStockTradingDailyReport", broker_buffer, metrics=batch)
             stored += stored_now
-            broker_versioned += max(0, int(revisions_after) - int(revisions_before))
+            broker_versioned += batch["versioned_count"]
             broker_buffer.clear()
         checkpoint_complete = broker_metrics.get("skipped_checkpoint", 0) >= broker_metrics.get("requested_keys", len(stock_ids) * 20)
         no_work_reused = checkpoint_complete and broker_metrics.get("physical_requests", 0) == 0 and broker_metrics.get("rows", 0) == 0 and broker_metrics.get("failed", 0) == 0

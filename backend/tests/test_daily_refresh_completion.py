@@ -119,6 +119,9 @@ def test_automatic_fetches_only_pending_and_stops_before_3500(db, monkeypatch, t
 
     async def fetch(db, client, sid, target, **kwargs):
         calls.append(sid)
+        assert kwargs["force_refresh"] is False
+        assert kwargs["reuse_broker_observations"] is True
+        assert kwargs["allow_score_fallback"] is False
         client.request_budget.reserve()
         certify(db, sid, target)
         return result()

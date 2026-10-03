@@ -147,6 +147,7 @@ def summary(db: Session = Depends(get_db)) -> dict[str, Any]:
     last_updates = [s.last_fetch_at or s.last_successful_sync for s in sync if s.last_fetch_at or s.last_successful_sync]
     score_job = db.scalar(select(JobRun).where(JobRun.dataset == "score").order_by(JobRun.finished_at.desc(), JobRun.id.desc()).limit(1))
     score_metrics = _display_score_metrics(total, counts, score_job)
+    score_metrics.update(_score_evaluation_counts(db, total, counts["DATA_INSUFFICIENT"]))
     return {"stock_count": total, "strong_count": counts["STRONG_ACCUMULATION"], "accumulation_count": counts["ACCUMULATION"], "watch_count": counts["WATCH"], "data_insufficient_count": counts["DATA_INSUFFICIENT"], "no_strong_evidence_count": counts["NO_STRONG_EVIDENCE"], "status_invariant": sum(counts.values()) == total, "latest_score_date": latest_score_date, "historical_latest_score_date": historical_latest, "score_ready": latest_score_date is not None, "historical_score_blocked": provider_state.get("score_blocked") is True, "score_version": SCORE_VERSION, "formula_hash": FORMULA_HASH, "capital_aware_score_version": CAPITAL_AWARE_SCORE_VERSION, "capital_aware_formula_hash": CAPITAL_AWARE_FORMULA_HASH, "last_data_update": max(last_updates, default=None), "provider_state": provider_state, "score_metrics": score_metrics, "capital_ranking_metrics": _capital_ranking_metrics(db), "sync_status": [_sync_dict(s) for s in sync]}
 
 
@@ -667,6 +668,16 @@ def _latest_score_snapshot_date(db: Session) -> date | None:
             AccumulationScore.knowledge_cutoff.is_not(None),
         )
     )
+
+
+def _score_evaluation_counts(db: Session, total: int, insufficient: int) -> dict[str, int]:
+    evaluated = int(db.scalar(select(func.count(func.distinct(AccumulationScore.stock_id))).join(
+        Stock, Stock.stock_id == AccumulationScore.stock_id,
+    ).where(Stock.is_common_stock.is_(True), AccumulationScore.score_version == SCORE_VERSION,
+            AccumulationScore.knowledge_cutoff.is_not(None))) or 0)
+    pending = max(0, total - evaluated)
+    return {"evaluated_stock_count": evaluated, "pending_evaluation_count": pending,
+            "evaluated_insufficient_stock_count": max(0, insufficient - pending)}
 
 
 def _display_score_metrics(total: int, counts: dict[str, int], score_job: JobRun | None) -> dict[str, Any]:
