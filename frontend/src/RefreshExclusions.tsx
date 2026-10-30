@@ -5,7 +5,7 @@ type RecoveryJob = {
   evaluated_source_date?: string; fallback_applied?: boolean; next_retry_at?: string; error_code?: string;
   progress?: { completed: number; total: number }; score?: { score?: number | null; source_date?: string };
   readiness?: { missing_reasons?: string[] }; target_readiness?: { missing_reasons?: string[] };
-  recovery?: { released_at?: string; automatic_refresh_eligibility: string };
+  recovery?: { released_at?: string; reset_at?: string; automatic_refresh_eligibility: string };
 };
 type Exclusion = {
   stock_id: string; stock_name: string; market: string; no_data_attempts: number; attempt_limit: number;
@@ -14,7 +14,10 @@ type Exclusion = {
 type Exclusions = {
   total: number; filtered_total: number; items: Exclusion[]; active_jobs: RecoveryJob[]; recent_results: RecoveryJob[];
   daily_completion?: { target_date: string; excluded_count: number; pending_count: number; completed_count: number };
+  bulk_recovery?: { batch_id: number; request_id: string; total: number; pending_count: number; finished_count: number; target_date: string; status_counts: Record<string, number>; active_jobs: RecoveryJob[] } | null;
 };
+type BulkReceipt = { batch_id: number; cleared_count: number };
+const bulkRequestKey = "refresh-exclusions-bulk-request";
 const active = new Set(["QUEUED", "RUNNING", "WAITING_FOR_QUOTA", "WAITING_FOR_PROVIDER"]);
 const statuses: Record<string, string> = { QUEUED: "排隊中", RUNNING: "執行中", WAITING_FOR_QUOTA: "等待額度", WAITING_FOR_PROVIDER: "等待供應商", SUCCESS: "補抓／評分完成", DATA_INSUFFICIENT: "資料不足（DATA_INSUFFICIENT）", FAILED: "最終失敗" };
 const phases: Record<string, string> = { queued: "已排隊", queued_after_worker_restart: "重啟後續跑", quota_check: "檢查額度", quota_checked: "已檢查額度", preflight: "檢查資料", scoring: "立即評分中", ready_to_finalize: "保存結果中", completed: "已完成", failed: "已結束", waiting_for_quota: "等待額度", waiting_for_provider: "等待供應商" };
@@ -35,7 +38,8 @@ function JobStatus({ job }: { job?: RecoveryJob }) {
   return <div className="recovery-status" data-testid={`recovery-job-${job.job_id}`}>
     <strong>#{job.job_id} · {statuses[job.status] || job.status}</strong>
     {active.has(job.status) && <span>{phase}{job.progress ? ` · ${job.progress.completed}/${job.progress.total}` : ""}</span>}
-    <span>自動補抓資格：{job.recovery?.released_at ? "已恢復" : job.recovery ? "仍排除，作業結束後解除" : "仍排除（一般補抓不會解除）"}</span>
+    <span>自動補抓資格：{job.recovery?.automatic_refresh_eligibility === "RESTORED" ? "已恢復" : job.recovery ? "仍排除，作業結束後解除" : "仍排除（一般補抓不會解除）"}</span>
+    {job.recovery?.reset_at && <span>排除計次清零時間 {dateText(job.recovery.reset_at)}</span>}
     {job.target_date && <span>目標資料日 {job.target_date}</span>}
     {!active.has(job.status) && <>
       <span>{job.score?.score == null ? "本次未取得數值評分" : `Score ${job.score.score.toFixed(1)} · 實際評分日 ${job.evaluated_source_date || job.score.source_date || "未記錄"}`}</span>
@@ -60,6 +64,12 @@ export function RefreshExclusions({ onBack, onChanged, onCount }: { onBack: () =
   const [actionErrors, setActionErrors] = useState<Record<string, string>>({});
   const [jobs, setJobs] = useState<Record<string, RecoveryJob>>({});
   const [submitting, setSubmitting] = useState<string[]>([]);
+  const [bulkSubmitting, setBulkSubmitting] = useState(false);
+  const [bulkMessage, setBulkMessage] = useState("");
+  const [bulkError, setBulkError] = useState("");
+  const bulkBusy = useRef(false);
+  const bulkRequestId = useRef(sessionStorage.getItem(bulkRequestKey));
+  const bulkProgress = useRef<Exclusions["bulk_recovery"]>(null);
   const busy = useRef(new Set<string>());
   const jobsRef = useRef(jobs);
   const callbacks = useRef({ onChanged, onCount });
@@ -107,13 +117,16 @@ export function RefreshExclusions({ onBack, onChanged, onCount }: { onBack: () =
         if (controller.signal.aborted) return;
         const returnedJobs = [...next.recent_results, ...next.active_jobs, ...next.items.flatMap(item => item.job ? [item.job] : [])];
         const finished = returnedJobs.some(job => !active.has(job.status) && active.has(jobsRef.current[job.stock_id]?.status));
+        const bulkFinished = next.bulk_recovery && bulkProgress.current?.batch_id === next.bulk_recovery.batch_id && bulkProgress.current.finished_count !== next.bulk_recovery.finished_count;
+        bulkProgress.current = next.bulk_recovery;
         remember(returnedJobs);
         setData(next); setError(""); callbacks.current.onCount(next.total);
-        if (finished) { callbacks.current.onChanged(); setRevision(value => value + 1); }
+        if (finished || bulkFinished) { callbacks.current.onChanged(); setRevision(value => value + 1); }
         const maxPage = Math.max(1, Math.ceil(next.filtered_total / 50));
         if (page > maxPage) setPage(maxPage);
         // Use the existing stock/job_id contract for progress, including off-page jobs.
-        for (const job of Object.values(jobsRef.current).filter(job => active.has(job.status))) {
+        const returnedIds = new Set(returnedJobs.map(job => job.job_id));
+        for (const job of Object.values(jobsRef.current).filter(job => active.has(job.status) && !returnedIds.has(job.job_id))) {
           const updated = await request<RecoveryJob>(`/api/stocks/${encodeURIComponent(job.stock_id)}/fetch-and-score?job_id=${job.job_id}`, { signal: controller.signal });
           if (controller.signal.aborted) return;
           remember([updated]);
@@ -132,7 +145,7 @@ export function RefreshExclusions({ onBack, onChanged, onCount }: { onBack: () =
   }, [search, market, page, revision]);
 
   async function recover(stockId: string) {
-    if (busy.current.has(stockId) || active.has(jobsRef.current[stockId]?.status)) return;
+    if (bulkBusy.current || busy.current.has(stockId) || active.has(jobsRef.current[stockId]?.status)) return;
     busy.current.add(stockId); setSubmitting([...busy.current]);
     setActionErrors(current => ({ ...current, [stockId]: "" }));
     try {
@@ -144,23 +157,42 @@ export function RefreshExclusions({ onBack, onChanged, onCount }: { onBack: () =
       busy.current.delete(stockId); setSubmitting([...busy.current]);
     }
   }
+  async function recoverAll() {
+    if (bulkBusy.current) return;
+    bulkBusy.current = true; setBulkSubmitting(true); setBulkError(""); setBulkMessage("");
+    try {
+      // getRandomValues also works on the NAS's HTTP LAN origin.
+      bulkRequestId.current ||= Array.from(crypto.getRandomValues(new Uint32Array(4)), value => value.toString(16).padStart(8, "0")).join("");
+      sessionStorage.setItem(bulkRequestKey, bulkRequestId.current);
+      const receipt = await request<BulkReceipt>(`/api/refresh-exclusions/recover-all?request_id=${encodeURIComponent(bulkRequestId.current)}`, { method: "POST" });
+      bulkRequestId.current = null; sessionStorage.removeItem(bulkRequestKey);
+      setBulkMessage(receipt.cleared_count ? `已清空 ${receipt.cleared_count} 檔股票的排除計次，背景作業將逐檔重新抓取並計算評分。` : "目前沒有需要重新抓取的已排除股票。");
+      setCompletion(undefined); setPage(1); setRevision(value => value + 1); callbacks.current.onChanged();
+    } catch {
+      setBulkError("全部重新抓取提交未確認，請重試；重送會沿用同一批請求，不會重複清零或建立作業。");
+    } finally { bulkBusy.current = false; setBulkSubmitting(false); }
+  }
   const results = Object.values(jobs).filter(job => job.recovery && !active.has(job.status)).sort((a, b) => b.job_id - a.job_id);
   const currentCompletion = completion || data?.daily_completion;
   return <div className="app-shell exclusion-page">
     <header className="topbar"><button className="back-button" onClick={onBack}>← 返回原榜單</button><div><p className="eyebrow">REFRESH EXCLUSIONS</p><h1>自動補抓排除清單</h1></div></header>
     <main>
-      <p className="notice">連續 5 個不同目標交易日缺少必要資料才會暫停自動補抓；同日重試不重複計次，目標日資料恢復後歸零。手動作業真正結束後，無論評分成功、資料不足或最終失敗，都會解除舊排除；後續自動失敗由 1/5 重新累計。</p>
+      <p className="notice">連續 5 個不同目標交易日缺少必要資料才會暫停自動補抓；同日重試不重複計次，目標日資料恢復後歸零。逐檔手動補抓會在作業結束後解除舊排除；全部重新抓取則在提交成功時立即清零。後續自動失敗由 1/5 重新累計。</p>
       <section className="panel controls">
         <p data-testid="exclusion-count">全體排除 {data?.total ?? "—"} 檔 · 篩選結果 {data?.filtered_total ?? "—"} 檔</p>
         {currentCompletion && <p data-testid="exclusion-daily-completion">最近統計目標日 {currentCompletion.target_date} · 已完成 {currentCompletion.completed_count} · 待完成 {currentCompletion.pending_count} · 排除 {currentCompletion.excluded_count}</p>}
         {completionError && <p className="action-error">每日完成統計讀取失敗；可按重新讀取。</p>}
-        <div className="control-row"><label>搜尋<input aria-label="排除股票代碼或名稱" value={search} placeholder="股票代碼／名稱" onChange={event => { setSearch(event.target.value); setPage(1); }} /></label><label>市場<select aria-label="排除股票市場" value={market} onChange={event => { setMarket(event.target.value); setPage(1); }}><option value="">全部</option><option>上市</option><option>上櫃</option><option>興櫃</option></select></label><button className="ghost-button" onClick={() => setRevision(value => value + 1)}>重新讀取</button></div>
+        <div className="control-row"><label>搜尋<input aria-label="排除股票代碼或名稱" value={search} placeholder="股票代碼／名稱" onChange={event => { setSearch(event.target.value); setPage(1); }} /></label><label>市場<select aria-label="排除股票市場" value={market} onChange={event => { setMarket(event.target.value); setPage(1); }}><option value="">全部</option><option>上市</option><option>上櫃</option><option>興櫃</option></select></label><button className="ghost-button" onClick={() => setRevision(value => value + 1)}>重新讀取</button><button className="primary-button" disabled={bulkSubmitting || submitting.length > 0 || !bulkRequestId.current && (loading || !data?.total)} onClick={() => void recoverAll()}>{bulkSubmitting ? "提交中…" : "全部重新抓取"}</button></div>
+        <p className="bulk-help">全部重新抓取會立即清空全體已排除股票的排除計次，並逐檔補抓、重新評分；不受搜尋、市場或分頁篩選影響。資料不足時仍會顯示不足，後續自動失敗由 1/5 重新累計。</p>
+        {bulkMessage && <p role="status">{bulkMessage}</p>}
+        {bulkError && <p className="action-error" role="alert">{bulkError}</p>}
       </section>
+      {data?.bulk_recovery && <section className="panel recovery-results" aria-label="全部重新抓取進度"><h2>全部重新抓取進度</h2><p>最近一批 · 目標資料日 {data.bulk_recovery.target_date} · 共 {data.bulk_recovery.total} 檔 · 已結束 {data.bulk_recovery.finished_count} 檔 · 待完成 {data.bulk_recovery.pending_count} 檔</p><p>{Object.entries(data.bulk_recovery.status_counts).map(([status, count]) => `${statuses[status] || status} ${count} 檔`).join(" · ")}</p>{data.bulk_recovery.pending_count > 0 && <p>背景作業會繼續執行，額度不足時等待後續續跑。以下顯示最多 5 檔進行中作業。</p>}{data.bulk_recovery.active_jobs.map(job => <article key={job.job_id}><h3>{job.stock_id}</h3><JobStatus job={job} /></article>)}</section>}
       {error && <p className="error-banner" role="alert">{error}</p>}
       {loading ? <p className="empty" role="status">正在載入排除清單…</p> : data && <section className="panel">
         {data.items.length === 0 ? <p className="empty">{data.total === 0 ? "目前沒有被排除的股票。" : "查無符合搜尋或市場篩選的排除股票。"}</p> : <div className="table-scroll"><table className="exclusion-table"><thead><tr><th>股票</th><th>市場</th><th>失敗交易日／門檻</th><th>排除原因</th><th>已知缺失來源</th><th>最近嘗試</th><th>本次手動作業</th><th>操作</th></tr></thead><tbody>{data.items.map(item => {
           const job = active.has(jobs[item.stock_id]?.status) ? jobs[item.stock_id] : item.job;
-          return <tr key={item.stock_id} data-testid={`exclusion-row-${item.stock_id}`}><td><strong>{item.stock_id}</strong><br />{item.stock_name}</td><td>{item.market}</td><td>{item.no_data_attempts}/{item.attempt_limit}</td><td>{item.reason === "INCOMPLETE" ? "必要來源不完整" : item.reason === "NO_DATA" ? "完全無資料" : "未記錄"}</td><td>{item.missing_sources?.length ? item.missing_sources.map(source => sources[source] || source).join("、") : "未記錄"}</td><td>{dateText(item.last_attempt_at)}</td><td><JobStatus job={job} /></td><td><button className="primary-button" disabled={submitting.includes(item.stock_id) || !!job && active.has(job.status)} onClick={() => void recover(item.stock_id)}>{submitting.includes(item.stock_id) ? "提交中…" : "補抓並評分，恢復自動補抓"}</button>{actionErrors[item.stock_id] && <p className="action-error" role="alert">{actionErrors[item.stock_id]}</p>}</td></tr>;
+          return <tr key={item.stock_id} data-testid={`exclusion-row-${item.stock_id}`}><td><strong>{item.stock_id}</strong><br />{item.stock_name}</td><td>{item.market}</td><td>{item.no_data_attempts}/{item.attempt_limit}</td><td>{item.reason === "INCOMPLETE" ? "必要來源不完整" : item.reason === "NO_DATA" ? "完全無資料" : "未記錄"}</td><td>{item.missing_sources?.length ? item.missing_sources.map(source => sources[source] || source).join("、") : "未記錄"}</td><td>{dateText(item.last_attempt_at)}</td><td><JobStatus job={job} /></td><td><button className="primary-button" disabled={bulkSubmitting || submitting.includes(item.stock_id) || !!job && active.has(job.status)} onClick={() => void recover(item.stock_id)}>{submitting.includes(item.stock_id) ? "提交中…" : "補抓並評分，恢復自動補抓"}</button>{actionErrors[item.stock_id] && <p className="action-error" role="alert">{actionErrors[item.stock_id]}</p>}</td></tr>;
         })}</tbody></table></div>}
         <div className="pagination"><button disabled={page <= 1} onClick={() => setPage(value => value - 1)}>上一頁</button><span>第 {page} / {Math.max(1, Math.ceil(data.filtered_total / 50))} 頁 · 每頁 50 筆</span><button disabled={page * 50 >= data.filtered_total} onClick={() => setPage(value => value + 1)}>下一頁</button></div>
       </section>}

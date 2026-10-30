@@ -1,7 +1,7 @@
 import { expect, Page, test } from "@playwright/test";
 
 async function fixtures(page: Page, count = 257) {
-  const state = { status: "", posts: 0, fail: false, delay: 0, outcome: "SUCCESS", fallback: false, summaryReads: 0 };
+  const state = { status: "", posts: 0, fail: false, delay: 0, outcome: "SUCCESS", fallback: false, summaryReads: 0, bulk: false, bulkStatus: "QUEUED", bulkRequests: [] as string[], bulkFail: false, stockReads: 0 };
   const all = Array.from({ length: count }, (_, index) => ({ stock_id: String(7000 + index), stock_name: `測試股票${index}`, market: index % 2 ? "上櫃" : "上市", no_data_attempts: 5, attempt_limit: 5, reason: index % 2 ? "INCOMPLETE" : "NO_DATA", missing_sources: index % 2 ? ["TaiwanStockPrice"] : null, last_attempt_at: "2026-09-08T13:00:00Z" }));
   const terminal = () => ["SUCCESS", "DATA_INSUFFICIENT", "FAILED"].includes(state.status);
   const job = () => ({ job_id: 501, stock_id: "7000", status: state.status, phase: state.status === "RUNNING" ? "fetching:TaiwanStockPrice" : "queued", progress: { completed: 2, total: 5 }, target_date: "2026-09-08", evaluated_source_date: state.fallback ? "2026-09-07" : "2026-09-08", fallback_applied: state.fallback, score: { score: state.status === "SUCCESS" ? 82.5 : null }, target_readiness: { missing_reasons: state.fallback || state.status === "DATA_INSUFFICIENT" ? ["missing_broker"] : [] }, error_code: state.status === "FAILED" ? "ACCESS_DENIED" : undefined, recovery: { automatic_refresh_eligibility: terminal() ? "RESTORED" : "EXCLUDED_UNTIL_FINISHED", released_at: terminal() ? "2026-09-08T14:00:00Z" : null } });
@@ -10,17 +10,24 @@ async function fixtures(page: Page, count = 257) {
     if (url.pathname === "/api/refresh-exclusions") {
       if (state.delay) await new Promise(resolve => setTimeout(resolve, state.delay));
       if (state.fail) return route.fulfill({ status: 503, json: {} });
-      const excluded = all.filter(item => item.stock_id !== "7000" || !terminal());
+      const excluded = state.bulk ? [] : all.filter(item => item.stock_id !== "7000" || !terminal());
       const filtered = excluded.filter(item => (!url.searchParams.get("search") || `${item.stock_id}${item.stock_name}`.includes(url.searchParams.get("search")!)) && (!url.searchParams.get("market") || item.market === url.searchParams.get("market")));
       const number = Number(url.searchParams.get("page") || 1), size = Number(url.searchParams.get("page_size") || 50);
-      return route.fulfill({ json: { total: excluded.length, filtered_total: filtered.length, items: filtered.slice((number - 1) * size, number * size).map(item => ({ ...item, job: item.stock_id === "7000" && state.status && !terminal() ? job() : null })), active_jobs: state.status && !terminal() ? [job()] : [], recent_results: terminal() ? [job()] : [], daily_completion: { target_date: "2026-09-08", pending_count: terminal() ? 1 : 0, completed_count: 0, excluded_count: excluded.length } } });
+      const bulkDone = ["SUCCESS", "DATA_INSUFFICIENT", "FAILED"].includes(state.bulkStatus);
+      const bulk = state.bulk ? { batch_id: 900, request_id: state.bulkRequests[0], total: count, pending_count: bulkDone ? 0 : count, finished_count: bulkDone ? count : 0, target_date: "2026-09-08", status_counts: { [state.bulkStatus]: count }, active_jobs: bulkDone ? [] : all.slice(0, 5).map((item, index) => ({ ...job(), job_id: 600 + index, stock_id: item.stock_id, status: state.bulkStatus, recovery: { automatic_refresh_eligibility: "RESTORED", reset_at: "2026-09-08T14:00:00Z" } })) } : null;
+      return route.fulfill({ json: { total: excluded.length, filtered_total: filtered.length, items: filtered.slice((number - 1) * size, number * size).map(item => ({ ...item, job: item.stock_id === "7000" && state.status && !terminal() ? job() : null })), active_jobs: state.status && !terminal() ? [job()] : [], recent_results: terminal() ? [job()] : [], bulk_recovery: bulk, daily_completion: { target_date: "2026-09-08", pending_count: terminal() ? 1 : 0, completed_count: 0, excluded_count: excluded.length } } });
+    }
+    if (url.pathname === "/api/refresh-exclusions/recover-all") {
+      state.bulkRequests.push(url.searchParams.get("request_id")!); state.bulk = true;
+      await new Promise(resolve => setTimeout(resolve, 180));
+      return route.fulfill({ status: state.bulkFail ? 503 : 202, json: { batch_id: 900, cleared_count: count } });
     }
     if (url.pathname === "/api/refresh-exclusions/7000/recover") {
       state.posts++; state.status = "QUEUED";
       await new Promise(resolve => setTimeout(resolve, 180));
       return route.fulfill({ status: 202, json: job() });
     }
-    if (url.pathname === "/api/stocks/7000/fetch-and-score") return route.fulfill({ json: job() });
+    if (url.pathname === "/api/stocks/7000/fetch-and-score") { state.stockReads++; return route.fulfill({ json: job() }); }
     if (url.pathname === "/api/summary") { state.summaryReads++; return route.fulfill({ json: { stock_count: 257, strong_count: 0, accumulation_count: 0, watch_count: 0, data_insufficient_count: 257, sync_status: [] } }); }
     if (url.pathname === "/api/stocks") return route.fulfill({ json: { total: 257, items: [] } });
     if (url.pathname === "/api/rankings") return route.fulfill({ json: { kind: url.searchParams.get("kind"), score_version: "s-only-v6", items: [] } });
@@ -155,4 +162,59 @@ test("slow daily completion statistics never block the exclusion list", async ({
   await expect(page.getByTestId("exclusion-row-7000").getByRole("button")).toBeEnabled();
   release();
   await expect(page.getByTestId("exclusion-daily-completion")).toContainText("排除 2");
+});
+
+test("bulk refresh clears every page despite filters and restores progress after reload", async ({ page }, testInfo) => {
+  const state = await fixtures(page);
+  await page.goto("/#refresh-exclusions");
+  await page.getByRole("button", { name: "下一頁", exact: true }).click();
+  await page.getByLabel("排除股票代碼或名稱").fill("7001");
+  await page.getByLabel("排除股票市場").selectOption("上櫃");
+  await expect(page.getByTestId("exclusion-count")).toContainText("篩選結果 1 檔");
+  await page.screenshot({ path: testInfo.outputPath("bulk-refresh-button.png"), fullPage: true });
+  await page.getByRole("button", { name: "全部重新抓取", exact: true }).click();
+  await expect(page.getByRole("button", { name: "提交中…", exact: true })).toBeDisabled();
+  await expect(page.getByText("已清空 257 檔股票的排除計次", { exact: false })).toBeVisible();
+  await expect(page.getByTestId("exclusion-count")).toContainText("全體排除 0 檔");
+  expect(state.bulkRequests).toHaveLength(1);
+  const progress = page.getByRole("region", { name: "全部重新抓取進度" });
+  await expect(progress).toContainText("待完成 257 檔");
+  await expect(progress.locator("article")).toHaveCount(5);
+  state.bulkStatus = "WAITING_FOR_QUOTA";
+  await page.reload();
+  await expect(progress).toContainText("等待額度 257 檔");
+  await expect(page.getByRole("button", { name: "全部重新抓取", exact: true })).toBeDisabled();
+  state.bulkStatus = "DATA_INSUFFICIENT";
+  await page.getByRole("button", { name: "重新讀取", exact: true }).click();
+  await expect(progress).toContainText("已結束 257 檔 · 待完成 0 檔");
+  expect(state.stockReads).toBe(0);
+});
+
+test("uncertain bulk submission keeps its request ID across retry and reload", async ({ page }) => {
+  const state = await fixtures(page, 2);
+  state.bulkFail = true;
+  await page.goto("/#refresh-exclusions");
+  await page.getByRole("button", { name: "全部重新抓取", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("全部重新抓取提交未確認");
+  state.bulkFail = false;
+  await page.reload();
+  const button = page.getByRole("button", { name: "全部重新抓取", exact: true });
+  await expect(button).toBeEnabled();
+  await button.click();
+  await expect(page.getByText("已清空 2 檔股票的排除計次", { exact: false })).toBeVisible();
+  expect(state.bulkRequests).toHaveLength(2);
+  expect(new Set(state.bulkRequests).size).toBe(1);
+});
+
+test("bulk refresh button stays visible on narrow screens and disables for an empty list", async ({ page }, testInfo) => {
+  await fixtures(page, 0);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/#refresh-exclusions");
+  const button = page.getByRole("button", { name: "全部重新抓取", exact: true });
+  await expect(page.getByText("目前沒有被排除的股票。")).toBeVisible();
+  await expect(button).toBeDisabled();
+  const box = await button.boundingBox();
+  expect(box!.x).toBeGreaterThanOrEqual(0);
+  expect(box!.x + box!.width).toBeLessThanOrEqual(390);
+  await page.screenshot({ path: testInfo.outputPath("bulk-refresh-mobile.png"), fullPage: true });
 });

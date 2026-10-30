@@ -433,3 +433,99 @@ def test_queue_failure_rolls_back_new_job_and_leaves_issue(db, monkeypatch):
         manual.queue_manual_stock_refresh(db, "9001", END, recover_exclusion=True)
     assert db.query(JobRun).count() == db.query(RefreshExclusionRecovery).count() == 0
     assert "9001" in ingestion.skipped_refresh_stock_ids(db)
+
+
+def test_bulk_reset_queues_all_pages_preserves_data_and_replays_safely(db, api):
+    for index in range(257):
+        exclude(db, str(7000 + index), details={"last_counted_target_date": END.isoformat()})
+    exclude(db, "9999", attempts=4)
+    db.add(PriceDaily(stock_id="7000", source_date=END, close=100, fetched_at=NOW, source_dataset="TaiwanStockPrice"))
+    db.commit()
+    existing = manual.queue_manual_stock_refresh(db, "7000", END, recover_exclusion=True)
+    response = api.post("/api/refresh-exclusions/recover-all?request_id=bulk-test&source_date=2026-08-27")
+    assert response.status_code == 202
+    receipt = response.json()
+    assert receipt["cleared_count"] == len(set(receipt["job_ids"])) == 257
+    assert existing.id in receipt["job_ids"]
+    assert db.query(JobRun).filter(JobRun.dataset == manual.MANUAL_STOCK_REFRESH_DATASET).count() == 257
+    assert not ingestion.skipped_refresh_stock_ids(db)
+    assert db.get(StockRefreshIssue, "9999", populate_existing=True).no_data_attempts == 4
+    assert db.query(PriceDaily).one().close == 100
+    assert db.get(StockRefreshIssue, "7000", populate_existing=True).details == {}
+    audit = db.get(RefreshExclusionRecovery, existing.id, populate_existing=True)
+    assert audit.previous_issue["no_data_attempts"] == 5
+    assert audit.previous_issue["bulk_reset_at"]
+    listed = api.get("/api/refresh-exclusions").json()
+    assert listed["total"] == 0 and listed["active_jobs"] == []
+    assert listed["bulk_recovery"]["pending_count"] == 257
+    assert len(listed["bulk_recovery"]["active_jobs"]) == 5
+    assert listed["bulk_recovery"]["active_jobs"][0]["recovery"]["automatic_refresh_eligibility"] == "RESTORED"
+    fresh = ingestion._record_no_data_attempt(db, "7000", None, {}, target=END)
+    db.commit()
+    assert fresh.no_data_attempts == 1
+    replay = api.post("/api/refresh-exclusions/recover-all?request_id=bulk-test").json()
+    assert replay["replayed"] and replay["batch_id"] == receipt["batch_id"]
+    assert db.get(StockRefreshIssue, "7000", populate_existing=True).no_data_attempts == 1
+    assert api.post("/api/refresh-exclusions/recover-all?request_id=empty-test").json()["cleared_count"] == 0
+
+
+@pytest.mark.parametrize("status", ["SUCCESS", "DATA_INSUFFICIENT", "FAILED"])
+def test_bulk_jobs_resume_and_finish_without_clearing_new_failures(db, sessions, monkeypatch, status):
+    exclude(db)
+    receipt = manual.queue_all_excluded_refreshes(db, END, "restart")
+    ingestion._record_no_data_attempt(db, "9001", None, {}, target=END)
+    db.commit()
+    async def fetch(*args, **kwargs):
+        return {"status": status, "datasets": {}, "fetch_errors": []}
+    monkeypatch.setattr(manual, "fetch_and_score_stock", fetch)
+    with sessions() as restarted:
+        job = restarted.get(JobRun, receipt["job_ids"][0])
+        assert asyncio.run(manual.resume_manual_stock_refresh(restarted, client(0), job))["status"] == "WAITING_FOR_QUOTA"
+        assert restarted.get(StockRefreshIssue, "9001").no_data_attempts == 1
+        job.checkpoint_state = {**job.checkpoint_state, "next_retry_at": None}
+        restarted.commit()
+        result = asyncio.run(manual.resume_manual_stock_refresh(restarted, client(), job))
+        assert result["status"] == status and result["recovery"]["released_at"]
+        assert restarted.get(StockRefreshIssue, "9001", populate_existing=True).no_data_attempts == 1
+        finish(restarted, job, "FAILED")
+        assert job.status == status  # Terminal replay preserves the original result.
+        summary = exclusions.latest_bulk_recovery(restarted)
+        assert summary["finished_count"] == 1 and summary["pending_count"] == 0
+
+
+def test_bulk_queue_failure_rolls_back_every_reset_and_job(db, monkeypatch):
+    exclude(db, "9001")
+    exclude(db, "9002")
+    snapshot = manual.snapshot_issue
+    def fail_second(issue):
+        if issue.stock_id == "9002":
+            raise RuntimeError("snapshot failed")
+        return snapshot(issue)
+    monkeypatch.setattr(manual, "snapshot_issue", fail_second)
+    with pytest.raises(RuntimeError):
+        manual.queue_all_excluded_refreshes(db, END, "rollback")
+    assert ingestion.skipped_refresh_stock_ids(db) == {"9001", "9002"}
+    assert db.query(JobRun).count() == db.query(RefreshExclusionRecovery).count() == 0
+
+
+def test_concurrent_bulk_and_single_requests_share_one_job(db, sessions):
+    exclude(db)
+    def enqueue(index):
+        with sessions() as session:
+            if index % 2:
+                return manual.queue_manual_stock_refresh(session, "9001", END, recover_exclusion=True).id
+            return manual.queue_all_excluded_refreshes(session, END, "concurrent")["job_ids"][0]
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        ids = list(pool.map(enqueue, range(12)))
+    assert len(set(ids)) == 1
+    assert db.query(JobRun).count() == 2
+    assert db.query(RefreshExclusionRecovery).count() == 1
+    assert not ingestion.skipped_refresh_stock_ids(db)
+
+
+def test_bulk_api_validates_before_reset(db, api):
+    exclude(db)
+    for query in ("", "?request_id=invalid!", "?request_id=valid&source_date=bad"):
+        assert api.post(f"/api/refresh-exclusions/recover-all{query}").status_code == 422
+    assert ingestion.skipped_refresh_stock_ids(db) == {"9001"}
+    assert db.query(JobRun).count() == 0

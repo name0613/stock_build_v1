@@ -494,6 +494,12 @@ def refresh_exclusions(search: str = Query("", max_length=128), market: str = ""
     return result
 
 
+@app.post("/api/refresh-exclusions/recover-all", status_code=202)
+def recover_all_refresh_exclusions(request_id: str = Query(..., min_length=1, max_length=80, pattern=r"^[a-zA-Z0-9_-]+$"), source_date: date | None = Query(None), db: Session = Depends(get_db)) -> dict[str, Any]:
+    from .manual_refresh import queue_all_excluded_refreshes
+    return queue_all_excluded_refreshes(db, _current_data_date(db, source_date), request_id)
+
+
 @app.post("/api/refresh-exclusions/{stock_id}/recover", status_code=202)
 def recover_refresh_exclusion(stock_id: str, source_date: date | None = Query(None), db: Session = Depends(get_db)) -> dict[str, Any]:
     if db.get(Stock, stock_id) is None:

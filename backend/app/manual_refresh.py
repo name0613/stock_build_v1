@@ -7,7 +7,7 @@ from .calendar import expected_trading_sessions
 from .models import JobRun, RefreshExclusionRecovery, StockRefreshIssue
 from .finmind import FinMindClient, FinMindError, GLOBAL_PROVIDER_FAILURE_CODES
 from .ingestion import fetch_and_score_stock, _job_finish
-from .refresh_exclusions import manual_transaction, recovery_payload, snapshot_issue
+from .refresh_exclusions import BULK_RECOVERY_DATASET, manual_transaction, recovery_payload, snapshot_issue
 from .refresh_policy import REFRESH_NO_DATA_LIMIT, STOCK_COVERAGE_GAP_CODES
 
 MANUAL_STOCK_REFRESH_DATASET = "manual_stock_refresh_score"
@@ -44,32 +44,70 @@ def manual_stock_job_payload(job: JobRun, db: Session | None = None) -> dict[str
 def queue_manual_stock_refresh(db: Session, stock_id: str, target: date, *, recover_exclusion: bool = False) -> JobRun:
     target = expected_trading_sessions(target, 1)[-1]
     with manual_transaction(db):
-        job = db.scalar(select(JobRun).where(
-            JobRun.dataset == MANUAL_STOCK_REFRESH_DATASET,
-            JobRun.status.in_(MANUAL_ACTIVE_STATUSES),
-            JobRun.checkpoint_state["stock_id"].as_string() == stock_id,
-        ).order_by(JobRun.id).limit(1).execution_options(populate_existing=True))
-        issue = db.get(StockRefreshIssue, stock_id, populate_existing=True) if recover_exclusion else None
-        if recover_exclusion and (issue is None or issue.no_data_attempts < REFRESH_NO_DATA_LIMIT):
-            # A retry after completion returns its durable receipt without another download.
-            previous = db.scalar(select(JobRun).join(RefreshExclusionRecovery).where(
-                RefreshExclusionRecovery.stock_id == stock_id).order_by(JobRun.id.desc()).limit(1))
-            if previous is not None:
-                return previous
-            raise ValueError("STOCK_NOT_EXCLUDED")
-        if job is None:
-            job = JobRun(
-                dataset=MANUAL_STOCK_REFRESH_DATASET, status="QUEUED",
-                requested_date=target, requested_start_date=target, requested_end_date=target,
-                started_at=datetime.now(timezone.utc), stocks_attempted=1,
-                checkpoint_state={"stock_id": stock_id, "target_date": target.isoformat(), "run_mode": "targeted_fetch_and_score", "phase": "queued", "datasets": {}, "progress": {"completed": 0, "total": 5}},
-            )
-            db.add(job)
-            db.flush()
-        if recover_exclusion and db.get(RefreshExclusionRecovery, job.id) is None:
-            db.add(RefreshExclusionRecovery(job_id=job.id, stock_id=stock_id,
-                requested_at=datetime.now(timezone.utc), previous_issue=snapshot_issue(issue), result={}))
+        return _queue_manual_stock_refresh_unlocked(db, stock_id, target, recover_exclusion=recover_exclusion)
+
+
+def _queue_manual_stock_refresh_unlocked(db: Session, stock_id: str, target: date, *, recover_exclusion: bool = False) -> JobRun:
+    """Caller owns manual_transaction; shared by single and atomic bulk requests."""
+    job = db.scalar(select(JobRun).where(
+        JobRun.dataset == MANUAL_STOCK_REFRESH_DATASET,
+        JobRun.status.in_(MANUAL_ACTIVE_STATUSES),
+        JobRun.checkpoint_state["stock_id"].as_string() == stock_id,
+    ).order_by(JobRun.id).limit(1).execution_options(populate_existing=True))
+    issue = db.get(StockRefreshIssue, stock_id, populate_existing=True) if recover_exclusion else None
+    if recover_exclusion and (issue is None or issue.no_data_attempts < REFRESH_NO_DATA_LIMIT):
+        # A retry after completion returns its durable receipt without another download.
+        previous = db.scalar(select(JobRun).join(RefreshExclusionRecovery).where(
+            RefreshExclusionRecovery.stock_id == stock_id).order_by(JobRun.id.desc()).limit(1))
+        if previous is not None:
+            return previous
+        raise ValueError("STOCK_NOT_EXCLUDED")
+    if job is None:
+        job = JobRun(
+            dataset=MANUAL_STOCK_REFRESH_DATASET, status="QUEUED",
+            requested_date=target, requested_start_date=target, requested_end_date=target,
+            started_at=datetime.now(timezone.utc), stocks_attempted=1,
+            checkpoint_state={"stock_id": stock_id, "target_date": target.isoformat(), "run_mode": "targeted_fetch_and_score", "phase": "queued", "datasets": {}, "progress": {"completed": 0, "total": 5}},
+        )
+        db.add(job)
+        db.flush()
+    if recover_exclusion and db.get(RefreshExclusionRecovery, job.id) is None:
+        db.add(RefreshExclusionRecovery(job_id=job.id, stock_id=stock_id,
+            requested_at=datetime.now(timezone.utc), previous_issue=snapshot_issue(issue), result={}))
     return job
+
+
+def queue_all_excluded_refreshes(db: Session, target: date, request_id: str) -> dict:
+    """Atomically reset every exclusion and durably enqueue its recalculation."""
+    target = expected_trading_sessions(target, 1)[-1]
+    with manual_transaction(db):
+        previous = db.scalar(select(JobRun).where(
+            JobRun.dataset == BULK_RECOVERY_DATASET,
+            JobRun.checkpoint_state["request_id"].as_string() == request_id,
+        ))
+        if previous is not None:
+            return {**previous.checkpoint_state, "batch_id": previous.id, "replayed": True}
+        issues = list(db.scalars(select(StockRefreshIssue).where(
+            StockRefreshIssue.no_data_attempts >= REFRESH_NO_DATA_LIMIT,
+        ).order_by(StockRefreshIssue.stock_id).execution_options(populate_existing=True)))
+        now = datetime.now(timezone.utc)
+        jobs = []
+        for issue in issues:
+            job = _queue_manual_stock_refresh_unlocked(db, issue.stock_id, target, recover_exclusion=True)
+            db.flush()
+            recovery = db.get(RefreshExclusionRecovery, job.id)
+            recovery.previous_issue = {**recovery.previous_issue, "bulk_request_id": request_id, "bulk_reset_at": now.isoformat()}
+            issue.no_data_attempts = 0
+            issue.status = "RECOVERED"
+            issue.reason_code = "BULK_EXCLUSION_RESET"
+            issue.details = {}
+            jobs.append(job.id)
+        receipt = {"request_id": request_id, "cleared_count": len(issues), "job_ids": jobs, "target_date": target.isoformat()}
+        batch = JobRun(dataset=BULK_RECOVERY_DATASET, status="SUCCESS", started_at=now, finished_at=now,
+                       checkpoint_state=receipt)
+        db.add(batch)
+        db.flush()
+        return {**receipt, "batch_id": batch.id, "replayed": False}
 
 
 def manual_job_due(job: JobRun) -> bool:

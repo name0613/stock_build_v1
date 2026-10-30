@@ -10,6 +10,7 @@ from .models import JobRun, RefreshExclusionRecovery, Stock, StockRefreshIssue
 from .refresh_policy import REFRESH_NO_DATA_LIMIT, exclusion_predicate
 
 MANUAL_DATASET = "manual_stock_refresh_score"
+BULK_RECOVERY_DATASET = "refresh_exclusions_bulk_recover"
 ACTIVE_STATUSES = ("QUEUED", "RUNNING", "WAITING_FOR_QUOTA", "WAITING_FOR_PROVIDER")
 _manual_lock = RLock()
 
@@ -34,7 +35,8 @@ def recovery_payload(recovery: RefreshExclusionRecovery | None) -> dict | None:
     if recovery is None:
         return None
     return {"requested_at": recovery.requested_at, "released_at": recovery.released_at,
-            "automatic_refresh_eligibility": "RESTORED" if recovery.released_at else "EXCLUDED_UNTIL_FINISHED",
+            "automatic_refresh_eligibility": "RESTORED" if recovery.released_at or recovery.previous_issue.get("bulk_reset_at") else "EXCLUDED_UNTIL_FINISHED",
+            "reset_at": recovery.previous_issue.get("bulk_reset_at"),
             "previous_issue": recovery.previous_issue, "result": recovery.result}
 
 
@@ -54,7 +56,9 @@ def release_exclusion(db: Session, job: JobRun) -> None:
     if recovery is None or recovery.released_at is not None or job.status in ACTIVE_STATUSES:
         return
     issue = db.get(StockRefreshIssue, recovery.stock_id, populate_existing=True)
-    if issue is not None:
+    # Bulk requests already cleared the old streak when enqueued. Finishing
+    # later must not erase new automatic failures recorded since that reset.
+    if issue is not None and not recovery.previous_issue.get("bulk_reset_at"):
         issue.no_data_attempts = 0
         issue.status = "RECOVERED"
         issue.reason_code = "MANUAL_EXCLUSION_RELEASED"
@@ -88,8 +92,31 @@ def list_exclusions(db: Session, *, search: str = "", market: str = "", page: in
                       "missing_sources": (issue.details or {}).get("incomplete_datasets"),
                       "last_attempt_at": issue.last_attempt_at, "job": active.get(stock.stock_id)})
     # Active requests survive reload even if the user moves to another results page.
-    active_jobs = db.scalars(select(JobRun).join(RefreshExclusionRecovery).where(JobRun.status.in_(ACTIVE_STATUSES)).order_by(JobRun.id)).all()
+    active_jobs = db.scalars(select(JobRun).join(RefreshExclusionRecovery).where(
+        JobRun.status.in_(ACTIVE_STATUSES),
+        RefreshExclusionRecovery.previous_issue["bulk_request_id"].as_string().is_(None),
+    ).order_by(JobRun.id)).all()
     recent_jobs = db.scalars(select(JobRun).join(RefreshExclusionRecovery).where(RefreshExclusionRecovery.released_at.is_not(None)).order_by(RefreshExclusionRecovery.released_at.desc()).limit(20)).all()
     return {"total": total, "filtered_total": filtered, "page": page, "page_size": page_size, "items": items,
             "active_jobs": [manual_stock_job_payload(job, db) for job in active_jobs],
-            "recent_results": [manual_stock_job_payload(job, db) for job in recent_jobs]}
+            "recent_results": [manual_stock_job_payload(job, db) for job in recent_jobs],
+            "bulk_recovery": latest_bulk_recovery(db)}
+
+
+def latest_bulk_recovery(db: Session) -> dict | None:
+    """Bound progress payloads even when thousands of stocks were reset."""
+    from .manual_refresh import manual_stock_job_payload
+    batch = db.scalar(select(JobRun).where(JobRun.dataset == BULK_RECOVERY_DATASET).order_by(JobRun.id.desc()).limit(1))
+    if batch is None:
+        return None
+    receipt = batch.checkpoint_state
+    member = JobRun.id.in_(receipt["job_ids"])
+    counts = dict(db.execute(select(JobRun.status, func.count()).where(member).group_by(JobRun.status)).all())
+    pending = sum(counts.get(status, 0) for status in ACTIVE_STATUSES)
+    current = db.scalars(select(JobRun).where(member, JobRun.status.in_(ACTIVE_STATUSES)).order_by(
+        (JobRun.status == "QUEUED").asc(), JobRun.id,
+    ).limit(5)).all()
+    return {"batch_id": batch.id, "request_id": receipt["request_id"], "requested_at": batch.started_at,
+            "target_date": receipt["target_date"], "total": receipt["cleared_count"],
+            "pending_count": pending, "finished_count": receipt["cleared_count"] - pending,
+            "status_counts": counts, "active_jobs": [manual_stock_job_payload(job, db) for job in current]}

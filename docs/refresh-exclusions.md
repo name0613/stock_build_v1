@@ -4,6 +4,16 @@
 
 每檔按「補抓並評分，恢復自動補抓」後，由原本的手動優先佇列及 worker 共用 provider 鎖執行。畫面可追蹤排隊、執行階段、等待額度／供應商，以及完成結果；重新整理後會找回進行中作業。移出清單後會在結果摘要保留本頁作業與最近 20 筆完成紀錄，完整稽核保存在資料庫。
 
+## 全部重新抓取
+
+「重新讀取」旁的「全部重新抓取」會處理按下當下的**全體已排除股票**，不受搜尋、市場或分頁限制。提交成功後立即將這些股票的排除計次及舊失敗日期標記清零，並透過既有手動優先佇列逐檔補抓缺失資料、重新計算評分；沿用有效來源資料，保留既有行情與歷史分數。未達排除門檻的股票不受影響。
+
+- 清零、作業建立與原排除紀錄快照在同一資料庫交易內完成；任一步驟失敗會全部回滾。同股票已有進行中作業時沿用該作業及其目標日期。
+- 瀏覽器為每次操作保存請求 ID。連點、網路中斷後重送或重新整理後重試不會重複清零，也不會重複建立作業。
+- 「全部重新抓取進度」顯示最近一批的總數、已結束、待完成及各結果狀態，最多列出 5 檔進行中作業。關閉頁面後背景作業仍繼續；重新整理可讀回進度，額度不足或供應商暫時失敗時沿用既有等待及續跑機制。
+- 本功能在提交時已解除排除，作業結束不會再次清零後來累積的失敗。後續自動失敗從 1/5 重新累計；資料不足仍如實顯示，不保證每檔都能取得評分。
+- 批次收據保存在 `JobRun` 的 `refresh_exclusions_bulk_recover` dataset；逐檔原始排除快照與清零時間保存在 `RefreshExclusionRecovery.previous_issue`。不用新增資料表，部署時仍須同步更新 API、worker 與 frontend。
+
 ## 資料與解除規則
 
 - 唯一排除依據仍是 `StockRefreshIssue.no_data_attempts >= REFRESH_NO_DATA_LIMIT`（目前為 5），與 status 字串或是否有分數無關。清單、自動跳過、每日完成統計共用同一條件。
@@ -26,6 +36,7 @@
 
 - `GET /api/refresh-exclusions?search=&market=&page=1&page_size=50`：`total` 是全體排除數，`filtered_total` 是篩選結果數；`items`、`active_jobs`、`recent_results` 均來自本機資料庫。另加 `include_completion=true` 才計算並回傳 `daily_completion`；前端每分鐘背景更新，作業完成後立即更新，避免全市場統計拖慢清單、搜尋與作業輪詢。單頁最多 200 筆，總頁數無 200 筆限制。未保存的來源欄位回傳 null，前端顯示「未記錄」。
 - `POST /api/refresh-exclusions/{stock_id}/recover`：202，回傳作業契約與 `recovery`；可沿用既有 `source_date` 目標參數。排除已解除後的重送回傳最近一次復原收據；後續重新累積排除可再次建立新復原作業。
+- `POST /api/refresh-exclusions/recover-all?request_id=<唯一操作ID>`：202，回傳 `batch_id`、`cleared_count`、`job_ids`、`target_date`、`replayed`；可指定 `source_date`。同一 ID 重送只讀回原收據，無排除時回傳 0。清單 API 的 `bulk_recovery` 回傳最近一批進度；批次中的進行中作業使用有上限的摘要，不逐檔額外輪詢。
 - `GET /api/stocks/{stock_id}/fetch-and-score?job_id=...`：沿用狀態查詢；`status` 是補抓／評分結果，`recovery.automatic_refresh_eligibility`／`released_at` 是該次解除結果。`target_readiness` 與 `evaluated_source_date` 分別呈現目標完整性與實際評分日。
 
 ## 啟用與驗證

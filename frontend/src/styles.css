@@ -64,3 +64,5 @@ footer { color: #667696; font-size: .72rem; padding: 8px 0; text-align: center; 
 .recovery-results article { padding: 16px 0; border-top: 1px solid #304a80; }
 .exclusion-page .pagination { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; padding: 18px; }
 @media (max-width: 600px) { .exclusion-page .topbar { flex-wrap: wrap; } .exclusion-page h1 { font-size: 24px; } }
+
+.bulk-help { color: #acbbd9; font-size: .85rem; line-height: 1.6; margin: 14px 0 0; }
