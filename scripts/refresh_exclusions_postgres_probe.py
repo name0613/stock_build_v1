@@ -16,7 +16,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.config import get_settings
 from app.ingestion import _job_finish, _record_no_data_attempt, skipped_refresh_stock_ids
-from app.manual_refresh import queue_manual_stock_refresh
+from app.manual_refresh import queue_all_excluded_refreshes, queue_manual_stock_refresh
 from app.models import Base, JobRun, RefreshExclusionRecovery, Stock, StockRefreshIssue
 from app.refresh_completion import daily_refresh_completion
 from app.refresh_exclusions import list_exclusions
@@ -38,6 +38,15 @@ def enqueue_in_process(schema):
     try:
         with sessionmaker(engine, expire_on_commit=False, autoflush=False)() as db:
             return queue_manual_stock_refresh(db, "9001", TARGET, recover_exclusion=True).id
+    finally:
+        engine.dispose()
+
+
+def enqueue_bulk_in_process(schema):
+    engine = scoped_engine(schema)
+    try:
+        with sessionmaker(engine, expire_on_commit=False, autoflush=False)() as db:
+            return queue_all_excluded_refreshes(db, TARGET, "postgres-bulk-probe")
     finally:
         engine.dispose()
 
@@ -123,6 +132,48 @@ def run():
             assert db.get(StockRefreshIssue, "9001").no_data_attempts == 1
             assert db.get(RefreshExclusionRecovery, job.id).result["status"] == "DATA_INSUFFICIENT"
             checks["replay_preserves_new_failure_count_and_audit"] = True
+            db.get(StockRefreshIssue, "9001").no_data_attempts = 5
+            for index in range(2, 9):
+                sid = str(9000 + index)
+                db.add(Stock(stock_id=sid, stock_name="Bulk probe only", market="上市", is_common_stock=True))
+                db.flush()
+                db.add(StockRefreshIssue(stock_id=sid, no_data_attempts=5, status="LEGACY",
+                    reason_code="NO_DATA", first_attempt_at=NOW, last_attempt_at=NOW,
+                    details={"last_counted_target_date": TARGET.isoformat()}))
+            db.commit()
+            reused = queue_manual_stock_refresh(db, "9002", TARGET)
+            reused_id = reused.id
+        with ProcessPoolExecutor(max_workers=4, mp_context=multiprocessing.get_context("spawn")) as pool:
+            receipts = list(pool.map(enqueue_bulk_in_process, [schema] * 8))
+        assert len({receipt["batch_id"] for receipt in receipts}) == 1
+        assert sum(not receipt["replayed"] for receipt in receipts) == 1
+        receipt = receipts[0]
+        assert receipt["cleared_count"] == len(set(receipt["job_ids"])) == 8
+        assert reused_id in receipt["job_ids"]
+        checks["bulk_cross_process_deduplication_and_job_reuse"] = True
+        with sessions() as db:
+            listing = list_exclusions(db)
+            assert listing["total"] == 0 and listing["active_jobs"] == []
+            assert listing["bulk_recovery"]["pending_count"] == 8
+            assert len(listing["bulk_recovery"]["active_jobs"]) == 5
+            assert all(job["recovery"]["automatic_refresh_eligibility"] == "RESTORED" for job in listing["bulk_recovery"]["active_jobs"])
+            assert db.get(StockRefreshIssue, "9002").details == {}
+            audit = db.get(RefreshExclusionRecovery, reused_id)
+            assert audit.previous_issue["no_data_attempts"] == 5 and audit.previous_issue["bulk_reset_at"]
+            checks["bulk_clear_and_bounded_progress"] = True
+            _record_no_data_attempt(db, "9002", reused_id, {}, target=TARGET)
+            db.commit()
+            replay = queue_all_excluded_refreshes(db, TARGET, "postgres-bulk-probe")
+            assert replay["replayed"] and db.get(StockRefreshIssue, "9002").no_data_attempts == 1
+            for job_id in receipt["job_ids"]:
+                job = db.get(JobRun, job_id)
+                _job_finish(db, job, "DATA_INSUFFICIENT", checkpoint_state={**job.checkpoint_state, "phase": "completed"})
+            listing = list_exclusions(db)
+            assert listing["bulk_recovery"]["finished_count"] == 8
+            assert listing["bulk_recovery"]["pending_count"] == 0
+            assert db.get(StockRefreshIssue, "9002").no_data_attempts == 1
+            assert db.get(RefreshExclusionRecovery, reused_id).result["status"] == "DATA_INSUFFICIENT"
+            checks["bulk_completion_preserves_new_failures_and_audit"] = True
         return {"database": "postgresql", "checks": checks, "passed": all(checks.values()),
                 "public_data_modified": False, "provider_requests": 0, "secrets_included": False}
     finally:

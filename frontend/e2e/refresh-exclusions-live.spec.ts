@@ -18,6 +18,14 @@ test("deployed exclusion page reads real API data and preserves navigation", asy
   await tabs.locator("button").nth(3).click();
   await expect(page.getByRole("heading", { name: "自動補抓排除清單" })).toBeVisible();
   await expect(page.getByTestId("exclusion-count")).toContainText(`全體排除 ${result.total} 檔`);
+  const bulkButton = page.getByRole("button", { name: "全部重新抓取", exact: true });
+  await expect(bulkButton).toBeVisible();
+  if (result.total > 0) await expect(bulkButton).toBeEnabled();
+  else await expect(bulkButton).toBeDisabled();
+  await expect(page.locator(".bulk-help")).toContainText("不受搜尋、市場或分頁篩選影響");
+  // A missing idempotency key must fail validation before touching any rows.
+  const invalid = await request.post("/api/refresh-exclusions/recover-all");
+  expect(invalid.status()).toBe(422);
   await page.screenshot({ path: testInfo.outputPath("deployed-exclusions.png"), fullPage: false });
   if (result.items.length) {
     const stock = result.items[0];
@@ -27,6 +35,7 @@ test("deployed exclusion page reads real API data and preserves navigation", asy
   }
   await page.reload();
   await expect(page.getByRole("heading", { name: "自動補抓排除清單" })).toBeVisible();
+  await expect(bulkButton).toBeVisible();
   await page.getByRole("button", { name: "返回原榜單", exact: false }).click();
   await expect(tabs).toBeVisible();
 });
